@@ -1,0 +1,10 @@
+fastapi>=0.111
+uvicorn[standard]>=0.30
+sqlalchemy>=2.0
+pandas>=2.2
+numpy>=1.26
+apscheduler>=3.10
+finance-datareader>=0.9.90
+yfinance>=0.2.40
+pydantic>=2.7
+python-dotenv>=1.0

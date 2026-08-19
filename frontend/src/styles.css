@@ -1,0 +1,260 @@
+:root {
+  --bg: #0b0f14;
+  --bg-panel: #11161d;
+  --bg-panel-hover: #161d26;
+  --border: #232b36;
+  --text: #e6edf3;
+  --text-dim: #8b98a5;
+  --accent: #3b82f6;
+  --buy: #22c55e;
+  --sell: #ef4444;
+  --radius: 10px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Pretendard", "Malgun Gothic",
+    Roboto, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.app {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 32px 20px 64px;
+}
+
+.app__header h1 {
+  font-size: 1.5rem;
+  margin: 0 0 4px;
+}
+
+.app__subtitle {
+  color: var(--text-dim);
+  margin: 0 0 24px;
+  font-size: 0.9rem;
+}
+
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.tab {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.tab:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text);
+}
+
+.tab--active {
+  border-color: var(--accent);
+  color: var(--text);
+  background: rgba(59, 130, 246, 0.12);
+}
+
+.tab__count {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  padding: 1px 7px;
+  font-size: 0.75rem;
+  min-width: 20px;
+  text-align: center;
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+  padding: 14px 16px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.filters__group {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.filters__group label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+
+.filters__group select {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 0.85rem;
+}
+
+.filters__status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.filters__updated {
+  color: var(--text-dim);
+  font-size: 0.78rem;
+}
+
+.btn {
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 14px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.btn:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+}
+
+.signal-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.86rem;
+  white-space: nowrap;
+}
+
+.signal-table th,
+.signal-table td {
+  padding: 10px 14px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.signal-table th {
+  color: var(--text-dim);
+  font-weight: 500;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.signal-table tbody tr:hover {
+  background: var(--bg-panel-hover);
+}
+
+.signal-table td.num {
+  font-variant-numeric: tabular-nums;
+}
+
+.details-cell {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: normal;
+  min-width: 220px;
+}
+
+.symbol-cell {
+  display: flex;
+  flex-direction: column;
+}
+
+.symbol-cell__name {
+  font-weight: 600;
+}
+
+.symbol-cell__code {
+  color: var(--text-dim);
+  font-size: 0.75rem;
+}
+
+.market-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+
+.direction-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.direction-badge--BUY {
+  color: var(--buy);
+  background: rgba(34, 197, 94, 0.14);
+}
+
+.direction-badge--SELL {
+  color: var(--sell);
+  background: rgba(239, 68, 68, 0.14);
+}
+
+.state {
+  padding: 40px 20px;
+  text-align: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  color: var(--text-dim);
+}
+
+.state--error {
+  color: var(--sell);
+}
+
+.app__footer {
+  margin-top: 20px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 0.78rem;
+}
