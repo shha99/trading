@@ -1,10 +1,13 @@
 """일별 데이터 갱신 배치.
 
-- update_latest(): 캐시에 없는 최신 거래일들을 순차적으로 KRX에서 받아와 누적 append.
-- backfill(): 최초 캐시 구축 시 과거 구간을 통째로 채워 넣는 용도.
+두 가지 데이터 소스 경로를 제공한다:
 
-두 경로 모두 결국 _ingest_one_day()를 재사용한다(스펙의 "일별 자동 갱신"
-로직을 백필에도 그대로 재사용).
+- ``update_latest()`` / ``backfill()`` - KRX(data.krx.co.kr) 직접 호출 경로.
+  한국 리전 네트워크에서만 동작한다(README 참고).
+- ``refresh_via_naver()`` - Naver 금융 공개 엔드포인트 기반 경로. KRX 직접
+  접속이 막힌 환경(해외 서버 등)에서도 동작하며, **기본 갱신 경로**로
+  권장된다. 종목 단위로 기간 전체 시세를 한 번에 받아오는 방식이라
+  백필/증분 갱신이 동일한 함수 하나로 처리된다.
 """
 from __future__ import annotations
 
@@ -15,7 +18,7 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 
-from . import cache_store, config, krx_client
+from . import cache_store, config, krx_client, naver_client
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -193,21 +196,112 @@ def backfill(start: str, end: str | None = None) -> dict:
     )
 
 
+def refresh_via_naver(years_back: int = config.DEFAULT_BACKFILL_YEARS, max_workers: int = naver_client.DEFAULT_WORKERS) -> dict:
+    """Naver 금융 기반 갱신 - 백필과 증분 갱신을 겸한다.
+
+    1) 유니버스(종목/시장/섹터/시총/거래대금) 갱신
+    2) 캐시에 이미 있는 종목은 마지막 캐시일 다음날부터, 없는 종목은
+       ``years_back``년 전부터 오늘까지 종목별로 시세를 병렬 수집
+    3) 기존 prices/values 패널에 병합(기존 데이터는 덮어쓰지 않고 새 날짜만 추가)
+    """
+    prices = cache_store.load_prices()
+    values = cache_store.load_trading_value()
+
+    try:
+        universe = naver_client.build_universe(max_workers=max_workers)
+    except naver_client.NaverUnavailableError as exc:
+        logger.error("유니버스 조회 실패: %s", exc)
+        return cache_store.save_state(
+            last_run_at=datetime.now(config.KST).isoformat(), last_run_status="error", last_error=str(exc)
+        )
+
+    today = naver_client.today_str()
+    default_start = (datetime.now() - timedelta(days=years_back * 365)).strftime("%Y%m%d")
+
+    if prices.empty:
+        fetch_plan = {t: (default_start, today) for t in universe.index}
+    else:
+        last_cached = prices.index.max()
+        incr_start = (last_cached + timedelta(days=1)).strftime("%Y%m%d")
+        new_tickers = universe.index.difference(prices.columns)
+        fetch_plan = {t: (incr_start, today) for t in universe.index.intersection(prices.columns)}
+        fetch_plan.update({t: (default_start, today) for t in new_tickers})
+
+    # Naver 차트 API는 종목당 (시작,종료) 구간이 달라도 한 번에 하나씩만 받을 수 있어
+    # 구간별로 그룹핑해 fetch_histories를 나눠 호출한다(대부분 같은 구간이라 보통 1~2그룹).
+    groups: dict[tuple[str, str], list[str]] = {}
+    for t, rng in fetch_plan.items():
+        groups.setdefault(rng, []).append(t)
+
+    histories: dict[str, pd.DataFrame] = {}
+    for (start, end), tickers in groups.items():
+        logger.info("시세 수집: %d종목 (%s ~ %s)", len(tickers), start, end)
+        histories.update(naver_client.fetch_histories(tickers, start, end, max_workers=max_workers))
+
+    if not histories:
+        logger.warning("수집된 시세가 없습니다.")
+        return cache_store.save_state(
+            last_run_at=datetime.now(config.KST).isoformat(), last_run_status="error", last_error="no histories fetched"
+        )
+
+    close_cols = {t: df["close"] for t, df in histories.items()}
+    volume_cols = {t: df["close"] * df["volume"] for t, df in histories.items()}  # 거래대금 근사(종가*거래량)
+    new_prices = pd.DataFrame(close_cols)
+    new_values = pd.DataFrame(volume_cols)
+
+    prices = new_prices if prices.empty else prices.combine_first(new_prices)
+    prices.update(new_prices)
+    values = new_values if values.empty else values.combine_first(new_values)
+    values.update(new_values)
+
+    cache_store.save_panel(prices, "prices")
+    cache_store.save_panel(values, "value")
+
+    fetched_tickers = list(histories.keys())
+    lookback = values.tail(config.LIQUIDITY_LOOKBACK_DAYS)
+    avg_value = lookback.reindex(columns=universe.index).mean(axis=0, skipna=True)
+
+    meta = universe.copy()
+    meta["avg_trading_value"] = avg_value.reindex(meta.index)
+    meta["is_preferred"] = [naver_client.is_preferred_stock(t, n) for t, n in zip(meta.index, meta["name"])]
+    last_row = prices.reindex(columns=meta.index).iloc[-1] if not prices.empty else pd.Series(dtype=float)
+    meta["is_halted"] = last_row.isna().reindex(meta.index).fillna(True)
+    meta["is_managed"] = False
+    meta["listed_shares"] = None
+    meta = meta[["name", "market", "sector", "market_cap", "avg_trading_value", "is_preferred", "is_managed", "is_halted", "listed_shares"]]
+    cache_store.save_meta(meta)
+
+    last_cached_after = prices.index.max() if not prices.empty else None
+    return cache_store.save_state(
+        last_update_date=str(last_cached_after.date()) if last_cached_after is not None else None,
+        last_run_at=datetime.now(config.KST).isoformat(),
+        last_run_status="ok",
+        source="naver",
+        tickers_updated=len(fetched_tickers),
+        universe_size=len(meta),
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description="코스피/코스닥 종가 캐시 배치 갱신")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("update", help="최신 거래일까지 증분 갱신")
+    sub.add_parser("update", help="[KRX 직접] 최신 거래일까지 증분 갱신 - 한국 리전에서만 동작")
 
-    bf = sub.add_parser("backfill", help="과거 구간 백필")
+    bf = sub.add_parser("backfill", help="[KRX 직접] 과거 구간 백필 - 한국 리전에서만 동작")
     bf.add_argument("--start", required=True, help="YYYYMMDD")
     bf.add_argument("--end", default=None, help="YYYYMMDD (기본: 최근 영업일)")
+
+    nv = sub.add_parser("naver-refresh", help="[권장] Naver 금융 기반 백필+증분 갱신 - 어디서나 동작")
+    nv.add_argument("--years-back", type=int, default=config.DEFAULT_BACKFILL_YEARS)
 
     args = parser.parse_args()
     if args.cmd == "update":
         result = update_latest()
-    else:
+    elif args.cmd == "backfill":
         result = backfill(args.start, args.end)
+    else:
+        result = refresh_via_naver(years_back=args.years_back)
     logger.info("결과: %s", result)
 
 

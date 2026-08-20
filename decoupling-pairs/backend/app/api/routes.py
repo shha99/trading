@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from .. import batch_update, cache_store, config, correlation, schemas
 from ..krx_client import KrxUnavailableError
+from ..naver_client import NaverUnavailableError
 
 router = APIRouter(prefix="/api")
 
@@ -64,8 +65,8 @@ def manual_refresh():
             detail=f"오늘은 이미 새로고침했습니다. 다음 가능 시각: {status.next_manual_refresh_at}",
         )
     try:
-        batch_update.update_latest()
-    except KrxUnavailableError as exc:
+        batch_update.refresh_via_naver()
+    except (KrxUnavailableError, NaverUnavailableError) as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return get_status()
 

@@ -20,8 +20,12 @@ _scheduler: BackgroundScheduler | None = None
 
 
 def _run_job():
+    # Naver 경로를 기본으로 쓴다 - KRX 직접 접속(update_latest)은 한국 리전에서만
+    # 동작하므로, 어디서나 동작하는 이 경로를 기본값으로 둔다.
+    # NOTE: 현재는 매 실행마다 업종/유니버스까지 함께 재조회한다. 트래픽을
+    # 더 아끼고 싶다면 업종 매핑은 주 1회만 갱신하도록 분리하는 것을 권장한다.
     try:
-        result = batch_update.update_latest()
+        result = batch_update.refresh_via_naver()
         logger.info("스케줄 갱신 완료: %s", result)
     except Exception:  # noqa: BLE001 - 배치 실패는 로그만 남기고 다음날 재시도
         logger.exception("스케줄 갱신 실패 - 다음 거래일에 재시도됩니다")
