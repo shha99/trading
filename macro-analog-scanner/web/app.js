@@ -55,12 +55,66 @@
   };
 
   let lastRunResult = null; // 마지막 분석 실행 결과 (차트/테이블이 참조)
+  let DATA_SOURCE = "synthetic"; // 'real' | 'synthetic'
+  let REAL_META = null; // 실데이터일 때 fetch_real_data.js가 채운 meta(발표지연/유효시작일 등)
 
   // ---------------------------------------------------------------------
-  // 초기화: 합성 데이터셋 생성
+  // 데이터 로드: 실제 데이터(있으면) -> 합성 데이터(폴백) 순서로 시도한다.
+  //   1) 아티팩트에 인라인 임베드된 window.__REAL_DATA__ (배포용)
+  //   2) 같은 폴더의 real_data_cache.json을 fetch (레포를 정적 서버로 띄운 경우)
+  //   3) 위 둘 다 없으면 seeded 합성 데이터로 폴백 (항상 동작 보장)
   // ---------------------------------------------------------------------
-  function boot() {
-    DS = A.buildSyntheticDataset(SEED, START, END);
+  async function loadRawDataset() {
+    if (window.__REAL_DATA__) {
+      return { raw: window.__REAL_DATA__, source: "real" };
+    }
+    try {
+      const res = await fetch("real_data_cache.json");
+      if (res.ok) {
+        const raw = await res.json();
+        return { raw, source: "real" };
+      }
+    } catch (e) {
+      // 네트워크/CORS 등으로 실패 -> 합성 데이터로 폴백
+    }
+    return { raw: null, source: "synthetic" };
+  }
+
+  /** fetch_real_data.js가 만든 raw 캐시(원본 시리즈)로부터 레짐/금리팩터 등 파생값을 계산한다.
+   * 합성 데이터와 완전히 동일한 파이프라인(Analysis.classifyRegime 등)을 그대로 재사용한다. */
+  function buildDatasetFromRaw(raw) {
+    const regime = A.classifyRegime(raw.fedfunds);
+    const rateFactors = A.buildRateFactors(raw.rates.y2, raw.rates.y5, raw.rates.y10, raw.rates.y20, raw.rates.y30);
+    return {
+      tradingDays: raw.tradingDays,
+      fedfunds: raw.fedfunds,
+      regime,
+      rates: raw.rates,
+      rateFactors,
+      cpi: raw.cpi,
+      ppi: raw.ppi,
+      icsa: raw.icsa,
+      wti: raw.wti,
+      dxy: raw.dxy,
+      prices: raw.prices,
+      meta: raw.meta,
+    };
+  }
+
+  // ---------------------------------------------------------------------
+  // 초기화
+  // ---------------------------------------------------------------------
+  async function boot() {
+    const { raw, source } = await loadRawDataset();
+    DATA_SOURCE = source;
+    if (source === "real") {
+      DS = buildDatasetFromRaw(raw);
+      REAL_META = raw.meta;
+    } else {
+      DS = A.buildSyntheticDataset(SEED, START, END);
+      REAL_META = null;
+    }
+
     SPX_MOM = A.momentum(DS.prices.SPX, 63);
     SPX_VAL = A.maDeviation(DS.prices.SPX, 252);
 
@@ -82,10 +136,11 @@
       state.scenarioValues[v.key] = lastFeatureValue(v.key);
     }
 
-    document.getElementById("meta-range").textContent = `데이터 구간 ${DS.tradingDays[0]} ~ ${DS.tradingDays.at(-1)} (합성)`;
+    const rangeLabel = source === "real" ? "(실데이터)" : "(합성)";
+    document.getElementById("meta-range").textContent = `데이터 구간 ${DS.tradingDays[0]} ~ ${DS.tradingDays.at(-1)} ${rangeLabel}`;
     document.getElementById("meta-days").textContent = `거래일 수 ${DS.tradingDays.length.toLocaleString()}`;
     // DOM 생성(renderShell)과 최초 분석 실행(runAnalysis)은 ui.js 로드 후
-    // index.html 하단 부트스트랩 스크립트에서 순서대로 호출한다.
+    // index.html 하단 부트스트랩 스크립트에서 boot()가 끝난 뒤 순서대로 호출한다.
   }
 
   // ---------------------------------------------------------------------
@@ -384,6 +439,35 @@
     return { ols, huber, vif, n: X.length };
   }
 
+  /** 실데이터일 때만: 변수별 "실제로 몇 년도부터 쓸 수 있는지" — 스펙 1번 항목의
+   * "이 변수는 ○○○○년부터 사용 가능" 표시용. 금리 팩터는 구성에 쓰인 만기들 중
+   * 가장 늦게 시작한 만기가 그 팩터의 실제 유효 시작일이다. */
+  function variableAvailableFrom(varKey) {
+    if (DATA_SOURCE !== "real" || !REAL_META) return null;
+    const m = REAL_META.seriesAvailableFrom || {};
+    const latestOf = (...dates) => dates.filter(Boolean).sort().pop() || null;
+    switch (varKey) {
+      case "cpi":
+        return m.CPI;
+      case "ppi":
+        return m.PPI;
+      case "wti":
+        return m.WTI;
+      case "dxy":
+        return m.DXY;
+      case "icsa":
+        return m.ICSA;
+      case "rate_level":
+        return m.DGS10;
+      case "rate_slope":
+        return latestOf(m.DGS10, m.DGS2);
+      case "rate_curve":
+        return latestOf(m.DGS2, m.DGS5, m.DGS10);
+      default:
+        return null;
+    }
+  }
+
   // 나머지(렌더링, DOM 바인딩)는 ui.js에서 계속
   window.__macroApp = {
     state,
@@ -400,5 +484,8 @@
     poolStartIndex,
     SURPRISE_CUTOFF,
     round,
+    dataSource: () => DATA_SOURCE,
+    realMeta: () => REAL_META,
+    variableAvailableFrom,
   };
 })();

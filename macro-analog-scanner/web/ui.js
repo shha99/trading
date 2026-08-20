@@ -19,9 +19,31 @@
   const reducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   // =======================================================================
+  // 데이터 출처 배너/푸터 (합성 vs 실데이터에 따라 톤과 문구를 다르게)
+  // =======================================================================
+  function applyDataSourceBanner() {
+    const banner = document.getElementById("data-source-banner");
+    const footerNote = document.getElementById("footer-data-note");
+    const source = App.dataSource();
+    if (source === "real") {
+      const meta = App.realMeta() || {};
+      const fetched = meta.fetchedAt ? new Date(meta.fetchedAt).toLocaleString("ko-KR") : "알 수 없음";
+      banner.classList.add("sample-banner--real");
+      banner.innerHTML = `📡 <strong>실제 데이터 사용 중</strong> — Yahoo Finance(가격) + FRED(거시), 마지막 수집: ${fetched}. 월간/주간 지표의 발표일은 표준 발표주기 기반 근사치입니다 (실시간 vintage 데이터 아님).`;
+      footerNote.textContent =
+        "가격은 Yahoo Finance, 거시지표는 FRED에서 수집한 실제 데이터입니다. 다만 월간/주간 지표의 정렬 기준일은 실제 발표 캘린더가 아닌 표준 발표주기 근사치이며, 위기구간 라벨은 참고용 근사 구간입니다.";
+    } else {
+      banner.classList.remove("sample-banner--real");
+      banner.innerHTML = `⚠ <strong>합성(가짜) 데이터 데모</strong> — 아래 모든 수치·차트는 seeded random generator로 만든 시연용 데이터이며, 실제 S&amp;P500·Nasdaq·Dow·CPI·금리 등과 무관합니다.`;
+      footerNote.textContent = "이 페이지의 가격·거시 데이터는 전부 합성(랜덤 시드 기반) 데이터이며 실제 시장 데이터가 아닙니다.";
+    }
+  }
+
+  // =======================================================================
   // 셸(고정 레이아웃) 렌더
   // =======================================================================
   function renderShell() {
+    applyDataSourceBanner();
     const root = document.getElementById("app-root");
     root.innerHTML = `
       <div class="layout">
@@ -84,12 +106,14 @@
       const checked = state.selectedVars.has(v.key);
       const transform = state.varTransform[v.key];
       const val = state.scenarioValues[v.key];
+      const availFrom = App.variableAvailableFrom(v.key);
       return `
         <div class="var-row ${checked ? "var-row--on" : ""}" data-var="${v.key}">
           <label class="var-row__head">
             <input type="checkbox" data-role="var-check" data-var="${v.key}" ${checked ? "checked" : ""} />
             <span>${v.label}</span>
           </label>
+          ${availFrom ? `<div class="hint" style="margin-left:22px">${availFrom.slice(0, 4)}년부터 사용 가능</div>` : ""}
           ${
             checked
               ? `

@@ -179,7 +179,9 @@
   }
 
   /* ---------------------------------------------------------------------
-     상단 배너 (합성 데이터 경고 — 항상 보임, 닫기 불가)
+     상단 배너 (데이터 출처 고지 — 항상 보임, 닫기 불가)
+     합성 데이터일 때는 critical(빨강), 실데이터일 때는 warning(호박색)로
+     톤을 구분한다 — "가짜 데이터"와 "진짜지만 투자조언 아님"은 다른 경고 수준이다.
      --------------------------------------------------------------------- */
   .sample-banner {
     position: sticky;
@@ -193,6 +195,10 @@
     text-align: center;
     padding: 6px 12px;
     border-bottom: 1px solid rgba(0, 0, 0, 0.15);
+  }
+  .sample-banner--real {
+    background: var(--status-warning);
+    color: #1a1300;
   }
   .sample-banner strong {
     font-weight: 600;
@@ -678,9 +684,8 @@
 </head>
 <body>
 
-<div class="sample-banner">
-  ⚠ <strong>합성(가짜) 데이터 데모</strong> — 아래 모든 수치·차트는 seeded random generator로 만든 시연용
-  데이터이며, 실제 S&amp;P500·Nasdaq·Dow·CPI·금리 등과 무관합니다.
+<div class="sample-banner" id="data-source-banner">
+  ⚠ 데이터 불러오는 중…
 </div>
 
 <header class="masthead">
@@ -698,22 +703,23 @@
 </header>
 
 <div id="app-root">
-  <div class="app-loading">합성 데이터 생성 중…</div>
+  <div class="app-loading">데이터 불러오는 중…</div>
 </div>
 
 <footer class="footer-disclaimer">
   <strong>이 도구의 한계.</strong> 이 도구는 과거 유사 국면의 통계적 분포를 보여주는 참고 자료이며, 투자
-  조언이나 확정적 예측이 아닙니다. 표본 수, 레짐, out-of-sample 성과를 함께 확인하십시오. 이 페이지의 가격·거시
-  데이터는 전부 합성(랜덤 시드 기반) 데이터이며 실제 시장 데이터가 아닙니다.
+  조언이나 확정적 예측이 아닙니다. 표본 수, 레짐, out-of-sample 성과를 함께 확인하십시오.
+  <span id="footer-data-note"></span>
 </footer>
 
 <script src="analysis.js"></script>
 <script src="app.js"></script>
 <script src="ui.js"></script>
 <script>
-  window.__macroApp.boot();
-  window.__macroUI.renderShell();
-  window.__macroApp.runAnalysis();
+  window.__macroApp.boot().then(function () {
+    window.__macroUI.renderShell();
+    window.__macroApp.runAnalysis();
+  });
 </script>
 </body>
 </html>
