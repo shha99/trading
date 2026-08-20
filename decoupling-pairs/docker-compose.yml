@@ -1,0 +1,39 @@
+services:
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      - DECOUPLING_CORS_ORIGINS=https://${DUCKDNS_DOMAIN}
+    volumes:
+      - decoupling-data:/app/data/cache
+    expose:
+      - "8000"
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    expose:
+      - "80"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DUCKDNS_DOMAIN=${DUCKDNS_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - frontend
+      - backend
+
+volumes:
+  decoupling-data:
+  caddy-data:
+  caddy-config:

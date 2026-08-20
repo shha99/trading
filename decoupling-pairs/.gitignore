@@ -9,3 +9,6 @@ backend/data/cache/*.json
 frontend/node_modules/
 frontend/dist/
 frontend/tsconfig.tsbuildinfo
+
+.env
+duckdns.log

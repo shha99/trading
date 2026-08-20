@@ -10,6 +10,10 @@
 - 프론트엔드: React + TypeScript (Vite) + recharts
 - 캐시: 로컬 parquet (일별 종가/거래대금 패널) + 종목 메타 스냅샷
 
+실제 도메인으로 상시 배포하고 싶다면 **[DEPLOY.md](./DEPLOY.md)**
+(Oracle Cloud Free Tier + DuckDNS + Docker Compose + Caddy 자동 HTTPS,
+완전 무료) 참고.
+
 ## 두 가지 조회 모드
 
 - **A. 전체 스캔** (`GET /api/scan`) — 기간을 지정하면 코스피+코스닥 전종목
