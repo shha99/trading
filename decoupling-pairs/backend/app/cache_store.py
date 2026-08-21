@@ -34,6 +34,20 @@ def load_trading_value() -> pd.DataFrame:
     return df.sort_index()
 
 
+def load_index() -> pd.DataFrame:
+    """date x {KOSPI, KOSDAQ} 지수 종가 패널. 캐시가 없으면 빈 DataFrame."""
+    if not config.INDEX_PATH.exists():
+        return pd.DataFrame()
+    df = pd.read_parquet(config.INDEX_PATH)
+    df.index = pd.to_datetime(df.index)
+    return df.sort_index()
+
+
+def save_index(df: pd.DataFrame) -> None:
+    with _LOCK:
+        df.sort_index().to_parquet(config.INDEX_PATH)
+
+
 def load_meta() -> pd.DataFrame:
     if not config.META_PATH.exists():
         return pd.DataFrame(
@@ -47,6 +61,8 @@ def load_meta() -> pd.DataFrame:
                 "is_managed",
                 "is_halted",
                 "listed_shares",
+                "index_corr",
+                "index_reversal",
             ]
         )
     return pd.read_parquet(config.META_PATH)

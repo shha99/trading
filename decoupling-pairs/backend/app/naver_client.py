@@ -148,23 +148,40 @@ def fetch_market_listing(market: str) -> dict[str, dict]:
     return out
 
 
+INVERSE_LEVERAGE_RE = re.compile(r"인버스|레버리지|곱버스|INVERSE|LEVERAGE", re.IGNORECASE)
+
+
 def build_universe(max_workers: int = DEFAULT_WORKERS) -> pd.DataFrame:
-    """stockEndType == "stock"인 종목 중 업종 분류가 있는 것만 최종 유니버스로 채택."""
+    """stockEndType == "stock"인 종목 중 업종 분류가 있는 것만 최종 유니버스로 채택.
+
+    stockEndType 필터로 ETF/ETN 대부분은 걸러지지만, 혹시 새 상품 유형이
+    추가로 껴 있을 경우를 대비해 종목명에 "인버스/레버리지/곱버스"가 들어간
+    것도 이중으로 제외한다(지수와 구조적으로 반대/증폭 방향으로 움직이는
+    상품은 "진짜 디커플링"이 아니라 상품 설계 그 자체이므로).
+    """
     sector_map = fetch_sector_map(max_workers=max_workers)
     listings: dict[str, dict] = {}
     for m in MARKETS:
         listings.update(fetch_market_listing(m))
 
     rows = []
+    excluded_by_name = 0
     for code, info in listings.items():
         sector = sector_map.get(code)
         if sector is None:
+            continue
+        if INVERSE_LEVERAGE_RE.search(info.get("name", "")):
+            excluded_by_name += 1
             continue
         rows.append({"ticker": code, "sector": sector, **info})
     if not rows:
         raise NaverUnavailableError("유니버스를 하나도 구성하지 못했습니다.")
     df = pd.DataFrame(rows).set_index("ticker")
-    logger.info("유니버스 구성 완료: %d종목 (KOSPI+KOSDAQ)", len(df))
+    logger.info(
+        "유니버스 구성 완료: %d종목 (KOSPI+KOSDAQ, 인버스/레버리지 명칭 %d개 추가 제외)",
+        len(df),
+        excluded_by_name,
+    )
     return df
 
 
@@ -190,7 +207,66 @@ def fetch_history(ticker: str, start: str, end: str) -> pd.DataFrame:
         )
     if not rows:
         return pd.DataFrame(columns=["close", "volume"])
-    return pd.DataFrame(rows).set_index("date").sort_index()
+    df = pd.DataFrame(rows).set_index("date").sort_index()
+    df["close"] = adjust_for_corporate_actions(df["close"])
+    return df
+
+
+# KRX 상하한가는 ±30%다(2015.6~). 정규 거래일에는 이 폭을 하루 만에 벗어날 수 없으므로,
+# raw 시세에서 이 범위를 넘는 일간 변동은 100% 무상증자/액면분할/감자 등 기업행동으로 인한
+# 가격 재산정이지 실제 시장 변동이 아니다. Naver 차트 API가 수정주가가 아닌 원주가를
+# 반환하는 것으로 확인되어(에이프로젠 007460이 2026-05-08 하루 만에 293원→4,530원(15.5배)
+# 뛴 것처럼 보이는 등, 실제로는 감자), 이 시그널로 자동 역보정한다.
+_DAILY_LIMIT_PCT = 0.30
+_ADJUST_BUFFER_PCT = 0.03  # 상하한가 근처 반올림 오차를 오탐지하지 않기 위한 여유(퍼센트 포인트)
+# 상/하한은 대칭적인 배율(reciprocal)이 아니라 KRX 고시처럼 "±퍼센트"로 정의해야 한다.
+# 예: -30%는 ratio 0.70이지, 1/1.30(=0.769)이 아니다 - 반대로 계산하면 정상적인
+# -28%대 하락(ratio 0.72)까지 오탐지하게 된다.
+_UPPER_RATIO = 1 + _DAILY_LIMIT_PCT + _ADJUST_BUFFER_PCT
+_LOWER_RATIO = 1 - _DAILY_LIMIT_PCT - _ADJUST_BUFFER_PCT
+
+
+def adjust_for_corporate_actions(close: pd.Series) -> pd.Series:
+    """무상증자/액면분할/감자 등으로 인한 raw 종가 불연속을 역산해 보정한다.
+
+    가장 최근 이벤트부터 과거 방향으로 처리하면서, 이벤트 이전 구간 전체에
+    (이벤트 당일 종가 / 전일 종가) 배율을 곱해 현재 주식 수 기준으로
+    재환산한다(표준적인 "수정주가" 구성 방식과 동일한 원리).
+    """
+    if close is None or len(close) < 2:
+        return close
+    adjusted = close.copy().astype(float)
+    # pandas Copy-on-Write 모드에서는 to_numpy()가 읽기 전용 뷰를 돌려줄 수 있으므로 명시적으로 복사.
+    values = adjusted.to_numpy().copy()
+    n = len(values)
+    # 뒤(최근)에서 앞(과거)으로 훑으며, 이벤트 지점 이전 구간을 통째로 배율 조정.
+    for i in range(n - 1, 0, -1):
+        prev, cur = values[i - 1], values[i]
+        if prev <= 0 or cur <= 0:
+            continue
+        ratio = cur / prev
+        if ratio > _UPPER_RATIO or ratio < _LOWER_RATIO:
+            values[:i] *= ratio
+    adjusted.iloc[:] = values
+    return adjusted
+
+
+# ---------------------------------------------------------------------------
+# 4. 시장 지수 (KOSPI/KOSDAQ)
+# ---------------------------------------------------------------------------
+def fetch_index_history(index: str, start: str, end: str) -> pd.Series:
+    """index('KOSPI'|'KOSDAQ')의 [start, end] 일별 종가."""
+    url = f"https://api.stock.naver.com/chart/domestic/index/{index}/day?startDateTime={start}&endDateTime={end}"
+    data = _get_json(url, retries=2)
+    rows = [
+        (pd.to_datetime(r["localDate"], format="%Y%m%d"), r["closePrice"])
+        for r in data
+        if r.get("localDate") and r.get("closePrice")
+    ]
+    if not rows:
+        return pd.Series(dtype=float)
+    idx, vals = zip(*rows)
+    return pd.Series(vals, index=pd.DatetimeIndex(idx), name=index).sort_index()
 
 
 def fetch_histories(tickers: list[str], start: str, end: str, max_workers: int = DEFAULT_WORKERS) -> dict[str, pd.DataFrame]:

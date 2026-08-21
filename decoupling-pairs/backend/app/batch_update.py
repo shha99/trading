@@ -16,6 +16,7 @@ import logging
 import sys
 from datetime import datetime, timedelta
 
+import numpy as np
 import pandas as pd
 
 from . import cache_store, config, krx_client, naver_client
@@ -196,6 +197,83 @@ def backfill(start: str, end: str | None = None) -> dict:
     )
 
 
+def _compute_index_correlations(prices: pd.DataFrame, meta: pd.DataFrame, index_prices: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+    """종목별로 소속 시장(KOSPI/KOSDAQ) 지수와의 상관계수를 계산해 "지수 역행 종목" 판정.
+
+    최근 INDEX_CORR_LOOKBACK_DAYS 구간의 로그수익률로 계산한다. 특정 종목이 지수 자체와도
+    비정상적으로 강한 음의 상관관계를 보이면 데이터 문제(수정 안 된 급등락 등)이거나
+    설계상 지수와 반대로 움직이는 상품일 가능성이 높다는 진단 신호로 쓴다.
+    """
+    if index_prices.empty or prices.empty:
+        empty = pd.Series(index=meta.index, dtype=float)
+        return empty, empty.fillna(False).astype(bool)
+
+    tail_prices = prices.tail(config.INDEX_CORR_LOOKBACK_DAYS)
+    tail_index = index_prices.reindex(tail_prices.index)
+    stock_returns = np.log(tail_prices).diff()
+    index_returns = np.log(tail_index).diff()
+
+    corr = pd.Series(index=meta.index, dtype=float)
+    for market, idx_col in (("KOSPI", "KOSPI"), ("KOSDAQ", "KOSDAQ")):
+        if idx_col not in index_returns.columns:
+            continue
+        tickers = meta.index[meta["market"] == market].intersection(stock_returns.columns)
+        if len(tickers) == 0:
+            continue
+        corr.loc[tickers] = stock_returns[tickers].corrwith(index_returns[idx_col])
+
+    reversal = corr <= config.INDEX_REVERSAL_CORR_THRESHOLD
+    n_reversal = int(reversal.sum())
+    if n_reversal:
+        logger.warning("지수 역행 종목 %d개 발견 (기본 유니버스에서 제외, 토글로 강제 포함 가능)", n_reversal)
+        for ticker in corr.index[reversal][:10]:
+            name = meta.loc[ticker, "name"] if ticker in meta.index else ticker
+            series = prices[ticker].dropna().tail(15) if ticker in prices.columns else pd.Series(dtype=float)
+            logger.debug("[지수역행 디버그] %s(%s) corr=%.3f 최근가:\n%s", ticker, name, corr.get(ticker, float("nan")), series)
+    return corr, reversal.fillna(False)
+
+
+def quick_refresh_tickers(tickers: list[str], max_workers: int = naver_client.DEFAULT_WORKERS) -> dict:
+    """화면에 지금 보이는 종목 몇 개만 즉시 재조회하는 가벼운 새로고침.
+
+    전종목 배치(``refresh_via_naver``, 수 분 소요)와 달리 종목당 요청 1번씩만
+    하므로 몇 초 안에 끝난다. 유니버스/메타/지수는 건드리지 않고 prices/values
+    캐시만 갱신한다.
+    """
+    prices = cache_store.load_prices()
+    values = cache_store.load_trading_value()
+    today = naver_client.today_str()
+    start = (datetime.now() - timedelta(days=7)).strftime("%Y%m%d")
+
+    histories = naver_client.fetch_histories(tickers, start, today, max_workers=max_workers)
+    if not histories:
+        raise naver_client.NaverUnavailableError("빠른 새로고침: 시세를 하나도 받아오지 못했습니다.")
+
+    try:
+        still_open, today_kst = naver_client.market_status()
+    except naver_client.NaverUnavailableError:
+        still_open, today_kst = False, today
+    if still_open:
+        for df in histories.values():
+            if today_kst in df.index.astype(str).str[:10].values:
+                df.drop(df.index[df.index.astype(str).str[:10] == today_kst], inplace=True)
+
+    new_prices = pd.DataFrame({t: df["close"] for t, df in histories.items()})
+    new_values = pd.DataFrame({t: df["close"] * df["volume"] for t, df in histories.items()})
+
+    prices = new_prices if prices.empty else prices.combine_first(new_prices)
+    prices.update(new_prices)
+    values = new_values if values.empty else values.combine_first(new_values)
+    values.update(new_values)
+    cache_store.save_panel(prices, "prices")
+    cache_store.save_panel(values, "value")
+
+    return cache_store.save_state(
+        last_quick_refresh_at=datetime.now(config.KST).isoformat(),
+        last_quick_refresh_tickers=list(histories.keys()),
+    )
+
+
 def refresh_via_naver(years_back: int = config.DEFAULT_BACKFILL_YEARS, max_workers: int = naver_client.DEFAULT_WORKERS) -> dict:
     """Naver 금융 기반 갱신 - 백필과 증분 갱신을 겸한다.
 
@@ -273,6 +351,26 @@ def refresh_via_naver(years_back: int = config.DEFAULT_BACKFILL_YEARS, max_worke
     cache_store.save_panel(prices, "prices")
     cache_store.save_panel(values, "value")
 
+    # KOSPI/KOSDAQ 지수도 같은 구간으로 함께 갱신 (하락일 조건부 상관계수, 시장베타 잔차,
+    # 지수 역행 종목 판정에 공통으로 쓰인다).
+    index_prices = cache_store.load_index()
+    idx_start = default_start if index_prices.empty else (index_prices.index.max() - timedelta(days=5)).strftime("%Y%m%d")
+    idx_new = {}
+    for idx_name in ("KOSPI", "KOSDAQ"):
+        try:
+            s = naver_client.fetch_index_history(idx_name, idx_start, today)
+        except naver_client.NaverUnavailableError:
+            logger.warning("%s 지수 조회 실패 - 이번 실행에서는 건너뜀", idx_name)
+            continue
+        if still_open and today_kst in s.index.astype(str).str[:10].values:
+            s = s[s.index.astype(str).str[:10] != today_kst]
+        idx_new[idx_name] = s
+    if idx_new:
+        new_index_df = pd.DataFrame(idx_new)
+        index_prices = new_index_df if index_prices.empty else index_prices.combine_first(new_index_df)
+        index_prices.update(new_index_df)
+        cache_store.save_index(index_prices)
+
     fetched_tickers = list(histories.keys())
     lookback = values.tail(config.LIQUIDITY_LOOKBACK_DAYS)
     avg_value = lookback.reindex(columns=universe.index).mean(axis=0, skipna=True)
@@ -284,7 +382,18 @@ def refresh_via_naver(years_back: int = config.DEFAULT_BACKFILL_YEARS, max_worke
     meta["is_halted"] = last_row.isna().reindex(meta.index).fillna(True)
     meta["is_managed"] = False
     meta["listed_shares"] = None
-    meta = meta[["name", "market", "sector", "market_cap", "avg_trading_value", "is_preferred", "is_managed", "is_halted", "listed_shares"]]
+
+    index_corr, index_reversal = _compute_index_correlations(prices, meta, index_prices)
+    meta["index_corr"] = index_corr
+    meta["index_reversal"] = index_reversal
+
+    meta = meta[
+        [
+            "name", "market", "sector", "market_cap", "avg_trading_value",
+            "is_preferred", "is_managed", "is_halted", "listed_shares",
+            "index_corr", "index_reversal",
+        ]
+    ]
     cache_store.save_meta(meta)
 
     last_cached_after = prices.index.max() if not prices.empty else None

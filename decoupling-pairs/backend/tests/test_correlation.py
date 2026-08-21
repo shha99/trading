@@ -31,39 +31,47 @@ def _make_meta(tickers, sectors):
             "is_managed": {t: False for t in tickers},
             "is_halted": {t: False for t in tickers},
             "listed_shares": {t: 1000 for t in tickers},
+            "index_corr": {t: 0.0 for t in tickers},
+            "index_reversal": {t: False for t in tickers},
         }
     ).rename_axis("ticker")
+
+
+def _all_pairs(result: dict) -> list:
+    return result["pairs"] + result["low_significance_pairs"]
 
 
 def test_scan_pairs_ranks_most_negative_first():
     prices = _make_prices()
     meta = _make_meta(["A", "B", "C", "D"], ["철강", "철강", "화학", "IT"])
 
-    pairs, warn, days = correlation.scan_pairs(
+    result = correlation.scan_pairs(
         prices, meta, prices.index.min(), prices.index.max(), top_n=3,
-        exclude_managed=False, exclude_illiquid=False,
+        exclude_managed=False, exclude_illiquid=False, exclude_index_reversal=False,
     )
 
-    assert not warn
-    assert days == len(prices)
-    assert len(pairs) == 3
-    # 가장 음의 상관관계인 A-C 페어가 최상단이어야 함
-    top = pairs[0]
+    assert not result["reliability_warning"]
+    assert result["trading_days"] == len(prices)
+    pairs = _all_pairs(result)
+    assert len(pairs) >= 1
+    # 가장 음의 상관관계인 A-C 페어가 최상단이어야 함 (FDR 통과 리스트 기준)
+    top = result["pairs"][0]
     assert {top.stock_a.ticker, top.stock_b.ticker} == {"A", "C"}
     assert top.correlation < 0
+    assert top.fdr_passed is True
     # 오름차순 정렬 확인
-    values = [p.correlation for p in pairs]
+    values = [p.correlation for p in result["pairs"]]
     assert values == sorted(values)
 
 
 def test_scan_pairs_badges_reflect_sector_match():
     prices = _make_prices()
     meta = _make_meta(["A", "B", "C", "D"], ["철강", "철강", "화학", "IT"])
-    pairs, _, _ = correlation.scan_pairs(
+    result = correlation.scan_pairs(
         prices, meta, prices.index.min(), prices.index.max(), top_n=10,
-        exclude_managed=False, exclude_illiquid=False,
+        exclude_managed=False, exclude_illiquid=False, exclude_index_reversal=False,
     )
-    for p in pairs:
+    for p in _all_pairs(result):
         expected = "cross_sector" if p.stock_a.sector != p.stock_b.sector else "same_sector_anomaly"
         assert p.badge == expected
 
@@ -71,12 +79,12 @@ def test_scan_pairs_badges_reflect_sector_match():
 def test_scan_pairs_reliability_warning_for_short_window():
     prices = _make_prices(n_days=10)
     meta = _make_meta(["A", "B", "C", "D"], ["철강", "철강", "화학", "IT"])
-    pairs, warn, days = correlation.scan_pairs(
+    result = correlation.scan_pairs(
         prices, meta, prices.index.min(), prices.index.max(), top_n=3,
-        exclude_managed=False, exclude_illiquid=False,
+        exclude_managed=False, exclude_illiquid=False, exclude_index_reversal=False,
     )
-    assert warn is True
-    assert days == 10
+    assert result["reliability_warning"] is True
+    assert result["trading_days"] == 10
 
 
 def test_scan_pairs_excludes_incomplete_columns_in_window():
@@ -84,12 +92,25 @@ def test_scan_pairs_excludes_incomplete_columns_in_window():
     prices.loc[prices.index[5], "D"] = np.nan  # D에 결측 발생 -> 이 구간에서 제외되어야 함
     meta = _make_meta(["A", "B", "C", "D"], ["철강", "철강", "화학", "IT"])
 
-    pairs, _, _ = correlation.scan_pairs(
+    result = correlation.scan_pairs(
         prices, meta, prices.index.min(), prices.index.max(), top_n=10,
-        exclude_managed=False, exclude_illiquid=False,
+        exclude_managed=False, exclude_illiquid=False, exclude_index_reversal=False,
     )
-    tickers_seen = {t for p in pairs for t in (p.stock_a.ticker, p.stock_b.ticker)}
+    tickers_seen = {t for p in _all_pairs(result) for t in (p.stock_a.ticker, p.stock_b.ticker)}
     assert "D" not in tickers_seen
+
+
+def test_scan_pairs_excludes_index_reversal_by_default():
+    prices = _make_prices()
+    meta = _make_meta(["A", "B", "C", "D"], ["철강", "철강", "화학", "IT"])
+    meta.loc["C", "index_reversal"] = True
+
+    result = correlation.scan_pairs(
+        prices, meta, prices.index.min(), prices.index.max(), top_n=10,
+        exclude_managed=False, exclude_illiquid=False,  # exclude_index_reversal 기본값 True
+    )
+    tickers_seen = {t for p in _all_pairs(result) for t in (p.stock_a.ticker, p.stock_b.ticker)}
+    assert "C" not in tickers_seen
 
 
 def test_search_correlations_full_period_handles_partial_history():
@@ -98,10 +119,11 @@ def test_search_correlations_full_period_handles_partial_history():
     prices.loc[prices.index[:30], "C"] = np.nan
     meta = _make_meta(["A", "B", "C", "D"], ["철강", "철강", "화학", "IT"])
 
-    pairs, warn = correlation.search_correlations(
+    result = correlation.search_correlations(
         "A", prices, meta, start=None, end=None, full_period=True, top_n=3,
-        exclude_managed=False, exclude_illiquid=False,
+        exclude_managed=False, exclude_illiquid=False, exclude_index_reversal=False,
     )
+    pairs = _all_pairs(result)
     by_ticker = {p.stock_b.ticker: p for p in pairs}
     assert "C" in by_ticker
     assert by_ticker["C"].overlap_days <= 30
@@ -113,15 +135,23 @@ def test_search_correlations_excludes_illiquid_when_requested():
     meta = _make_meta(["A", "B", "C", "D"], ["철강", "철강", "화학", "IT"])
     meta.loc["C", "avg_trading_value"] = 1  # 유동성 최하위로 설정
 
-    pairs, _ = correlation.search_correlations(
+    result = correlation.search_correlations(
         "A", prices, meta, start=prices.index.min(), end=prices.index.max(),
         full_period=False, top_n=3, exclude_managed=False, exclude_illiquid=True,
+        exclude_index_reversal=False,
     )
-    assert all(p.stock_b.ticker != "C" for p in pairs)
+    assert all(p.stock_b.ticker != "C" for p in _all_pairs(result))
 
 
 def test_eligible_universe_excludes_preferred_and_managed():
     meta = _make_meta(["A", "B"], ["철강", "화학"])
     meta.loc["B", "is_preferred"] = True
-    universe = correlation.eligible_universe(meta, exclude_managed=True, exclude_illiquid=False)
+    universe = correlation.eligible_universe(meta, exclude_managed=True, exclude_illiquid=False, exclude_index_reversal=False)
+    assert list(universe) == ["A"]
+
+
+def test_eligible_universe_excludes_index_reversal_by_default():
+    meta = _make_meta(["A", "B"], ["철강", "화학"])
+    meta.loc["B", "index_reversal"] = True
+    universe = correlation.eligible_universe(meta, exclude_managed=False, exclude_illiquid=False)
     assert list(universe) == ["A"]
