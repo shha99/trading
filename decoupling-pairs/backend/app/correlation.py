@@ -29,6 +29,17 @@ class StockInfo:
     index_corr: float | None = None
     index_reversal: bool = False
     volatility: float | None = None  # 연환산 변동성(일별 로그수익률 표준편차 × √252)
+    structural_break: bool = False  # 4: 감자/액면병합 등 원주가 구조적 불연속 이력
+    long_halt_history: bool = False  # 4: 장기 거래정지 이력(프록시: 연속 거래량 0 구간)
+    concentration_ratio: float | None = None  # 4: 상위 K거래일이 전체 수익률 분산에서 차지하는 비중
+
+    @property
+    def concentration_flag(self) -> bool:
+        return self.concentration_ratio is not None and self.concentration_ratio >= config.CONCENTRATION_THRESHOLD
+
+    @property
+    def outlier_history(self) -> bool:
+        return self.structural_break or self.long_halt_history
 
 
 @dataclass
@@ -66,32 +77,53 @@ def eligible_universe(
     exclude_illiquid: bool,
     exclude_index_reversal: bool = True,
     min_vol_percentile: float = 0.0,
+    max_vol_percentile: float = 1.0,
     sector_scope: str | None = None,
+    exclude_structural_outliers: bool = True,
+    exclude_concentrated: bool = True,
 ) -> pd.Index:
-    """관리/정지/우선주, 유동성 하위, 지수 역행, 저변동성 하위, 섹터 한정 필터를 적용한
-    종목 코드 집합.
+    """관리/정지/우선주, 유동성 하위, 지수 역행, 저/고변동성, 이상치 이력, 변동성 집중,
+    섹터 한정 필터를 적용한 종목 코드 집합.
 
-    min_vol_percentile: 연환산 변동성 하위 이 분위수(0~0.5)보다 낮은 종목 제외
-    (기본 0.20 = 하위 20% 제외). 저변동성·경기방어 종목은 평소 거의 안 움직이다
-    개별 이슈로 며칠만 튀는 패턴이 흔해, 그 소수의 날이 상관계수 계산을 지배해
-    통계적으로 불안정한 강한 음의 상관관계로 오탐되기 쉽다.
+    min_vol_percentile / max_vol_percentile: 연환산 변동성 하위/상위 이 분위수 밖의
+    종목 제외(기본 하위 20%, 상위 5% 제외). 저변동성·경기방어 종목은 평소 거의 안
+    움직이다 개별 이슈로 며칠만 튀는 패턴이 흔해 그 소수의 날이 상관계수 계산을
+    지배해 오탐되기 쉽고, 반대로 변동성이 극단적으로 큰 종목도 소수의 급등락일이
+    같은 방식으로 계산을 왜곡하기 쉽다.
+    exclude_structural_outliers: 감자/액면병합 등 원주가 구조적 불연속 이력이나
+    장기 거래정지 이력이 있는 종목 제외(4: 흥아해운류 오탐 방지).
+    exclude_concentrated: 상위 K거래일이 전체 수익률 분산의 CONCENTRATION_THRESHOLD
+    이상을 차지하는(=소수 이벤트가 상관계수를 지배하는) 종목 제외.
     sector_scope: "all"이 아니면 해당 섹터 소속 종목으로만 후보군을 한정(섹터별 조회).
     """
     if meta.empty:
         return pd.Index([])
     mask = pd.Series(True, index=meta.index)
     if exclude_managed:
-        mask &= ~meta["is_preferred"].fillna(False)
-        mask &= ~meta["is_managed"].fillna(False)
-        mask &= ~meta["is_halted"].fillna(False)
+        # 개별종목 메타에만 있는 컬럼들 - 섹터지수/ETF 등 다른 종류의 메타에는 없을 수
+        # 있으므로(예: sector_instruments.py) 컬럼이 있을 때만 적용한다.
+        for col in ("is_preferred", "is_managed", "is_halted"):
+            if col in meta.columns:
+                mask &= ~meta[col].fillna(False)
     if exclude_illiquid and "avg_trading_value" in meta.columns and meta["avg_trading_value"].notna().any():
         cutoff = meta["avg_trading_value"].quantile(config.DEFAULT_LIQUIDITY_EXCLUDE_PCTL)
         mask &= meta["avg_trading_value"].fillna(0) >= cutoff
     if exclude_index_reversal and "index_reversal" in meta.columns:
         mask &= ~meta["index_reversal"].fillna(False)
-    if min_vol_percentile and min_vol_percentile > 0 and "volatility" in meta.columns and meta["volatility"].notna().any():
-        cutoff = meta["volatility"].quantile(min_vol_percentile)
-        mask &= meta["volatility"].fillna(-np.inf) >= cutoff
+    if "volatility" in meta.columns and meta["volatility"].notna().any():
+        if min_vol_percentile and min_vol_percentile > 0:
+            cutoff = meta["volatility"].quantile(min_vol_percentile)
+            mask &= meta["volatility"].fillna(-np.inf) >= cutoff
+        if max_vol_percentile and max_vol_percentile < 1:
+            cutoff_hi = meta["volatility"].quantile(max_vol_percentile)
+            mask &= meta["volatility"].fillna(np.inf) <= cutoff_hi
+    if exclude_structural_outliers:
+        if "structural_break" in meta.columns:
+            mask &= ~meta["structural_break"].fillna(False)
+        if "long_halt_history" in meta.columns:
+            mask &= ~meta["long_halt_history"].fillna(False)
+    if exclude_concentrated and "concentration_ratio" in meta.columns:
+        mask &= ~(meta["concentration_ratio"].fillna(0) >= config.CONCENTRATION_THRESHOLD)
     if sector_scope and sector_scope != "all" and "sector" in meta.columns:
         mask &= meta["sector"].fillna("기타") == sector_scope
     return meta.index[mask]
@@ -110,6 +142,9 @@ def stock_info(ticker: str, meta: pd.DataFrame) -> StockInfo:
             index_corr=_safe_float(row.get("index_corr")),
             index_reversal=bool(row.get("index_reversal", False)),
             volatility=_safe_float(row.get("volatility")),
+            structural_break=bool(row.get("structural_break", False)),
+            long_halt_history=bool(row.get("long_halt_history", False)),
+            concentration_ratio=_safe_float(row.get("concentration_ratio")),
         )
     return StockInfo(ticker=ticker, name=ticker, market="", sector="기타", market_cap=None, avg_trading_value=None)
 
@@ -163,7 +198,10 @@ def scan_pairs(
     min_trading_value: float | None = None,
     index_prices: pd.DataFrame | None = None,
     min_vol_percentile: float = config.DEFAULT_MIN_VOLATILITY_PCTL,
+    max_vol_percentile: float = config.DEFAULT_MAX_VOLATILITY_PCTL,
     sector_scope: str | None = None,  # "all" 또는 실제 섹터명 - 후보군을 그 섹터로 한정
+    exclude_structural_outliers: bool = True,
+    exclude_concentrated: bool = True,
 ) -> dict:
     """모드 A: 지정 기간 전체 스캔.
 
@@ -178,7 +216,9 @@ def scan_pairs(
 
     universe = eligible_universe(
         meta, exclude_managed, exclude_illiquid, exclude_index_reversal,
-        min_vol_percentile=min_vol_percentile, sector_scope=sector_scope,
+        min_vol_percentile=min_vol_percentile, max_vol_percentile=max_vol_percentile,
+        sector_scope=sector_scope, exclude_structural_outliers=exclude_structural_outliers,
+        exclude_concentrated=exclude_concentrated,
     )
     universe = universe.intersection(window.columns)
     if min_market_cap is not None:
@@ -330,7 +370,10 @@ def search_correlations(
     min_trading_value: float | None = None,
     index_prices: pd.DataFrame | None = None,
     min_vol_percentile: float = config.DEFAULT_MIN_VOLATILITY_PCTL,
+    max_vol_percentile: float = config.DEFAULT_MAX_VOLATILITY_PCTL,
     sector_scope: str | None = None,  # "all" 또는 실제 섹터명 - 비교 후보군을 그 섹터로 한정
+    exclude_structural_outliers: bool = True,
+    exclude_concentrated: bool = True,
 ) -> dict:
     """모드 B: 기준 종목 하나 vs 나머지 전종목.
 
@@ -357,7 +400,9 @@ def search_correlations(
 
     universe = eligible_universe(
         meta, exclude_managed, exclude_illiquid, exclude_index_reversal,
-        min_vol_percentile=min_vol_percentile, sector_scope=sector_scope,
+        min_vol_percentile=min_vol_percentile, max_vol_percentile=max_vol_percentile,
+        sector_scope=sector_scope, exclude_structural_outliers=exclude_structural_outliers,
+        exclude_concentrated=exclude_concentrated,
     )
     universe = universe.intersection(window.columns).difference([ticker])
     if min_market_cap is not None:

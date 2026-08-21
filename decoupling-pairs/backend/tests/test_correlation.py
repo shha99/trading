@@ -237,3 +237,85 @@ def test_search_correlations_sector_scope_restricts_candidates():
     pairs = _all_pairs(result)
     assert all(p.stock_b.ticker in ("B", "C") for p in pairs)
     assert result["same_sector_highlights"] == []
+
+
+def test_scan_pairs_sector_scope_recomputes_fdr_on_scoped_pool(monkeypatch):
+    """3(추가): 섹터 스코프에서는 FDR을 전체 시장 규모가 아니라 "섹터 내 페어 수"
+    기준으로 다시 계산해야 한다 - eligible_universe가 correlation 행렬/p-value 계산보다
+    먼저 후보군을 좁히므로, benjamini_hochberg에 들어가는 p-value 배열 길이 자체가
+    이미 섹터 스코프 크기여야 한다(전체 시장 페어 수를 재사용하면 안 됨)."""
+    captured_lengths = []
+    real_bh = correlation.advanced_stats.benjamini_hochberg
+
+    def _spy(pvals, alpha):
+        captured_lengths.append(len(pvals))
+        return real_bh(pvals, alpha)
+
+    monkeypatch.setattr(correlation.advanced_stats, "benjamini_hochberg", _spy)
+
+    prices = _make_prices()
+    meta = _make_meta(["A", "B", "C", "D"], ["철강", "화학", "철강", "IT"])
+
+    correlation.scan_pairs(
+        prices, meta, prices.index.min(), prices.index.max(), top_n=10,
+        exclude_managed=False, exclude_illiquid=False, exclude_index_reversal=False,
+        sector_scope="all",
+    )
+    full_market_pair_count = captured_lengths[-1]  # 4종목 전체 조합 = 6페어
+
+    captured_lengths.clear()
+    correlation.scan_pairs(
+        prices, meta, prices.index.min(), prices.index.max(), top_n=10,
+        exclude_managed=False, exclude_illiquid=False, exclude_index_reversal=False,
+        sector_scope="철강",
+    )
+    scoped_pair_count = captured_lengths[-1]  # 철강 2종목(A,C) = 1페어
+
+    assert full_market_pair_count == 6
+    assert scoped_pair_count == 1
+    assert scoped_pair_count < full_market_pair_count
+
+
+def test_eligible_universe_excludes_structural_outliers_by_default():
+    meta = _make_meta(["A", "B", "C"], ["철강", "철강", "철강"])
+    meta["structural_break"] = [False, True, False]
+    meta["long_halt_history"] = [False, False, True]
+
+    universe = correlation.eligible_universe(
+        meta, exclude_managed=False, exclude_illiquid=False, exclude_index_reversal=False
+    )
+    assert list(universe) == ["A"]
+
+    universe_included = correlation.eligible_universe(
+        meta, exclude_managed=False, exclude_illiquid=False, exclude_index_reversal=False,
+        exclude_structural_outliers=False,
+    )
+    assert set(universe_included) == {"A", "B", "C"}
+
+
+def test_eligible_universe_excludes_concentrated_by_default():
+    meta = _make_meta(["A", "B"], ["철강", "철강"])
+    meta["concentration_ratio"] = [0.1, 0.9]  # B는 소수 이벤트일이 분산을 지배
+
+    universe = correlation.eligible_universe(
+        meta, exclude_managed=False, exclude_illiquid=False, exclude_index_reversal=False
+    )
+    assert list(universe) == ["A"]
+
+    universe_included = correlation.eligible_universe(
+        meta, exclude_managed=False, exclude_illiquid=False, exclude_index_reversal=False,
+        exclude_concentrated=False,
+    )
+    assert set(universe_included) == {"A", "B"}
+
+
+def test_eligible_universe_excludes_high_volatility_upper_bound():
+    meta = _make_meta(["A", "B", "C", "D", "E"], ["철강"] * 5)
+    meta["volatility"] = [0.20, 0.22, 0.25, 0.28, 1.50]  # E는 극단적 고변동성
+
+    universe = correlation.eligible_universe(
+        meta, exclude_managed=False, exclude_illiquid=False, exclude_index_reversal=False,
+        max_vol_percentile=config.DEFAULT_MAX_VOLATILITY_PCTL,
+    )
+    assert "E" not in universe
+    assert "A" in universe

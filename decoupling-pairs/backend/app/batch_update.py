@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 
-from . import cache_store, config, krx_client, naver_client
+from . import cache_store, config, krx_client, naver_client, sector_instruments
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -249,6 +249,58 @@ def _compute_volatility(prices: pd.DataFrame) -> pd.Series:
     return vol
 
 
+def _compute_long_halt_flags(values: pd.DataFrame) -> pd.Series:
+    """4: "장기 거래정지 이력" 판정 - 최근 구간 내 거래량 0/결측이
+    LONG_HALT_MIN_CONSECUTIVE_DAYS 이상 연속으로 이어진 적이 있으면 True.
+
+    공식 거래정지 사유 코드는 Naver 공개 엔드포인트로 얻을 수 없어, 거래량 연속
+    결측 구간을 프록시로 쓴다(장기 정지 중에는 체결 자체가 없으므로 거래량이 0).
+    """
+    if values.empty:
+        return pd.Series(index=values.columns, dtype=bool)
+    tail = values.tail(config.LONG_HALT_LOOKBACK_DAYS)
+    is_zero = (tail.fillna(0) <= 0)
+
+    def _max_run(col: pd.Series) -> int:
+        run = (col != col.shift()).cumsum()
+        return int(col.groupby(run).transform("size")[col].max()) if col.any() else 0
+
+    max_runs = is_zero.apply(_max_run, axis=0)
+    return max_runs >= config.LONG_HALT_MIN_CONSECUTIVE_DAYS
+
+
+def _compute_concentration(prices: pd.DataFrame) -> pd.Series:
+    """4: 변동성 집중도 - 절대값 기준 상위 K거래일이 전체 수익률 "에너지"(제곱합)에서
+    차지하는 비중. 이 비중이 높을수록 소수의 이벤트일(감자/급등락 등)이 상관계수
+    계산 전체를 지배한다는 뜻이라 신뢰도가 낮다(흥아해운류 오탐 방지).
+    """
+    if prices.empty:
+        return pd.Series(index=prices.columns, dtype=float)
+    returns = np.log(prices).diff()
+    sq = returns.pow(2)
+    total = sq.sum(skipna=True)
+    top_k = sq.apply(lambda col: col.dropna().nlargest(config.CONCENTRATION_TOP_K_DAYS).sum(), axis=0)
+    ratio = (top_k / total.replace(0, np.nan)).clip(upper=1.0)
+    ratio[returns.notna().sum() < 30] = np.nan
+    return ratio
+
+
+def _refresh_sector_etfs(start: str, end: str) -> None:
+    """신규 탭 "섹터/ETF 비교"용 큐레이션된 섹터 ETF 종가/메타 갱신."""
+    meta = sector_instruments.build_etf_universe()
+    if meta.empty:
+        logger.warning("섹터 ETF 유니버스를 하나도 구성하지 못했습니다.")
+        return
+    histories = sector_instruments.fetch_etf_prices(start, end)
+    if not histories:
+        logger.warning("섹터 ETF 시세를 하나도 받아오지 못했습니다.")
+        return
+    prices = pd.DataFrame({t: df["close"] for t, df in histories.items()})
+    cache_store.save_sector_etf_prices(prices)
+    cache_store.save_sector_etf_meta(meta.reindex(prices.columns))
+    logger.info("섹터 ETF 갱신 완료: %d종목", len(prices.columns))
+
+
 def quick_refresh_tickers(tickers: list[str], max_workers: int = naver_client.DEFAULT_WORKERS) -> dict:
     """화면에 지금 보이는 종목 몇 개만 즉시 재조회하는 가벼운 새로고침.
 
@@ -300,6 +352,7 @@ def refresh_via_naver(years_back: int = config.DEFAULT_BACKFILL_YEARS, max_worke
     """
     prices = cache_store.load_prices()
     values = cache_store.load_trading_value()
+    old_meta = cache_store.load_meta()  # 4: structural_break는 증분 갱신에도 한번 감지되면 유지되는 이력이라 이전 값을 이어받는다
 
     try:
         universe = naver_client.build_universe(max_workers=max_workers)
@@ -404,14 +457,37 @@ def refresh_via_naver(years_back: int = config.DEFAULT_BACKFILL_YEARS, max_worke
     meta["index_reversal"] = index_reversal
     meta["volatility"] = _compute_volatility(prices).reindex(meta.index)
 
+    # 4: 이상치/구조적 단절 종목 필터
+    # structural_break는 이번 실행에서 새로 받은 구간(증분이면 최근 며칠뿐)에서 감지된 것만
+    # 반영하면 과거에 있었던 감자/액면병합 이력을 놓치므로, 이전 메타의 값과 OR로 합쳐
+    # "한번이라도 감지되면 계속 유지"되는 이력으로 취급한다.
+    new_structural = pd.Series(
+        {t: bool(df.attrs.get("structural_break", False)) for t, df in histories.items()}
+    )
+    old_structural = old_meta["structural_break"] if "structural_break" in old_meta.columns else pd.Series(dtype=bool)
+    meta["structural_break"] = (
+        old_structural.reindex(meta.index).fillna(False).astype(bool)
+        | new_structural.reindex(meta.index).fillna(False).astype(bool)
+    )
+    meta["long_halt_history"] = _compute_long_halt_flags(values).reindex(meta.index)
+    meta["concentration_ratio"] = _compute_concentration(prices).reindex(meta.index)
+
     meta = meta[
         [
             "name", "market", "sector", "market_cap", "avg_trading_value",
             "is_preferred", "is_managed", "is_halted", "listed_shares",
             "index_corr", "index_reversal", "volatility",
+            "structural_break", "long_halt_history", "concentration_ratio",
         ]
     ]
     cache_store.save_meta(meta)
+
+    # 신규 탭 "섹터/ETF 비교" - 큐레이션된 섹터 ETF 종가도 같은 실행에서 함께 갱신한다
+    # (22종목뿐이라 비용이 작음). 실패해도 메인 갱신 자체는 이미 끝났으니 로그만 남기고 계속.
+    try:
+        _refresh_sector_etfs(default_start, today)
+    except Exception:
+        logger.exception("섹터 ETF 갱신 실패 - 다음 배치에서 재시도")
 
     last_cached_after = prices.index.max() if not prices.empty else None
     return cache_store.save_state(

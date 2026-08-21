@@ -44,6 +44,13 @@ def main():
     universe = json.loads((CACHE_DIR / "universe.json").read_text(encoding="utf-8"))
     print(f"raw universe: {len(universe)}")
 
+    # 4: 이상치/구조적 단절 종목 필터 - collect_and_build.py가 남겨둔 감자/액면병합
+    # 구조적 불연속 감지 신호(수집 스크립트가 없거나 오래된 캐시면 빈 dict로 대체).
+    structural_flags_path = CACHE_DIR / "structural_flags.json"
+    structural_flags: dict[str, bool] = (
+        json.loads(structural_flags_path.read_text(encoding="utf-8")) if structural_flags_path.exists() else {}
+    )
+
     still_open, today_kst = _market_still_open()
     print(f"market status check: still_open={still_open}, today_kst={today_kst}")
 
@@ -141,6 +148,104 @@ def main():
         var = sum((r - m) ** 2 for r in rets) / (n - 1)
         return math.sqrt(var) * math.sqrt(_TRADING_DAYS_PER_YEAR)
 
+    _LONG_HALT_MIN_CONSECUTIVE_DAYS = 5
+
+    def _long_halt_flag(row_vol: list) -> bool:
+        """4: "장기 거래정지 이력" 프록시 - 거래량 0/결측이 이 일수 이상 연속되면 이력으로 간주."""
+        run = 0
+        best = 0
+        for v in row_vol:
+            if not v:
+                run += 1
+                best = max(best, run)
+            else:
+                run = 0
+        return best >= _LONG_HALT_MIN_CONSECUTIVE_DAYS
+
+    _CONCENTRATION_TOP_K_DAYS = 5
+
+    def _concentration_ratio(row_close: list) -> float | None:
+        """4: 변동성 집중도 - 절대값 기준 상위 K거래일이 전체 수익률 "에너지"(제곱합)에서
+        차지하는 비중. 높을수록 소수 이벤트일이 상관계수 계산을 지배한다는 뜻."""
+        sq = []
+        for i in range(1, len(row_close)):
+            p0, p1 = row_close[i - 1], row_close[i]
+            if p0 and p1 and p0 > 0:
+                sq.append(math.log(p1 / p0) ** 2)
+        if len(sq) < 30:
+            return None
+        total = sum(sq)
+        if total <= 0:
+            return None
+        top_k = sum(sorted(sq, reverse=True)[:_CONCENTRATION_TOP_K_DAYS])
+        return min(1.0, top_k / total)
+
+    # 신규 탭 "섹터/ETF 비교" - 자체 계산 시가총액가중 섹터지수.
+    # top-600(chosen)이 아니라 histories 로드에 성공한 전종목(candidates)을 기준으로
+    # 구성해야 소형 섹터도 제대로 대표된다. 날짜축은 chosen 기준(dates/date_idx)을
+    # 그대로 쓴다 - 상위 600종목의 거래일이 사실상 전체 거래일을 다 덮는다.
+    def _build_synthetic_sector_index():
+        sector_weighted_sum: dict[str, list[float]] = {}
+        sector_weight_total: dict[str, list[float]] = {}
+        sector_members: dict[str, set[str]] = {}
+        for ticker, info, rows in candidates:
+            sector = info.get("sector")
+            weight = info.get("market_cap") or 0
+            if not sector or weight <= 0:
+                continue
+            row_close = [None] * T
+            for r in rows:
+                i = date_idx.get(r["date"])
+                if i is not None:
+                    row_close[i] = r["close"]
+            ws = sector_weighted_sum.setdefault(sector, [0.0] * T)
+            wt = sector_weight_total.setdefault(sector, [0.0] * T)
+            has_any = False
+            for t in range(1, T):
+                p0, p1 = row_close[t - 1], row_close[t]
+                if p0 and p1 and p0 > 0:
+                    r_t = math.log(p1 / p0)
+                    ws[t] += weight * r_t
+                    wt[t] += weight
+                    has_any = True
+            if has_any:
+                sector_members.setdefault(sector, set()).add(ticker)
+
+        sector_out, sector_prices_out = [], []
+        for sector, members in sector_members.items():
+            if len(members) < 3:  # 구성 종목이 너무 적으면 지수로서 의미가 약해 제외
+                continue
+            ws, wt = sector_weighted_sum[sector], sector_weight_total[sector]
+            level = [100.0] * T
+            for t in range(1, T):
+                r_t = (ws[t] / wt[t]) if wt[t] > 0 else 0.0
+                level[t] = level[t - 1] * math.exp(r_t)
+            sector_out.append({"c": sector, "n": f"{sector} 섹터지수(자체계산)", "s": sector, "mcnt": len(members)})
+            sector_prices_out.append([round(v, 4) for v in level])
+        return sector_out, sector_prices_out
+
+    sector_index_out, sector_index_prices_out = _build_synthetic_sector_index()
+    print(f"자체 계산 섹터지수: {len(sector_index_out)}개 섹터 (전종목 {len(candidates)}개 기준)")
+
+    # 신규 탭 "섹터/ETF 비교" - 섹터 추종 ETF (collect_and_build.py가 받아둔 것을 로드).
+    sector_etf_out, sector_etf_prices_out = [], []
+    etf_meta_path = CACHE_DIR / "sector_etf_meta.json"
+    if etf_meta_path.exists():
+        etf_meta = json.loads(etf_meta_path.read_text(encoding="utf-8"))
+        for ticker, info in etf_meta.items():
+            p = CACHE_DIR / "sector_etf" / f"{ticker}.json"
+            if not p.exists():
+                continue
+            rows = json.loads(p.read_text(encoding="utf-8"))
+            row_close = [None] * T
+            for r in rows:
+                i = date_idx.get(r["date"])
+                if i is not None:
+                    row_close[i] = r["close"]
+            sector_etf_out.append({"c": ticker, "n": info.get("name", ticker), "s": info.get("theme", ticker)})
+            sector_etf_prices_out.append(row_close)
+    print(f"섹터 ETF: {len(sector_etf_out)}개")
+
     universe_out = []
     prices_out = []
     n_reversal = 0
@@ -170,6 +275,9 @@ def main():
         if is_reversal:
             n_reversal += 1
         volatility = _annualized_volatility(row_close)
+        structural_break = bool(structural_flags.get(ticker, False))
+        long_halt = _long_halt_flag(row_vol)
+        concentration = _concentration_ratio(row_close)
 
         universe_out.append(
             {
@@ -183,9 +291,15 @@ def main():
                 "ic": round(idx_corr, 4) if idx_corr is not None else None,
                 "ir": is_reversal,
                 "vt": round(volatility, 4) if volatility is not None else None,
+                "sb": structural_break,
+                "lh": long_halt,
+                "cr": round(concentration, 4) if concentration is not None else None,
             }
         )
     print(f"지수 역행 종목(상위 {TOP_N} 중): {n_reversal}개")
+    n_structural = sum(1 for u in universe_out if u["sb"] or u["lh"])
+    n_concentrated = sum(1 for u in universe_out if u["cr"] is not None and u["cr"] >= 0.50)
+    print(f"이상치/구조적 단절 이력 종목(상위 {TOP_N} 중): {n_structural}개, 소수 이벤트 주도 종목: {n_concentrated}개")
 
     real_data = {
         "asOf": dates[-1],
@@ -193,6 +307,10 @@ def main():
         "universe": universe_out,
         "prices": prices_out,
         "index": index_out,
+        "sectorIndex": sector_index_out,
+        "sectorIndexPrices": sector_index_prices_out,
+        "sectorEtf": sector_etf_out,
+        "sectorEtfPrices": sector_etf_prices_out,
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "sourceNote": "Naver Finance 공개 API (finance.naver.com, m.stock.naver.com, api.stock.naver.com)",
     }

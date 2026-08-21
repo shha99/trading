@@ -208,7 +208,11 @@ def fetch_history(ticker: str, start: str, end: str) -> pd.DataFrame:
     if not rows:
         return pd.DataFrame(columns=["close", "volume"])
     df = pd.DataFrame(rows).set_index("date").sort_index()
-    df["close"] = adjust_for_corporate_actions(df["close"])
+    adjusted, structural_break = adjust_for_corporate_actions(df["close"])
+    df["close"] = adjusted
+    # 4: 감자/액면병합 등으로 원주가에 구조적 불연속이 있었는지를 .attrs로 함께 전달한다
+    # (배치 갱신이 이 값을 모아 종목 메타의 "이상치 이력" 필터에 사용).
+    df.attrs["structural_break"] = structural_break
     return df
 
 
@@ -226,19 +230,25 @@ _UPPER_RATIO = 1 + _DAILY_LIMIT_PCT + _ADJUST_BUFFER_PCT
 _LOWER_RATIO = 1 - _DAILY_LIMIT_PCT - _ADJUST_BUFFER_PCT
 
 
-def adjust_for_corporate_actions(close: pd.Series) -> pd.Series:
+def adjust_for_corporate_actions(close: pd.Series) -> tuple[pd.Series, bool]:
     """무상증자/액면분할/감자 등으로 인한 raw 종가 불연속을 역산해 보정한다.
 
     가장 최근 이벤트부터 과거 방향으로 처리하면서, 이벤트 이전 구간 전체에
     (이벤트 당일 종가 / 전일 종가) 배율을 곱해 현재 주식 수 기준으로
     재환산한다(표준적인 "수정주가" 구성 방식과 동일한 원리).
+
+    Returns: (보정된 종가 시리즈, 구조적 불연속 이벤트가 하나라도 감지됐는지)
+    감자/액면병합 이력이 있는 종목은 보정 후에도 소수의 극단적 이벤트일이 상관계수
+    계산을 왜곡할 위험이 남아있으므로(4: 이상치/구조적 단절 종목 필터), 이 신호를
+    상위 호출부(배치 갱신)에 전달해 종목 메타의 "이상치 이력" 플래그로 쓴다.
     """
     if close is None or len(close) < 2:
-        return close
+        return close, False
     adjusted = close.copy().astype(float)
     # pandas Copy-on-Write 모드에서는 to_numpy()가 읽기 전용 뷰를 돌려줄 수 있으므로 명시적으로 복사.
     values = adjusted.to_numpy().copy()
     n = len(values)
+    event_detected = False
     # 뒤(최근)에서 앞(과거)으로 훑으며, 이벤트 지점 이전 구간을 통째로 배율 조정.
     for i in range(n - 1, 0, -1):
         prev, cur = values[i - 1], values[i]
@@ -247,8 +257,9 @@ def adjust_for_corporate_actions(close: pd.Series) -> pd.Series:
         ratio = cur / prev
         if ratio > _UPPER_RATIO or ratio < _LOWER_RATIO:
             values[:i] *= ratio
+            event_detected = True
     adjusted.iloc[:] = values
-    return adjusted
+    return adjusted, event_detected
 
 
 # ---------------------------------------------------------------------------

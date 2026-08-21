@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 
-from .. import batch_update, cache_store, config, correlation, schemas
+from .. import batch_update, cache_store, config, correlation, schemas, sector_instruments
 from ..krx_client import KrxUnavailableError
 from ..naver_client import NaverUnavailableError
 
@@ -130,6 +130,112 @@ def search_universe(q: str = Query(..., min_length=1), limit: int = Query(15, ge
     ]
 
 
+# ---------------------------------------------------------------------------
+# 신규 탭: 섹터/ETF 비교 - 개별 종목이 아니라 섹터 단위(자체 계산 시총가중 지수 또는
+# 섹터 추종 ETF)로 디커플링을 조회한다. 상관계수 계산은 correlation.scan_pairs/
+# search_correlations를 그대로 재사용한다(prices/meta 모양만 다를 뿐 로직은 동일).
+# ---------------------------------------------------------------------------
+def _sector_prices_meta(source: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if source == "etf":
+        return cache_store.load_sector_etf_prices(), cache_store.load_sector_etf_meta()
+    # source == "index": 자체 계산 시총가중 섹터지수 - 캐시된 전종목 시세로 매 요청마다
+    # 즉석 계산한다(수십 개 섹터 x 수백 거래일 규모라 캐싱 없이도 충분히 빠름).
+    prices = cache_store.load_prices()
+    meta = cache_store.load_meta()
+    return sector_instruments.build_synthetic_sector_index(prices, meta)
+
+
+@router.get("/sector/instruments", response_model=list[schemas.TickerSuggestion])
+def sector_instruments_list(source: str = Query("etf", pattern="^(etf|index)$")):
+    _, meta = _sector_prices_meta(source)
+    if meta.empty:
+        return []
+    return [
+        schemas.TickerSuggestion(ticker=t, name=str(row.get("name", t)), market="", sector=str(row.get("theme", t)))
+        for t, row in meta.iterrows()
+    ]
+
+
+@router.get("/sector/scan", response_model=schemas.ScanResponse)
+def sector_scan(
+    source: str = Query("etf", pattern="^(etf|index)$"),
+    start: str = Query(...),
+    end: str = Query(...),
+    top_n: int = Query(config.DEFAULT_TOP_N, ge=config.MIN_TOP_N, le=config.MAX_TOP_N),
+):
+    start_ts, end_ts = _parse_date(start, "start"), _parse_date(end, "end")
+    if start_ts > end_ts:
+        raise HTTPException(status_code=400, detail="시작일이 종료일보다 늦을 수 없습니다.")
+    prices, meta = _sector_prices_meta(source)
+    if prices.empty:
+        raise HTTPException(status_code=503, detail="섹터/ETF 데이터가 아직 없습니다. 먼저 배치 갱신을 실행하세요.")
+
+    # 섹터/ETF는 몇십 개뿐인 소수 정예 유니버스라 개별종목 전용 필터(관리종목/유동성/
+    # 지수역행/변동성/이상치)는 적용 대상이 아니다 - FDR·계층적 fallback(1/2티어)만 그대로 쓴다.
+    result = correlation.scan_pairs(
+        prices, meta, start_ts, end_ts, top_n=top_n,
+        exclude_managed=False, exclude_illiquid=False, exclude_index_reversal=False,
+        exclude_structural_outliers=False, exclude_concentrated=False,
+        min_vol_percentile=0.0, max_vol_percentile=1.0,
+    )
+    state = cache_store.load_state()
+    return schemas.ScanResponse(
+        pairs=[_to_out(p) for p in result["pairs"]],
+        low_significance_pairs=[_to_out(p) for p in result["low_significance_pairs"]],
+        same_sector_highlights=[],  # 섹터/ETF끼리 비교라 "동일섹터 하이라이트" 개념이 없음
+        start=start,
+        end=end,
+        trading_days=result["trading_days"],
+        reliability_warning=result["reliability_warning"],
+        as_of=state.get("last_update_date"),
+        universe_size=result["universe_size"],
+        pool_size=result.get("pool_size", 0),
+    )
+
+
+@router.get("/sector/search", response_model=schemas.SearchResponse)
+def sector_search(
+    source: str = Query("etf", pattern="^(etf|index)$"),
+    ticker: str = Query(...),
+    start: str | None = Query(None),
+    end: str | None = Query(None),
+    full_period: bool = Query(False),
+    top_n: int = Query(config.DEFAULT_TOP_N, ge=config.MIN_TOP_N, le=config.MAX_TOP_N),
+):
+    prices, meta = _sector_prices_meta(source)
+    if prices.empty:
+        raise HTTPException(status_code=503, detail="섹터/ETF 데이터가 아직 없습니다. 먼저 배치 갱신을 실행하세요.")
+    ticker = ticker.strip()
+    if ticker not in prices.columns:
+        raise HTTPException(status_code=404, detail=f"'{ticker}'을(를) 섹터/ETF 캐시에서 찾을 수 없습니다.")
+    if not full_period and (start is None or end is None):
+        raise HTTPException(status_code=400, detail="전체 기간이 아니면 start/end를 모두 지정해야 합니다.")
+
+    start_ts = _parse_date(start, "start") if start else None
+    end_ts = _parse_date(end, "end") if end else None
+
+    result = correlation.search_correlations(
+        ticker, prices, meta, start_ts, end_ts, full_period=full_period, top_n=top_n,
+        exclude_managed=False, exclude_illiquid=False, exclude_index_reversal=False,
+        exclude_structural_outliers=False, exclude_concentrated=False,
+        min_vol_percentile=0.0, max_vol_percentile=1.0,
+    )
+    state = cache_store.load_state()
+    base_info = correlation.stock_info(ticker, meta)
+    return schemas.SearchResponse(
+        pairs=[_to_out(p) for p in result["pairs"]],
+        low_significance_pairs=[_to_out(p) for p in result["low_significance_pairs"]],
+        same_sector_highlights=[],
+        base=schemas.StockInfoOut(**vars(base_info)),
+        start=start,
+        end=end,
+        full_period=full_period,
+        reliability_warning=result["any_short_sample"],
+        as_of=state.get("last_update_date"),
+        pool_size=result.get("pool_size", 0),
+    )
+
+
 @router.get("/scan", response_model=schemas.ScanResponse)
 def scan(
     start: str = Query(...),
@@ -144,6 +250,9 @@ def scan(
     max_market_cap: float | None = Query(None, ge=0),
     min_trading_value: float | None = Query(None, ge=0),
     min_vol_percentile: float = Query(config.DEFAULT_MIN_VOLATILITY_PCTL, ge=0, le=0.5),
+    max_vol_percentile: float = Query(config.DEFAULT_MAX_VOLATILITY_PCTL, ge=0.5, le=1.0),
+    exclude_structural_outliers: bool = Query(True),
+    exclude_concentrated: bool = Query(True),
 ):
     start_ts, end_ts = _parse_date(start, "start"), _parse_date(end, "end")
     if start_ts > end_ts:
@@ -170,6 +279,9 @@ def scan(
         max_market_cap=max_market_cap,
         min_trading_value=min_trading_value,
         min_vol_percentile=min_vol_percentile,
+        max_vol_percentile=max_vol_percentile,
+        exclude_structural_outliers=exclude_structural_outliers,
+        exclude_concentrated=exclude_concentrated,
         index_prices=index_prices,
     )
     state = cache_store.load_state()
@@ -203,6 +315,9 @@ def search(
     max_market_cap: float | None = Query(None, ge=0),
     min_trading_value: float | None = Query(None, ge=0),
     min_vol_percentile: float = Query(config.DEFAULT_MIN_VOLATILITY_PCTL, ge=0, le=0.5),
+    max_vol_percentile: float = Query(config.DEFAULT_MAX_VOLATILITY_PCTL, ge=0.5, le=1.0),
+    exclude_structural_outliers: bool = Query(True),
+    exclude_concentrated: bool = Query(True),
 ):
     prices = cache_store.load_prices()
     meta = cache_store.load_meta()
@@ -236,6 +351,9 @@ def search(
         max_market_cap=max_market_cap,
         min_trading_value=min_trading_value,
         min_vol_percentile=min_vol_percentile,
+        max_vol_percentile=max_vol_percentile,
+        exclude_structural_outliers=exclude_structural_outliers,
+        exclude_concentrated=exclude_concentrated,
         index_prices=index_prices,
     )
     state = cache_store.load_state()

@@ -475,6 +475,7 @@
     <button id="tabScan" class="active">전체 스캔</button>
     <button id="tabSearch">종목 검색</button>
     <button id="tabIf">IF</button>
+    <button id="tabSectorEtf">섹터/ETF 비교</button>
   </nav>
 
   <!-- ================= SCAN PANEL ================= -->
@@ -495,6 +496,8 @@
           <label class="toggle"><input type="checkbox" id="scanExcludeManaged" checked> 관리종목/거래정지/우선주 제외</label>
           <label class="toggle"><input type="checkbox" id="scanExcludeIlliquid" checked> 거래대금 하위 20% 제외</label>
           <label class="toggle"><input type="checkbox" id="scanExcludeIndexReversal" checked> 지수 역행 종목 제외</label>
+          <label class="toggle" title="감자/액면병합 등 원주가 구조적 불연속 이력, 장기 거래정지 이력이 있는 종목 제외"><input type="checkbox" id="scanExcludeOutliers" checked> 이상치/구조적 단절 종목 제외</label>
+          <label class="toggle" title="상위 5거래일이 전체 수익률 분산의 50% 이상을 차지하는 종목 제외(소수 이벤트가 상관계수를 지배)"><input type="checkbox" id="scanExcludeConcentrated" checked> 소수 이벤트 주도 종목 제외</label>
           <label class="toggle"><input type="checkbox" id="scanSectorPriority"> 동일섹터 우선 정렬</label>
         </div>
         <div class="filter-grid">
@@ -567,6 +570,8 @@
           <label class="toggle"><input type="checkbox" id="searchExcludeManaged" checked> 관리종목/거래정지/우선주 제외</label>
           <label class="toggle"><input type="checkbox" id="searchExcludeIlliquid" checked> 거래대금 하위 20% 제외</label>
           <label class="toggle"><input type="checkbox" id="searchExcludeIndexReversal" checked> 지수 역행 종목 제외</label>
+          <label class="toggle" title="감자/액면병합 등 원주가 구조적 불연속 이력, 장기 거래정지 이력이 있는 종목 제외"><input type="checkbox" id="searchExcludeOutliers" checked> 이상치/구조적 단절 종목 제외</label>
+          <label class="toggle" title="상위 5거래일이 전체 수익률 분산의 50% 이상을 차지하는 종목 제외(소수 이벤트가 상관계수를 지배)"><input type="checkbox" id="searchExcludeConcentrated" checked> 소수 이벤트 주도 종목 제외</label>
           <label class="toggle"><input type="checkbox" id="searchSectorPriority"> 동일섹터 우선 정렬</label>
         </div>
         <div class="filter-grid">
@@ -648,6 +653,77 @@
     <div id="ifResults" style="margin-top:14px"></div>
   </section>
 
+  <!-- ================= 섹터/ETF 비교 PANEL ================= -->
+  <section id="panelSectorEtf" style="display:none">
+    <p class="panel-desc">개별 종목이 아니라 섹터(업종) 단위로 디커플링을 조회합니다.</p>
+    <div class="demo-ribbon" style="margin-bottom:14px">
+      <span class="demo-dot"></span>
+      <span>
+        <strong>지수 기준</strong>은 공식 KRX/WICS 업종지수가 아니라, 보유한 전종목 시세·시가총액으로 직접 구성한 <strong>자체 계산 시가총액가중 참고 지수</strong>입니다(공식 지수 데이터 소스가 이 배포 환경에서 접근 불가). <strong>ETF 기준</strong>은 실제 상장된 섹터 추종 ETF 종가라 실전 헤지에는 이쪽이 더 유용합니다.
+      </span>
+    </div>
+    <div class="scope-row" style="margin-bottom:14px">
+      <label><input type="radio" name="sectorSource" id="sectorSourceIndex" checked> 지수 기준(자체 계산)</label>
+      <label><input type="radio" name="sectorSource" id="sectorSourceEtf"> ETF 기준(실제 매매 가능)</label>
+    </div>
+    <div class="tabs" role="tablist" style="margin-bottom:14px">
+      <button id="sectorModeScanBtn" class="active">전체 스캔</button>
+      <button id="sectorModeSearchBtn">섹터·ETF 검색</button>
+    </div>
+
+    <div id="sectorModeScan">
+      <div class="deck">
+        <div class="deck-section">
+          <span class="deck-label">조회 기간</span>
+          <div class="preset-row" id="sectorScanPresets"></div>
+          <div class="date-row">
+            <label>시작일 <input type="date" id="sectorScanStart"></label>
+            <label>종료일 <input type="date" id="sectorScanEnd"></label>
+          </div>
+        </div>
+        <div class="deck-section">
+          <div class="slider-field">
+            <div class="row"><span class="field-label">결과 개수</span><span class="num" id="sectorScanTopNLabel">10개</span></div>
+            <input type="range" id="sectorScanTopN" min="3" max="30" value="10">
+          </div>
+        </div>
+        <div class="run-row">
+          <button class="run-btn" id="sectorScanRun">섹터 스캔 실행</button>
+          <span class="run-summary" id="sectorScanSummary"></span>
+        </div>
+      </div>
+      <div id="sectorScanResults" style="margin-top:14px"></div>
+    </div>
+
+    <div id="sectorModeSearch" style="display:none">
+      <div class="deck">
+        <div class="deck-section">
+          <span class="deck-label">기준 섹터/ETF</span>
+          <div class="search-wrap" id="sectorSearchWrapHost"></div>
+        </div>
+        <div class="deck-section">
+          <span class="deck-label">조회 기간</span>
+          <div class="preset-row" id="sectorSearchPresets"></div>
+          <div class="date-row">
+            <label>시작일 <input type="date" id="sectorSearchStart"></label>
+            <label>종료일 <input type="date" id="sectorSearchEnd"></label>
+          </div>
+        </div>
+        <div class="deck-section">
+          <div class="slider-field">
+            <div class="row"><span class="field-label">결과 개수</span><span class="num" id="sectorSearchTopNLabel">10개</span></div>
+            <input type="range" id="sectorSearchTopN" min="3" max="30" value="10">
+          </div>
+        </div>
+        <div class="run-row">
+          <button class="run-btn" id="sectorSearchRun" disabled>섹터 검색 실행</button>
+          <span class="run-summary" id="sectorSearchSummary"></span>
+        </div>
+      </div>
+      <div id="sectorSearchResults" style="margin-top:14px"></div>
+    </div>
+  </section>
+
   <p class="footer-note">
     상관관계는 지정된 과거 기간 내 통계적 관계이며, 미래에도 동일하게 유지된다는 보장은 없습니다. 표본 기간이 짧을수록 결과 신뢰도가 낮아질 수 있습니다.
   </p>
@@ -680,6 +756,9 @@
     indexCorr: u.ic,
     indexReversal: !!u.ir,
     volatility: u.vt, // 연환산 변동성(일별 로그수익률 표준편차 × √252), 빌드 시점에 전체 보유 히스토리 기준 계산
+    structuralBreak: !!u.sb, // 4: 감자/액면병합 등 구조적 불연속 이력
+    longHaltHistory: !!u.lh, // 4: 장기 거래정지 이력(프록시)
+    concentrationRatio: u.cr, // 4: 상위 5거래일이 전체 수익률 분산에서 차지하는 비중
   }));
 
   const priceMatrix = REAL.prices; // [ticker 인덱스][t] = 종가 | null (baked-in, 이미 dateAxis에 정렬됨)
@@ -825,11 +904,19 @@
     const idx = Math.min(VOL_SORTED.length - 1, Math.floor((VOL_SORTED.length * pct) / 100));
     return VOL_SORTED[idx];
   }
+  // 4: 변동성 상한선 - 상위 5%(기본) 극단적 고변동성 종목도 제외
+  const MAX_VOL_CUTOFF = VOL_SORTED.length
+    ? VOL_SORTED[Math.min(VOL_SORTED.length - 1, Math.ceil(VOL_SORTED.length * 0.95))]
+    : Infinity;
+  const CONCENTRATION_THRESHOLD = 0.50;
 
   // 3: 섹터별 조회 - 유니버스에 실제 존재하는 섹터명 목록(가나다순)
   const ALL_SECTORS = Array.from(new Set(universe.map((s) => s.sector))).sort((a, b) => a.localeCompare(b, "ko"));
 
-  function eligibleIndices({ excludeManaged, excludeIlliquid, excludeIndexReversal, minCap, minValue, minVolPercentile, sectorScope }) {
+  function eligibleIndices({
+    excludeManaged, excludeIlliquid, excludeIndexReversal, minCap, minValue, minVolPercentile, sectorScope,
+    excludeStructuralOutliers, excludeConcentrated,
+  }) {
     const volCut = volCutoff(minVolPercentile);
     const out = [];
     universe.forEach((s, i) => {
@@ -839,6 +926,9 @@
       if (minCap != null && s.marketCap < minCap) return;
       if (minValue != null && s.avgValue < minValue) return;
       if (Number.isFinite(s.volatility) && s.volatility < volCut) return; // 저변동성 오탐 필터
+      if (Number.isFinite(s.volatility) && s.volatility > MAX_VOL_CUTOFF) return; // 4: 변동성 상한선
+      if (excludeStructuralOutliers !== false && (s.structuralBreak || s.longHaltHistory)) return; // 4: 이상치/구조적 단절 이력
+      if (excludeConcentrated !== false && Number.isFinite(s.concentrationRatio) && s.concentrationRatio >= CONCENTRATION_THRESHOLD) return; // 4: 소수 이벤트 주도 종목
       if (sectorScope && sectorScope !== "all" && s.sector !== sectorScope) return; // 섹터별 조회
       out.push(i);
     });
@@ -1133,6 +1223,168 @@
   }
 
   /* =========================================================
+     신규 탭: 섹터/ETF 비교
+     개별 종목이 아니라 "섹터" 단위(자체 계산 시총가중 지수 또는 섹터 추종 ETF)로
+     디커플링을 조회한다. 후보군이 수십 개뿐이라 단순 이중 루프로 충분하고,
+     scan()/searchOne()이 강하게 결합된 전역 universe/priceMatrix를 건드리지
+     않는 별도의 작은 엔진을 쓴다(탭 전환 시 상태가 꼬일 위험을 원천 차단) -
+     통계 유틸(pearson/rankArray/finalizeRawPairs/fillTiered 등)은 그대로 재사용.
+
+     "지수 기준"은 KRX/WICS 공식 업종지수가 아니라 자체 계산한 시가총액가중
+     참고 지수다(data.krx.co.kr 국가 차단으로 pykrx를 통한 공식 지수 취득이
+     이 배포 환경에서 불가능 - README 참고). "ETF 기준"은 실제 상장된 섹터
+     추종 ETF 종가라 실전 헤지에는 이쪽이 더 유용하다.
+     ========================================================= */
+  const SECTOR_SETS = {
+    index: {
+      label: "자체 계산 섹터지수",
+      list: (REAL.sectorIndex || []).map((s) => ({ code: s.c, name: s.n, sector: s.s, market: "지수(자체계산)", memberCount: s.mcnt })),
+      prices: REAL.sectorIndexPrices || [],
+    },
+    etf: {
+      label: "섹터 추종 ETF",
+      list: (REAL.sectorEtf || []).map((s) => ({ code: s.c, name: s.n, sector: s.s, market: "ETF" })),
+      prices: REAL.sectorEtfPrices || [],
+    },
+  };
+
+  function sectorReturn(prices, si, t) {
+    const p0 = prices[si][t - 1], p1 = prices[si][t];
+    if (!(p0 > 0) || !(p1 > 0)) return NaN;
+    return Math.log(p1 / p0);
+  }
+
+  function sectorPairStats(set, ia, ib, from, to) {
+    const xs = [], ys = [], tPos = [];
+    for (let t = Math.max(1, from + 1); t <= to; t++) {
+      const rb = sectorReturn(set.prices, ia, t), rc = sectorReturn(set.prices, ib, t);
+      if (Number.isFinite(rb) && Number.isFinite(rc)) { xs.push(rb); ys.push(rc); tPos.push(t); }
+    }
+    if (xs.length < 2) return null;
+    const corr = pearson(xs, ys);
+    if (Number.isNaN(corr)) return null;
+    const spearman = pearson(rankArray(xs), rankArray(ys));
+
+    const kospiSlice = tPos.map((t) => kospiReturns[t]);
+    let downturnCorr = null, downturnN = 0, residualCorr = null;
+    if (kospiSlice.every((v) => Number.isFinite(v)) && kospiSlice.length >= 10) {
+      const sorted = [...kospiSlice].sort((a, b) => a - b);
+      const cutoff = sorted[Math.max(0, Math.floor(sorted.length * DOWNTURN_QUANTILE) - 1)];
+      const mask = kospiSlice.map((v) => v <= cutoff);
+      downturnN = mask.filter(Boolean).length;
+      if (downturnN >= 5) {
+        const dc = pearson(xs.filter((_, k) => mask[k]), ys.filter((_, k) => mask[k]));
+        if (!Number.isNaN(dc)) downturnCorr = dc;
+      }
+      const kMean = mean(kospiSlice), kVar = mean(kospiSlice.map((v) => (v - kMean) ** 2));
+      if (kVar > 0) {
+        const mx = mean(xs), my = mean(ys);
+        let covX = 0, covY = 0;
+        for (let k = 0; k < xs.length; k++) { covX += (xs[k] - mx) * (kospiSlice[k] - kMean); covY += (ys[k] - my) * (kospiSlice[k] - kMean); }
+        covX /= xs.length; covY /= xs.length;
+        const betaX = covX / kVar, betaY = covY / kVar;
+        const residX = xs.map((v, k) => v - betaX * kospiSlice[k]);
+        const residY = ys.map((v, k) => v - betaY * kospiSlice[k]);
+        const rc = pearson(residX, residY);
+        if (!Number.isNaN(rc)) residualCorr = rc;
+      }
+    }
+    return {
+      a: ia, b: ib, corr,
+      spearman: Number.isNaN(spearman) ? null : spearman,
+      downturnCorr, downturnN, residualCorr,
+      n: xs.length, warn: xs.length < MIN_RELIABLE_DAYS,
+    };
+  }
+
+  // baseIdx가 있으면 "섹터/ETF 검색"(B, 기준 하나 vs 나머지), 없으면 "전체 스캔"(A, 전체 조합).
+  function sectorScanOrSearch(set, opts) {
+    const n = set.list.length;
+    const rawPairs = [];
+    if (opts.baseIdx != null) {
+      for (let i = 0; i < n; i++) {
+        if (i === opts.baseIdx) continue;
+        const ps = sectorPairStats(set, opts.baseIdx, i, opts.startIdx, opts.endIdx);
+        if (ps) rawPairs.push(ps);
+      }
+    } else {
+      for (let a = 0; a < n; a++) {
+        for (let b = a + 1; b < n; b++) {
+          const ps = sectorPairStats(set, a, b, opts.startIdx, opts.endIdx);
+          if (ps) rawPairs.push(ps);
+        }
+      }
+    }
+    if (rawPairs.length === 0) return { pairs: [], lowSig: [], poolSize: 0 };
+    finalizeRawPairs(rawPairs);
+    rawPairs.sort((p, q) => p.corr - q.corr);
+    const filtered = rawPairs.filter((p) => p.corr < 0);
+    return fillTiered(filtered, opts.topN, false);
+  }
+
+  function sectorPairRow(rank, set, p, from, to) {
+    const a = set.list[p.a], b = set.list[p.b];
+    const intensity = Math.min(1, Math.abs(p.corr));
+    const signCls = p.corr < 0 ? "neg" : "pos";
+    const el = document.createElement("div");
+    el.className = "pair-row";
+    el.innerHTML = `
+      <div class="pair-head" tabindex="0" role="button" aria-expanded="false">
+        <span class="rank">${rank}</span>
+        <div class="stock-block left"><div class="stock-name-line"><span class="stock-name">${escapeHtml(a.name)}</span><span class="stock-code num">${a.code}</span></div></div>
+        <div class="corr-block">
+          <span class="corr-figure num ${signCls}">${pct(p.corr)}</span>
+          <div class="corr-bar-track"><div class="corr-bar-fill ${signCls}" style="width:${(intensity * 100).toFixed(0)}%"></div></div>
+        </div>
+        <div class="stock-block right"><div class="stock-name-line"><span class="stock-name">${escapeHtml(b.name)}</span><span class="stock-code num">${b.code}</span></div></div>
+      </div>
+      <div class="badge-row">
+        ${p.fdrPassed === false ? `<span class="badge fail">⚠️ 참고용 (통계적 유의성 미달)</span>` : `<span class="badge cross">통계적 유의성 통과</span>`}
+        ${p.warn ? `<span class="badge warn">⚠ 표본 ${p.n} 일</span>` : ""}
+      </div>
+      ${statRow(p)}
+      <div class="expand-panel" style="display:none"></div>`;
+    const head = el.querySelector(".pair-head");
+    const expand = el.querySelector(".expand-panel");
+    head.addEventListener("click", () => {
+      const open = expand.style.display !== "none";
+      if (open) { expand.style.display = "none"; head.setAttribute("aria-expanded", "false"); return; }
+      head.setAttribute("aria-expanded", "true");
+      if (!expand.dataset.built) {
+        expand.dataset.built = "1";
+        const { svg } = lineChartSvg(
+          [{ getValue: (t) => set.prices[p.a][t], color: "var(--accent)" }, { getValue: (t) => set.prices[p.b][t], color: "var(--neg)" }],
+          from, to, { normalize100: true }
+        );
+        expand.innerHTML = `
+          <p class="expand-caption">구간 시작 = 100 기준 정규화 가격</p>
+          ${svg}
+          <div class="chart-legend">
+            <span><span class="legend-dot" style="background:var(--accent)"></span>${escapeHtml(a.name)}</span>
+            <span><span class="legend-dot" style="background:var(--neg)"></span>${escapeHtml(b.name)}</span>
+          </div>`;
+      }
+      expand.style.display = "block";
+    });
+    return el;
+  }
+
+  function renderSectorList(container, set, pairs, from, to, emptyHint) {
+    container.innerHTML = "";
+    if (pairs.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "empty-state";
+      empty.textContent = emptyHint;
+      container.appendChild(empty);
+      return;
+    }
+    const list = document.createElement("div");
+    list.className = "result-list";
+    pairs.forEach((p, i) => list.appendChild(sectorPairRow(i + 1, set, p, from, to)));
+    container.appendChild(list);
+  }
+
+  /* =========================================================
      4. 포맷 유틸
      ========================================================= */
   function eok(v) { return Math.round(v / 1e8).toLocaleString("ko-KR") + "억"; }
@@ -1248,6 +1500,10 @@
     tags.push(`<span class="tag">${escapeHtml(stock.sector)}</span>`);
     if (Number.isFinite(stock.volatility)) tags.push(`<span class="tag num" title="연환산 변동성(일별 수익률 표준편차 × √252)">σ ${pct(stock.volatility)}</span>`);
     if (stock.indexReversal) tags.push(`<span class="tag" title="소속 지수와 상관계수 ${pct(stock.indexCorr)}">⚠️ 지수역행</span>`);
+    if (stock.structuralBreak || stock.longHaltHistory) tags.push(`<span class="tag" title="감자/액면병합 등 구조적 불연속 또는 장기 거래정지 이력">⚠️ 이상치 이력</span>`);
+    if (Number.isFinite(stock.concentrationRatio) && stock.concentrationRatio >= CONCENTRATION_THRESHOLD) {
+      tags.push(`<span class="tag" title="상위 5거래일이 전체 수익률 분산의 ${pct(stock.concentrationRatio)}를 차지">⚠️ 소수 이벤트 주도</span>`);
+    }
     return `
       <div class="stock-block ${align === "right" ? "right" : ""}">
         <div class="stock-name-line">
@@ -1285,6 +1541,11 @@
     const warn = (p.n != null && p.n < MIN_RELIABLE_DAYS) || (p.warn === true);
     const signCls = p.corr < 0 ? "neg" : "pos";
     const stability = p._stability;
+    // 4: 둘 중 하나라도 소수 이벤트일이 수익률 분산을 지배하면(변동성 집중도 필터를
+    // 토글로 강제 포함한 경우) 상관계수 신뢰도가 낮다는 배지를 붙인다.
+    const concentrated =
+      (Number.isFinite(a.concentrationRatio) && a.concentrationRatio >= CONCENTRATION_THRESHOLD) ||
+      (Number.isFinite(b.concentrationRatio) && b.concentrationRatio >= CONCENTRATION_THRESHOLD);
 
     const el = document.createElement("div");
     el.className = "pair-row";
@@ -1304,6 +1565,7 @@
         ${stability === true ? `<span class="badge stable">안정적 디커플링(60·120일 부호 일치)</span>` : ""}
         ${warn ? `<span class="badge warn">⚠ 표본 ${p.n} 일</span>` : ""}
         ${a.flagged || b.flagged ? `<span class="badge flag">관리/우선주 포함(필터 해제됨)</span>` : ""}
+        ${concentrated ? `<span class="badge warn">⚠️ 소수 이벤트 주도 — 상관관계 신뢰도 낮음</span>` : ""}
       </div>
       ${statRow(p)}
       <div class="expand-panel" style="display:none"></div>`;
@@ -1434,8 +1696,9 @@
   function numOrNull(v) { return v === "" || v == null ? null : Number(v) * 1e8; }
 
   // 종목 검색 위젯 - 검색패널의 기준종목, IF탭의 A/B에 재사용.
-  function mountTickerPicker(hostId, placeholder, onSelect) {
+  function mountTickerPicker(hostId, placeholder, onSelect, searchPool) {
     const host = document.getElementById(hostId);
+    const pool = searchPool || universe; // 섹터/ETF 탭은 자체 목록을 명시적으로 넘긴다
     let selected = null;
 
     function render() {
@@ -1464,7 +1727,7 @@
       function refresh() {
         const q = input.value.trim().toLowerCase();
         if (!q) { list.style.display = "none"; return; }
-        const hits = universe.filter((s) => s.name.toLowerCase().includes(q) || s.code.toLowerCase().includes(q)).slice(0, 12);
+        const hits = pool.filter((s) => s.name.toLowerCase().includes(q) || s.code.toLowerCase().includes(q)).slice(0, 12);
         list.innerHTML = "";
         hits.forEach((s) => {
           const li = document.createElement("li");
@@ -1523,6 +1786,8 @@
       excludeManaged: document.getElementById("scanExcludeManaged").checked,
       excludeIlliquid: document.getElementById("scanExcludeIlliquid").checked,
       excludeIndexReversal: document.getElementById("scanExcludeIndexReversal").checked,
+      excludeStructuralOutliers: document.getElementById("scanExcludeOutliers").checked,
+      excludeConcentrated: document.getElementById("scanExcludeConcentrated").checked,
       sectorFilter: document.getElementById("scanSectorFilter").value,
       sectorScope: document.getElementById("scanSectorScope").value,
       sectorPriority: document.getElementById("scanSectorPriority").checked,
@@ -1605,6 +1870,8 @@
       excludeManaged: document.getElementById("searchExcludeManaged").checked,
       excludeIlliquid: document.getElementById("searchExcludeIlliquid").checked,
       excludeIndexReversal: document.getElementById("searchExcludeIndexReversal").checked,
+      excludeStructuralOutliers: document.getElementById("searchExcludeOutliers").checked,
+      excludeConcentrated: document.getElementById("searchExcludeConcentrated").checked,
       sectorFilter: document.getElementById("searchSectorFilter").value,
       sectorScope: document.getElementById("searchSectorScope").value,
       sectorPriority: document.getElementById("searchSectorPriority").checked,
@@ -1860,6 +2127,7 @@
     scan: { btn: document.getElementById("tabScan"), panel: document.getElementById("panelScan") },
     search: { btn: document.getElementById("tabSearch"), panel: document.getElementById("panelSearch") },
     if: { btn: document.getElementById("tabIf"), panel: document.getElementById("panelIf") },
+    sectorEtf: { btn: document.getElementById("tabSectorEtf"), panel: document.getElementById("panelSectorEtf") },
   };
   Object.entries(tabs).forEach(([key, t]) => {
     t.btn.addEventListener("click", () => {
@@ -1868,5 +2136,126 @@
       t.panel.style.display = "block";
     });
   });
+
+  /* =========================================================
+     13. 섹터/ETF 비교 패널 배선
+     ========================================================= */
+  function activeSectorSet() {
+    return document.getElementById("sectorSourceEtf").checked ? SECTOR_SETS.etf : SECTOR_SETS.index;
+  }
+
+  function sectorSetRange(months) {
+    const endIso = isoOf(T - 1);
+    const startIdx = nearestIdxOnOrAfter(addMonths(endIso, months));
+    return { startIso: isoOf(startIdx), endIso };
+  }
+
+  // --- 모드 A: 전체 스캔 ---
+  const sectorScanStartInput = document.getElementById("sectorScanStart");
+  const sectorScanEndInput = document.getElementById("sectorScanEnd");
+  function setSectorScanRange(months) {
+    const { startIso, endIso } = sectorSetRange(months);
+    sectorScanStartInput.value = startIso;
+    sectorScanEndInput.value = endIso;
+  }
+  buildPresetRow("sectorScanPresets", setSectorScanRange);
+  setSectorScanRange(6);
+  document.querySelectorAll("#sectorScanPresets .chip-btn")[2].classList.add("active");
+
+  const sectorScanTopN = document.getElementById("sectorScanTopN");
+  document.getElementById("sectorScanTopN").addEventListener("input", () => {
+    document.getElementById("sectorScanTopNLabel").textContent = sectorScanTopN.value + "개";
+  });
+
+  function runSectorScan() {
+    const set = activeSectorSet();
+    if (set.list.length < 2) {
+      document.getElementById("sectorScanSummary").textContent = "이 소스에는 사용 가능한 섹터/ETF 데이터가 없습니다.";
+      renderSectorList(document.getElementById("sectorScanResults"), set, [], 0, 0, "데이터가 없습니다.");
+      return;
+    }
+    const startIdx = idxFromIso(sectorScanStartInput.value);
+    const endIdx = idxFromIso(sectorScanEndInput.value);
+    const opts = { startIdx: Math.min(startIdx, endIdx), endIdx: Math.max(startIdx, endIdx), topN: Number(sectorScanTopN.value) };
+    const res = sectorScanOrSearch(set, opts);
+    document.getElementById("sectorScanSummary").textContent =
+      `${set.label} ${set.list.length}개 중 상위 ${res.pairs.length}개 페어` + poolNote(res, opts.topN);
+    renderSectorList(
+      document.getElementById("sectorScanResults"), set, res.pairs, opts.startIdx, opts.endIdx,
+      "이 조건에서는 음의 상관관계를 보이는 섹터/ETF 쌍이 없습니다."
+    );
+  }
+  document.getElementById("sectorScanRun").addEventListener("click", runSectorScan);
+
+  // --- 모드 B: 섹터·ETF 검색 ---
+  let sectorSearchPicker = null;
+  function mountSectorSearchPicker() {
+    sectorSearchPicker = mountTickerPicker("sectorSearchWrapHost", "섹터명 또는 ETF명 검색", (s) => {
+      document.getElementById("sectorSearchRun").disabled = !s;
+    }, activeSectorSet().list);
+  }
+  mountSectorSearchPicker();
+
+  const sectorSearchStartInput = document.getElementById("sectorSearchStart");
+  const sectorSearchEndInput = document.getElementById("sectorSearchEnd");
+  function setSectorSearchRange(months) {
+    const { startIso, endIso } = sectorSetRange(months);
+    sectorSearchStartInput.value = startIso;
+    sectorSearchEndInput.value = endIso;
+  }
+  buildPresetRow("sectorSearchPresets", setSectorSearchRange);
+  setSectorSearchRange(6);
+  document.querySelectorAll("#sectorSearchPresets .chip-btn")[2].classList.add("active");
+
+  const sectorSearchTopN = document.getElementById("sectorSearchTopN");
+  document.getElementById("sectorSearchTopN").addEventListener("input", () => {
+    document.getElementById("sectorSearchTopNLabel").textContent = sectorSearchTopN.value + "개";
+  });
+
+  function runSectorSearch() {
+    const set = activeSectorSet();
+    const base = sectorSearchPicker && sectorSearchPicker.value;
+    if (!base) return;
+    const baseIdx = set.list.indexOf(base);
+    if (baseIdx === -1) return; // 소스 전환으로 기준이 더 이상 유효하지 않음
+    const startIdx = idxFromIso(sectorSearchStartInput.value);
+    const endIdx = idxFromIso(sectorSearchEndInput.value);
+    const opts = { startIdx: Math.min(startIdx, endIdx), endIdx: Math.max(startIdx, endIdx), topN: Number(sectorSearchTopN.value), baseIdx };
+    const res = sectorScanOrSearch(set, opts);
+    document.getElementById("sectorSearchSummary").textContent =
+      `${base.name} 기준 · 상위 ${res.pairs.length}개` + poolNote(res, opts.topN);
+    renderSectorList(
+      document.getElementById("sectorSearchResults"), set, res.pairs, opts.startIdx, opts.endIdx,
+      "이 조건에서는 음의 상관관계를 보이는 상대가 없습니다."
+    );
+  }
+  document.getElementById("sectorSearchRun").addEventListener("click", runSectorSearch);
+
+  // --- 소스 토글(지수/ETF) - 검색 피커를 새 소스 목록으로 다시 만들고, 스캔을 재계산 ---
+  ["sectorSourceIndex", "sectorSourceEtf"].forEach((id) => {
+    document.getElementById(id).addEventListener("change", () => {
+      mountSectorSearchPicker();
+      document.getElementById("sectorSearchRun").disabled = true;
+      document.getElementById("sectorSearchResults").innerHTML = "";
+      document.getElementById("sectorSearchSummary").textContent = "";
+      runSectorScan();
+    });
+  });
+
+  // --- 모드 A/B 서브탭 전환 ---
+  const sectorModeScanBtn = document.getElementById("sectorModeScanBtn");
+  const sectorModeSearchBtn = document.getElementById("sectorModeSearchBtn");
+  const sectorModeScan = document.getElementById("sectorModeScan");
+  const sectorModeSearch = document.getElementById("sectorModeSearch");
+  sectorModeScanBtn.addEventListener("click", () => {
+    sectorModeScanBtn.classList.add("active"); sectorModeSearchBtn.classList.remove("active");
+    sectorModeScan.style.display = "block"; sectorModeSearch.style.display = "none";
+  });
+  sectorModeSearchBtn.addEventListener("click", () => {
+    sectorModeSearchBtn.classList.add("active"); sectorModeScanBtn.classList.remove("active");
+    sectorModeSearch.style.display = "block"; sectorModeScan.style.display = "none";
+  });
+
+  runSectorScan();
 })();
 </script>

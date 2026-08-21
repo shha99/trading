@@ -48,6 +48,31 @@ def save_index(df: pd.DataFrame) -> None:
         df.sort_index().to_parquet(config.INDEX_PATH)
 
 
+def load_sector_etf_prices() -> pd.DataFrame:
+    """섹터/ETF 비교 탭 - 섹터 추종 ETF 종가 패널(date x ticker). 캐시 없으면 빈 DataFrame."""
+    if not config.SECTOR_ETF_PRICES_PATH.exists():
+        return pd.DataFrame()
+    df = pd.read_parquet(config.SECTOR_ETF_PRICES_PATH)
+    df.index = pd.to_datetime(df.index)
+    return df.sort_index()
+
+
+def save_sector_etf_prices(df: pd.DataFrame) -> None:
+    with _LOCK:
+        df.sort_index().to_parquet(config.SECTOR_ETF_PRICES_PATH)
+
+
+def load_sector_etf_meta() -> pd.DataFrame:
+    if not config.SECTOR_ETF_META_PATH.exists():
+        return pd.DataFrame(columns=["name", "theme", "sector", "market_cap"]).rename_axis("ticker")
+    return pd.read_parquet(config.SECTOR_ETF_META_PATH)
+
+
+def save_sector_etf_meta(df: pd.DataFrame) -> None:
+    with _LOCK:
+        df.to_parquet(config.SECTOR_ETF_META_PATH)
+
+
 def load_meta() -> pd.DataFrame:
     if not config.META_PATH.exists():
         return pd.DataFrame(
@@ -64,6 +89,9 @@ def load_meta() -> pd.DataFrame:
                 "index_corr",
                 "index_reversal",
                 "volatility",
+                "structural_break",
+                "long_halt_history",
+                "concentration_ratio",
             ]
         )
     return pd.read_parquet(config.META_PATH)

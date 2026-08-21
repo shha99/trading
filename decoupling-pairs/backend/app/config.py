@@ -21,6 +21,8 @@ PRICES_PATH = DATA_DIR / "prices.parquet"      # 일별 종가 패널 (index=dat
 VALUE_PATH = DATA_DIR / "trading_value.parquet"  # 일별 거래대금 패널 (index=date, columns=ticker)
 META_PATH = DATA_DIR / "meta.parquet"          # 종목 메타 스냅샷 (index=ticker)
 INDEX_PATH = DATA_DIR / "index.parquet"        # KOSPI/KOSDAQ 지수 종가 (index=date, columns=KOSPI,KOSDAQ)
+SECTOR_ETF_PRICES_PATH = DATA_DIR / "sector_etf_prices.parquet"  # 섹터/ETF 비교 탭 - ETF 종가 패널
+SECTOR_ETF_META_PATH = DATA_DIR / "sector_etf_meta.parquet"      # 섹터/ETF 비교 탭 - ETF 메타(테마명 등)
 STATE_PATH = DATA_DIR / "state.json"           # 마지막 갱신일, 수동 새로고침 이력 등
 
 # ---------------------------------------------------------------------------
@@ -54,7 +56,17 @@ INDEX_CORR_LOOKBACK_DAYS = 250
 
 # 저변동성(경기방어주) 오탐 필터 - 연환산 변동성 하위 N% 기본 제외(슬라이더로 조절 가능)
 DEFAULT_MIN_VOLATILITY_PCTL = 0.20
+# 4: 변동성 상한선 - 연환산 변동성 상위 5%도 기본 제외(급등락/이상치 종목)
+DEFAULT_MAX_VOLATILITY_PCTL = 0.95
 TRADING_DAYS_PER_YEAR = 252
+
+# 4: 이상치/구조적 단절 종목 필터
+# "장기 거래정지 이력" 판정: 최근 조회 구간 내 이 일수 이상 연속으로 거래량이 0/결측이면 이력으로 간주.
+LONG_HALT_MIN_CONSECUTIVE_DAYS = 5
+LONG_HALT_LOOKBACK_DAYS = 250
+# 변동성 집중도: 절대값 기준 상위 K거래일이 전체 수익률 분산(제곱합)에서 차지하는 비중.
+CONCENTRATION_TOP_K_DAYS = 5
+CONCENTRATION_THRESHOLD = 0.50
 
 # 다중검정(FDR) 보정 유의수준
 FDR_ALPHA = 0.05

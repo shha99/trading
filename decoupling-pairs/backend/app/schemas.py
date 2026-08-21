@@ -13,6 +13,9 @@ class StockInfoOut(BaseModel):
     index_corr: float | None = None
     index_reversal: bool = False
     volatility: float | None = None
+    structural_break: bool = False
+    long_halt_history: bool = False
+    concentration_ratio: float | None = None
 
 
 class PairResultOut(BaseModel):

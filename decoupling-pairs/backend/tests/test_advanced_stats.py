@@ -66,13 +66,15 @@ def test_downturn_conditional_matrix_uses_only_downturn_days():
 def test_adjust_for_corporate_actions_removes_split_discontinuity():
     idx = pd.bdate_range("2026-01-01", periods=5)
     s = pd.Series([1000, 990, 980, 15000, 15200], index=idx, dtype=float)  # 1->4일차 15배 점프
-    adj = adjust_for_corporate_actions(s)
+    adj, structural_break = adjust_for_corporate_actions(s)
     ratio = adj.iloc[2] / adj.iloc[1]
     assert 0.9 < ratio < 1.15  # 보정 후에는 정상적인 일간 변동 폭 안으로 들어와야 함
+    assert structural_break is True  # 4: 이상치/구조적 단절 필터가 쓸 신호
 
 
 def test_adjust_for_corporate_actions_leaves_normal_moves_alone():
     idx = pd.bdate_range("2026-01-01", periods=3)
     s = pd.Series([100.0, 125.0, 90.0], index=idx)  # 25%, -28% 등 정상 범위 내 변동
-    adj = adjust_for_corporate_actions(s)
+    adj, structural_break = adjust_for_corporate_actions(s)
     assert list(adj) == [100.0, 125.0, 90.0]
+    assert structural_break is False
