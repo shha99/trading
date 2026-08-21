@@ -19,3 +19,7 @@ frontend/.vite/
 
 # OS / editor
 .DS_Store
+
+# static-artifact 빌드 산출물/캐시 (매번 새로 만듦, 레포에 커밋 안 함)
+decoupling-pairs/static-artifact/naver_cache/
+decoupling-pairs/static-artifact/decoupling-demo.html
