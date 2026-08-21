@@ -211,6 +211,22 @@ def fetch_histories(tickers: list[str], start: str, end: str, max_workers: int =
     return out
 
 
+def market_status() -> tuple[bool, str]:
+    """대표 종목 하나로 현재 장 상태를 확인한다.
+
+    장이 아직 안 끝났으면 오늘 날짜로 받은 "종가"는 확정 종가가 아니라 그 순간의
+    체결가일 수 있으므로, 배치 로직이 이 값을 보고 당일 데이터를 캐시에 확정
+    반영할지 결정한다.
+
+    Returns: (still_open, today_kst) - today_kst는 YYYY-MM-DD.
+    """
+    d = _get_json("https://m.stock.naver.com/api/stock/005930/basic")
+    traded_at = d.get("localTradedAt", "")  # e.g. "2026-08-21T10:00:22+09:00"
+    today_kst = traded_at[:10] if traded_at else datetime.now().strftime("%Y-%m-%d")
+    still_open = d.get("marketStatus") == "OPEN"
+    return still_open, today_kst
+
+
 def is_preferred_stock(ticker: str, name: str) -> bool:
     code_hint = len(ticker) == 6 and ticker[-1] != "0"
     name_hint = bool(name) and (name.endswith("우") or "우B" in name or "우C" in name)

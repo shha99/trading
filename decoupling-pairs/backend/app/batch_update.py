@@ -222,7 +222,11 @@ def refresh_via_naver(years_back: int = config.DEFAULT_BACKFILL_YEARS, max_worke
         fetch_plan = {t: (default_start, today) for t in universe.index}
     else:
         last_cached = prices.index.max()
-        incr_start = (last_cached + timedelta(days=1)).strftime("%Y%m%d")
+        # last_cached + 1일이 아니라 며칠 더 앞으로 잡아 다시 받는다: 직전 실행이 장중에
+        # 돌았다면 그날 캐시된 종가는 확정 종가가 아니라 그 순간의 체결가였을 수 있고,
+        # Naver 차트 API는 (시작,종료) 구간 길이와 무관하게 종목당 요청 1번이라 비용도
+        # 늘지 않으므로 재조회로 자연스럽게 정정한다.
+        incr_start = (last_cached - timedelta(days=5)).strftime("%Y%m%d")
         new_tickers = universe.index.difference(prices.columns)
         fetch_plan = {t: (incr_start, today) for t in universe.index.intersection(prices.columns)}
         fetch_plan.update({t: (default_start, today) for t in new_tickers})
@@ -243,6 +247,18 @@ def refresh_via_naver(years_back: int = config.DEFAULT_BACKFILL_YEARS, max_worke
         return cache_store.save_state(
             last_run_at=datetime.now(config.KST).isoformat(), last_run_status="error", last_error="no histories fetched"
         )
+
+    # 장이 아직 안 끝났으면 오늘 날짜로 받은 값은 확정 종가가 아니라 장중 체결가이므로,
+    # 캐시에 확정 데이터로 반영하지 않고 다음 실행(장 마감 후)까지 보류한다.
+    try:
+        still_open, today_kst = naver_client.market_status()
+    except naver_client.NaverUnavailableError:
+        still_open, today_kst = False, today  # 상태 확인 실패 시 보수적으로 그냥 반영(다음 실행에서 재조회로 정정됨)
+    if still_open:
+        logger.info("장중(%s) - 당일 데이터는 확정 종가가 아니므로 이번 실행에서 제외합니다.", today_kst)
+        for df in histories.values():
+            if today_kst in df.index.astype(str).str[:10].values:
+                df.drop(df.index[df.index.astype(str).str[:10] == today_kst], inplace=True)
 
     close_cols = {t: df["close"] for t, df in histories.items()}
     volume_cols = {t: df["close"] * df["volume"] for t, df in histories.items()}  # 거래대금 근사(종가*거래량)
