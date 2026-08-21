@@ -29,3 +29,17 @@ def keltner_lower(
     mid = ema(df["Close"], ema_period)
     width = atr(df, atr_period) * mult
     return mid - width
+
+
+def keltner_channel(
+    df: pd.DataFrame, ema_period: int = 20, atr_period: int = 10, mult: float = 2.0
+) -> dict[str, pd.Series]:
+    """켈트너 채널 상단/중단/하단 (차트 대시보드의 커스텀 지표용).
+
+    전략(strategy.py)은 하단만 필요해 keltner_lower를 그대로 쓰지만,
+    지표 카탈로그(indicator_catalog.py)는 세 선을 다 그려야 해서 이 함수를
+    쓴다 — 내부적으로 같은 mid/width 계산을 공유한다.
+    """
+    mid = ema(df["Close"], ema_period)
+    width = atr(df, atr_period) * mult
+    return {"upper": mid + width, "middle": mid, "lower": mid - width}

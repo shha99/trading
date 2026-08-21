@@ -14,6 +14,7 @@ import logging
 import time
 
 import pandas as pd
+from binance.exceptions import BinanceAPIException, BinanceRequestException
 
 from .binance_client import get_binance_client
 
@@ -47,8 +48,6 @@ def fetch_klines(
     컬럼: Open/High/Low/Close/Volume, 인덱스: 캔들 오픈 시각(UTC, tz 없음).
     실패(재시도 소진 포함)하면 None.
     """
-    from binance.exceptions import BinanceAPIException, BinanceRequestException
-
     client = get_binance_client()
     attempt = 0
     while attempt < _MAX_RETRIES:

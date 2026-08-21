@@ -71,3 +71,27 @@ def test_sl_tp_time_stop_are_consistent(strategy):
     assert risk > 0 and reward > 0
     assert reward == pytest.approx(risk * 2, rel=0.05)  # target_atr_mult(4) / stop_atr_mult(2) = 2배
     assert signal.time_stop_at > signal.timestamp
+
+
+def test_condition_status_reports_not_enough_bars(strategy):
+    status = strategy.condition_status(make_df([100.0] * 50))
+    assert status["ready"] is False
+    assert status["reason"] == "not_enough_bars"
+
+
+def test_condition_status_all_met_matches_evaluate(strategy):
+    df = uptrend_then(dip=-20.0, bounce=3.0)
+    status = strategy.condition_status(df)
+    assert status["ready"] is True
+    assert status["all_met"] is True
+    assert all(status["conditions"].values())
+    assert strategy.evaluate("BTCUSDT", "1h", df) is not None
+
+
+def test_condition_status_partial_met_when_no_pullback(strategy):
+    base = [100.0 + i for i in range(WARMUP_BARS + 2)]
+    status = strategy.condition_status(make_df(base))
+    assert status["ready"] is True
+    assert status["all_met"] is False
+    assert status["conditions"]["trend_above_200ema"] is True
+    assert status["conditions"]["prev_bar_pulled_back_below_keltner_lower"] is False

@@ -127,8 +127,11 @@ class BinanceFuturesBroker:
             tp_order_id=tp_order_id,
         )
 
-    def close_position_market(self, symbol: str, quantity: float, side: str = "SELL") -> str:
-        """잔여 SL/TP를 취소하고 시장가로 포지션을 정리한다 (시간손절용)."""
+    def close_position_market(self, symbol: str, quantity: float, side: str = "SELL") -> dict:
+        """잔여 SL/TP를 취소하고 시장가로 포지션을 정리한다 (시간손절용).
+
+        {"order_id":..., "price":...} 를 반환 - price는 실현손익 계산에 쓴다.
+        """
         try:
             self.client.futures_cancel_all_open_orders(symbol=symbol)
         except Exception:
@@ -138,6 +141,24 @@ class BinanceFuturesBroker:
             order = self.client.futures_create_order(
                 symbol=symbol, side=side, type="MARKET", quantity=quantity, reduceOnly=True,
             )
-            return str(order.get("orderId"))
+            return {"order_id": str(order.get("orderId")), "price": float(order.get("avgPrice") or 0.0) or None}
         except Exception as exc:  # noqa: BLE001
             raise BrokerError(f"{symbol} 포지션 정리 실패: {exc}") from exc
+
+    def get_order_status(self, symbol: str, order_id: str) -> dict | None:
+        """SL/TP 주문이 체결됐는지 확인할 때 쓴다 (position_manager.reconcile_open_positions).
+
+        조회 실패(네트워크 등)는 None을 반환 - 호출부가 "다음 주기에 다시
+        확인"하도록 한다.
+        """
+        try:
+            return self.client.futures_get_order(symbol=symbol, orderId=order_id)
+        except Exception:
+            logger.exception("%s 주문(%s) 상태 조회 실패", symbol, order_id)
+            return None
+
+    def cancel_order(self, symbol: str, order_id: str) -> None:
+        try:
+            self.client.futures_cancel_order(symbol=symbol, orderId=order_id)
+        except Exception:
+            logger.exception("%s 주문(%s) 취소 실패 (이미 체결/취소됐을 수 있음)", symbol, order_id)

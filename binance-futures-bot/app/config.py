@@ -84,6 +84,31 @@ class Settings:
     )
     cors_origins: list[str] = field(default_factory=lambda: _csv("CORS_ORIGINS", "*"))
 
+    # --- 실시간 차트 대시보드 ---
+    # 캔들(15m/1h/4h/1d)은 REST 폴링만으로 충분하다(바이낸스 klines 응답
+    # 자체가 진행 중인 마지막 봉을 실시간으로 갱신해줌). bookTicker
+    # 웹소켓은 "현재가" 숫자 표시 전용.
+    live_poll_interval_seconds: float = field(
+        default_factory=lambda: float(os.getenv("LIVE_POLL_INTERVAL_SECONDS", "3"))
+    )
+    ticker24h_poll_interval_seconds: float = field(
+        default_factory=lambda: float(os.getenv("TICKER24H_POLL_INTERVAL_SECONDS", "30"))
+    )
+    dashboard_timeframes: list[str] = field(
+        default_factory=lambda: _csv("DASHBOARD_TIMEFRAMES", "15m,1h,4h,1d")
+    )
+
+    # --- 전략 페이지 백테스트 학습/검증 구간 ---
+    backtest_train_start: str = field(default_factory=lambda: os.getenv("BACKTEST_TRAIN_START", "2021-07-01"))
+    backtest_train_end: str = field(default_factory=lambda: os.getenv("BACKTEST_TRAIN_END", "2025-02-01"))
+    backtest_validation_end: str = field(
+        default_factory=lambda: os.getenv("BACKTEST_VALIDATION_END", "")
+    )  # 비어있으면 "지금"
+
+    @property
+    def futures_ws_base_url(self) -> str:
+        return "wss://stream.binancefuture.com" if self.binance_testnet else "wss://fstream.binance.com"
+
     def is_whitelisted(self, symbol: str, timeframe: str) -> bool:
         return self.auto_trade_enabled and (symbol.upper(), timeframe) in self.auto_trade_whitelist
 

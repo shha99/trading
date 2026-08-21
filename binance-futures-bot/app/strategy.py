@@ -123,3 +123,42 @@ class KeltnerReclaimStrategy:
                 "atr": round(atr_now, 4),
             },
         )
+
+    def condition_status(self, df: pd.DataFrame) -> dict:
+        """진입조건 3개의 현재 충족 여부를 각각 반환한다 (전략 페이지 상단 패널용).
+
+        evaluate()는 "전부 충족"일 때만 Signal을 주지만, 이 메서드는 조건이
+        하나라도 미충족일 때 어디가 걸리는지 보여주려고 각각을 따로 계산한다.
+        """
+        if len(df) < self.min_bars:
+            return {"ready": False, "reason": "not_enough_bars", "min_bars": self.min_bars, "bars": len(df)}
+
+        close = df["Close"]
+        ema_trend = ema(close, self.trend_ema_period)
+        kelt_lower = keltner_lower(df, self.keltner_ema_period, self.keltner_atr_period, self.keltner_atr_mult)
+
+        if pd.isna(ema_trend.iloc[-1]) or pd.isna(kelt_lower.iloc[-2:]).any():
+            return {"ready": False, "reason": "warming_up"}
+
+        prev_close, curr_close = float(close.iloc[-2]), float(close.iloc[-1])
+        prev_lower, curr_lower = float(kelt_lower.iloc[-2]), float(kelt_lower.iloc[-1])
+        trend_ok = curr_close > float(ema_trend.iloc[-1])
+        pullback = prev_close <= prev_lower
+        reclaim = curr_close > curr_lower
+
+        return {
+            "ready": True,
+            "conditions": {
+                "trend_above_200ema": trend_ok,
+                "prev_bar_pulled_back_below_keltner_lower": pullback,
+                "curr_bar_reclaimed_keltner_lower": reclaim,
+            },
+            "all_met": trend_ok and pullback and reclaim,
+            "values": {
+                "close": curr_close,
+                "ema_trend": round(float(ema_trend.iloc[-1]), 4),
+                "keltner_lower": round(curr_lower, 4),
+                "prev_close": prev_close,
+                "prev_keltner_lower": round(prev_lower, 4),
+            },
+        }
