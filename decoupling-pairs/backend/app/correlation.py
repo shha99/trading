@@ -28,6 +28,7 @@ class StockInfo:
     avg_trading_value: float | None
     index_corr: float | None = None
     index_reversal: bool = False
+    volatility: float | None = None  # 연환산 변동성(일별 로그수익률 표준편차 × √252)
 
 
 @dataclass
@@ -64,8 +65,18 @@ def eligible_universe(
     exclude_managed: bool,
     exclude_illiquid: bool,
     exclude_index_reversal: bool = True,
+    min_vol_percentile: float = 0.0,
+    sector_scope: str | None = None,
 ) -> pd.Index:
-    """관리/정지/우선주, 유동성 하위, 지수 역행 종목 필터를 적용한 종목 코드 집합."""
+    """관리/정지/우선주, 유동성 하위, 지수 역행, 저변동성 하위, 섹터 한정 필터를 적용한
+    종목 코드 집합.
+
+    min_vol_percentile: 연환산 변동성 하위 이 분위수(0~0.5)보다 낮은 종목 제외
+    (기본 0.20 = 하위 20% 제외). 저변동성·경기방어 종목은 평소 거의 안 움직이다
+    개별 이슈로 며칠만 튀는 패턴이 흔해, 그 소수의 날이 상관계수 계산을 지배해
+    통계적으로 불안정한 강한 음의 상관관계로 오탐되기 쉽다.
+    sector_scope: "all"이 아니면 해당 섹터 소속 종목으로만 후보군을 한정(섹터별 조회).
+    """
     if meta.empty:
         return pd.Index([])
     mask = pd.Series(True, index=meta.index)
@@ -78,6 +89,11 @@ def eligible_universe(
         mask &= meta["avg_trading_value"].fillna(0) >= cutoff
     if exclude_index_reversal and "index_reversal" in meta.columns:
         mask &= ~meta["index_reversal"].fillna(False)
+    if min_vol_percentile and min_vol_percentile > 0 and "volatility" in meta.columns and meta["volatility"].notna().any():
+        cutoff = meta["volatility"].quantile(min_vol_percentile)
+        mask &= meta["volatility"].fillna(-np.inf) >= cutoff
+    if sector_scope and sector_scope != "all" and "sector" in meta.columns:
+        mask &= meta["sector"].fillna("기타") == sector_scope
     return meta.index[mask]
 
 
@@ -93,6 +109,7 @@ def stock_info(ticker: str, meta: pd.DataFrame) -> StockInfo:
             avg_trading_value=_safe_float(row.get("avg_trading_value")),
             index_corr=_safe_float(row.get("index_corr")),
             index_reversal=bool(row.get("index_reversal", False)),
+            volatility=_safe_float(row.get("volatility")),
         )
     return StockInfo(ticker=ticker, name=ticker, market="", sector="기타", market_cap=None, avg_trading_value=None)
 
@@ -106,8 +123,12 @@ def _safe_float(v) -> float | None:
         return None
 
 
-def _badge(sector_a: str, sector_b: str) -> Badge:
-    return "cross_sector" if sector_a != sector_b else "same_sector_anomaly"
+def _badge(sector_a: str, sector_b: str, sector_scope_active: bool = False) -> Badge:
+    if sector_a != sector_b:
+        return "cross_sector"
+    # 섹터별 조회로 후보군을 한 업종에 한정한 경우, 동일섹터인 게 당연하므로
+    # "이례적"이 아니라 중립적인 "업종 내 디커플링"으로 구분한다.
+    return "sector_scoped" if sector_scope_active else "same_sector_anomaly"
 
 
 def _kospi_returns(index_prices: pd.DataFrame, window_index: pd.Index) -> pd.Series | None:
@@ -141,18 +162,24 @@ def scan_pairs(
     max_market_cap: float | None = None,
     min_trading_value: float | None = None,
     index_prices: pd.DataFrame | None = None,
+    min_vol_percentile: float = config.DEFAULT_MIN_VOLATILITY_PCTL,
+    sector_scope: str | None = None,  # "all" 또는 실제 섹터명 - 후보군을 그 섹터로 한정
 ) -> dict:
     """모드 A: 지정 기간 전체 스캔.
 
     Returns dict:
       pairs, low_significance_pairs, same_sector_highlights,
-      reliability_warning, trading_days, universe_size
+      reliability_warning, trading_days, universe_size, pool_size
     """
+    sector_scope_active = bool(sector_scope and sector_scope != "all")
     window = prices.loc[(prices.index >= start) & (prices.index <= end)]
     trading_days = len(window)
     reliability_warning = trading_days < config.MIN_RELIABLE_TRADING_DAYS
 
-    universe = eligible_universe(meta, exclude_managed, exclude_illiquid, exclude_index_reversal)
+    universe = eligible_universe(
+        meta, exclude_managed, exclude_illiquid, exclude_index_reversal,
+        min_vol_percentile=min_vol_percentile, sector_scope=sector_scope,
+    )
     universe = universe.intersection(window.columns)
     if min_market_cap is not None:
         universe = universe[meta.loc[universe, "market_cap"].fillna(0) >= min_market_cap]
@@ -169,7 +196,7 @@ def scan_pairs(
     empty = {
         "pairs": [], "low_significance_pairs": [], "same_sector_highlights": [],
         "reliability_warning": reliability_warning, "trading_days": trading_days,
-        "universe_size": len(universe),
+        "universe_size": len(universe), "pool_size": 0,
     }
     if window.shape[1] < 2 or window.shape[0] < 2:
         return empty
@@ -223,7 +250,7 @@ def scan_pairs(
             stock_a=info_a,
             stock_b=info_b,
             correlation=raw,
-            badge=_badge(info_a.sector, info_b.sector),
+            badge=_badge(info_a.sector, info_b.sector, sector_scope_active),
             overlap_days=trading_days,
             reliability_warning=reliability_warning,
             p_value=float(pvals[k]),
@@ -245,18 +272,33 @@ def scan_pairs(
         order_all = order_all[keep[order_all]]
 
     # 디커플링 스크리너이므로 "음의" 상관관계 후보만 대상으로 한다 - 양의 상관(동조)은
-    # 통계적으로 유의해도 애초에 디커플링이 아니므로 상위/유의성낮음 목록 어디에도 넣지 않는다.
+    # 통계적으로 유의해도 애초에 디커플링이 아니므로 상위/참고용 목록 어디에도 넣지 않는다.
+    #
+    # 1: 정렬 로직 = "하드 필터"가 아니라 "계층적 fallback". 1티어(FDR 통과)를 상관계수
+    # 오름차순으로 우선 채우고, top_n에 못 미치면 2티어(미통과, 여전히 음의 상관)로 나머지
+    # 자리를 채운다 - 후보군(pool)에 종목이 남아있는 한 "결과 없음"을 반환하지 않는다.
     negative_order = order_all[vals[order_all] < 0]
-    passed_order = [k for k in negative_order if fdr_passed[k]]
-    failed_order = [k for k in negative_order if not fdr_passed[k]]
+    tier1 = [k for k in negative_order if fdr_passed[k]]
+    tier2 = [k for k in negative_order if not fdr_passed[k]]
+    pool_size = len(tier1) + len(tier2)
 
-    pairs = [_make_result(k) for k in passed_order[:top_n]]
-    low_significance_pairs = [_make_result(k) for k in failed_order[:top_n]]
+    main_idx = tier1[:top_n]
+    if len(main_idx) < top_n:
+        main_idx = main_idx + tier2[: top_n - len(main_idx)]
+    used_tier2 = max(0, len(main_idx) - len(tier1))
+    low_sig_idx = tier2[used_tier2 : used_tier2 + top_n]
+
+    pairs = [_make_result(k) for k in main_idx]
+    low_significance_pairs = [_make_result(k) for k in low_sig_idx]
 
     # --- 2: 동일섹터 이례적 디커플링 하이라이트 - 사용자의 섹터 필터와 무관하게 항상 별도 추출.
     # 동일섹터인데 "음의" 상관관계인 경우만 이례적이다 - 양의 상관(동조)은 정상이므로 제외.
-    same_sector_order = [k for k in np.argsort(vals) if is_same_sector[k] and vals[k] < 0][:10]
-    same_sector_highlights = [_make_result(k) for k in same_sector_order]
+    # 3: 섹터별 조회로 후보군을 이미 한 업종으로 한정했다면 전부 동일섹터가 당연하므로 생략.
+    if sector_scope_active:
+        same_sector_highlights = []
+    else:
+        same_sector_order = [k for k in np.argsort(vals) if is_same_sector[k] and vals[k] < 0][:10]
+        same_sector_highlights = [_make_result(k) for k in same_sector_order]
 
     _rolling_stability_for_pairs(prices, pairs + low_significance_pairs + same_sector_highlights)
 
@@ -267,6 +309,7 @@ def scan_pairs(
         "reliability_warning": reliability_warning,
         "trading_days": trading_days,
         "universe_size": len(universe),
+        "pool_size": pool_size,
     }
 
 
@@ -286,15 +329,18 @@ def search_correlations(
     max_market_cap: float | None = None,
     min_trading_value: float | None = None,
     index_prices: pd.DataFrame | None = None,
+    min_vol_percentile: float = config.DEFAULT_MIN_VOLATILITY_PCTL,
+    sector_scope: str | None = None,  # "all" 또는 실제 섹터명 - 비교 후보군을 그 섹터로 한정
 ) -> dict:
     """모드 B: 기준 종목 하나 vs 나머지 전종목.
 
     full_period=True면 기준 종목의 상장 시점부터 현재까지 전체 데이터를 쓰고,
     상대 종목별로 실제 겹치는 거래일 수만큼만(pairwise) 상관계수를 계산한다.
     """
+    sector_scope_active = bool(sector_scope and sector_scope != "all")
     empty = {
         "pairs": [], "low_significance_pairs": [], "same_sector_highlights": [],
-        "any_short_sample": False,
+        "any_short_sample": False, "pool_size": 0,
     }
     if ticker not in prices.columns:
         return empty
@@ -309,7 +355,10 @@ def search_correlations(
     if len(base_col) < 2:
         return {**empty, "any_short_sample": True}
 
-    universe = eligible_universe(meta, exclude_managed, exclude_illiquid, exclude_index_reversal)
+    universe = eligible_universe(
+        meta, exclude_managed, exclude_illiquid, exclude_index_reversal,
+        min_vol_percentile=min_vol_percentile, sector_scope=sector_scope,
+    )
     universe = universe.intersection(window.columns).difference([ticker])
     if min_market_cap is not None:
         universe = universe[meta.loc[universe, "market_cap"].fillna(0) >= min_market_cap]
@@ -390,7 +439,7 @@ def search_correlations(
             stock_a=base_info,
             stock_b=other_info,
             correlation=float(value),
-            badge=_badge(base_info.sector, other_info.sector),
+            badge=_badge(base_info.sector, other_info.sector, sector_scope_active),
             overlap_days=days,
             reliability_warning=warn,
             p_value=_safe_float(pvals.get(other)),
@@ -406,16 +455,28 @@ def search_correlations(
         )
 
     # 디커플링 스크리너이므로 "음의" 상관관계 후보만 대상으로 한다 - 양의 상관(동조)은
-    # 통계적으로 유의해도 애초에 디커플링이 아니므로 상위/유의성낮음 목록 어디에도 넣지 않는다.
+    # 통계적으로 유의해도 애초에 디커플링이 아니므로 상위/참고용 목록 어디에도 넣지 않는다.
+    #
+    # 1: 정렬 로직 = "하드 필터"가 아니라 "계층적 fallback". 1티어(FDR 통과)를 상관계수
+    # 오름차순으로 우선 채우고, top_n에 못 미치면 2티어(미통과, 여전히 음의 상관)로 나머지
+    # 자리를 채운다 - 후보군(pool)에 종목이 남아있는 한 "결과 없음"을 반환하지 않는다.
     sorted_all = corr_ranked[corr_ranked < 0].sort_values(ascending=True)
-    passed_idx = [t for t in sorted_all.index if fdr_passed.get(t, False)]
-    failed_idx = [t for t in sorted_all.index if not fdr_passed.get(t, False)]
+    tier1_idx = [t for t in sorted_all.index if fdr_passed.get(t, False)]
+    tier2_idx = [t for t in sorted_all.index if not fdr_passed.get(t, False)]
+    pool_size = len(tier1_idx) + len(tier2_idx)
 
-    pairs = [_make(t, sorted_all[t]) for t in passed_idx[:top_n]]
-    low_significance_pairs = [_make(t, sorted_all[t]) for t in failed_idx[:top_n]]
+    main_idx = tier1_idx[:top_n]
+    if len(main_idx) < top_n:
+        main_idx = main_idx + tier2_idx[: top_n - len(main_idx)]
+    used_tier2 = max(0, len(main_idx) - len(tier1_idx))
+    low_sig_idx = tier2_idx[used_tier2 : used_tier2 + top_n]
 
+    pairs = [_make(t, sorted_all[t]) for t in main_idx]
+    low_significance_pairs = [_make(t, sorted_all[t]) for t in low_sig_idx]
+
+    # 3: 섹터별 조회로 후보군을 이미 한 업종으로 한정했다면 전부 동일섹터가 당연하므로 생략.
     same_sector_idx = None
-    if "sector" in meta.columns:
+    if not sector_scope_active and "sector" in meta.columns:
         base_sector = base_info.sector
         sectors_all = meta.reindex(corr.index)["sector"].fillna("기타")
         # 동일섹터인데 "음의" 상관관계인 경우만 이례적이다 - 양의 상관(동조)은 정상이므로 제외.
@@ -433,4 +494,5 @@ def search_correlations(
         "low_significance_pairs": low_significance_pairs,
         "same_sector_highlights": same_sector_highlights,
         "any_short_sample": any_short_sample,
+        "pool_size": pool_size,
     }

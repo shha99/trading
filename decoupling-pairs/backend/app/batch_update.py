@@ -233,6 +233,22 @@ def _compute_index_correlations(prices: pd.DataFrame, meta: pd.DataFrame, index_
     return corr, reversal.fillna(False)
 
 
+def _compute_volatility(prices: pd.DataFrame) -> pd.Series:
+    """종목별 연환산 변동성(일별 로그수익률 표준편차 × √252) - 보유한 전체 히스토리 기준.
+
+    저변동성(경기방어주) 오탐 필터에 쓰인다: BGF리테일/KT&G류 저변동성 종목은 평소
+    거의 안 움직이다 배당 등 개별 이슈로 며칠만 튀는 패턴이 흔한데, 그 소수의 튀는
+    날들이 상관계수 계산을 지배해 통계적으로 불안정한 강한 음의 상관관계를 만들어낸다.
+    """
+    if prices.empty:
+        return pd.Series(index=prices.columns, dtype=float)
+    returns = np.log(prices).diff()
+    counts = returns.notna().sum()
+    vol = returns.std(ddof=1) * np.sqrt(config.TRADING_DAYS_PER_YEAR)
+    vol[counts < 30] = np.nan
+    return vol
+
+
 def quick_refresh_tickers(tickers: list[str], max_workers: int = naver_client.DEFAULT_WORKERS) -> dict:
     """화면에 지금 보이는 종목 몇 개만 즉시 재조회하는 가벼운 새로고침.
 
@@ -386,12 +402,13 @@ def refresh_via_naver(years_back: int = config.DEFAULT_BACKFILL_YEARS, max_worke
     index_corr, index_reversal = _compute_index_correlations(prices, meta, index_prices)
     meta["index_corr"] = index_corr
     meta["index_reversal"] = index_reversal
+    meta["volatility"] = _compute_volatility(prices).reindex(meta.index)
 
     meta = meta[
         [
             "name", "market", "sector", "market_cap", "avg_trading_value",
             "is_preferred", "is_managed", "is_halted", "listed_shares",
-            "index_corr", "index_reversal",
+            "index_corr", "index_reversal", "volatility",
         ]
     ]
     cache_store.save_meta(meta)

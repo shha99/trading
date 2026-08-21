@@ -52,6 +52,10 @@ SCHEDULE_MINUTE_KST = 30
 INDEX_REVERSAL_CORR_THRESHOLD = -0.7
 INDEX_CORR_LOOKBACK_DAYS = 250
 
+# 저변동성(경기방어주) 오탐 필터 - 연환산 변동성 하위 N% 기본 제외(슬라이더로 조절 가능)
+DEFAULT_MIN_VOLATILITY_PCTL = 0.20
+TRADING_DAYS_PER_YEAR = 252
+
 # 다중검정(FDR) 보정 유의수준
 FDR_ALPHA = 0.05
 # FDR/보조 통계 계산 대상으로 삼는 확장 후보 풀 크기(최종 top_n보다 넉넉히 잡아서,

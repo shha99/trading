@@ -12,6 +12,7 @@ class StockInfoOut(BaseModel):
     avg_trading_value: float | None
     index_corr: float | None = None
     index_reversal: bool = False
+    volatility: float | None = None
 
 
 class PairResultOut(BaseModel):
@@ -44,6 +45,7 @@ class ScanResponse(BaseModel):
     reliability_warning: bool
     as_of: str | None
     universe_size: int
+    pool_size: int = 0  # 필터 통과 후 음의 상관관계 후보 전체 개수 (1티어+2티어)
 
 
 class SearchResponse(BaseModel):
@@ -56,6 +58,7 @@ class SearchResponse(BaseModel):
     full_period: bool
     reliability_warning: bool
     as_of: str | None
+    pool_size: int = 0  # 필터 통과 후 음의 상관관계 후보 전체 개수 (1티어+2티어)
 
 
 class TickerSuggestion(BaseModel):

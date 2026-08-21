@@ -139,9 +139,11 @@ def scan(
     exclude_illiquid: bool = Query(True),
     exclude_index_reversal: bool = Query(True),
     sector_filter: str = Query("all", pattern="^(all|cross|same)$"),
+    sector_scope: str = Query("all"),  # "all" 또는 실제 섹터명 - 후보군을 그 섹터로 한정
     min_market_cap: float | None = Query(None, ge=0),
     max_market_cap: float | None = Query(None, ge=0),
     min_trading_value: float | None = Query(None, ge=0),
+    min_vol_percentile: float = Query(config.DEFAULT_MIN_VOLATILITY_PCTL, ge=0, le=0.5),
 ):
     start_ts, end_ts = _parse_date(start, "start"), _parse_date(end, "end")
     if start_ts > end_ts:
@@ -163,9 +165,11 @@ def scan(
         exclude_illiquid=exclude_illiquid,
         exclude_index_reversal=exclude_index_reversal,
         sector_filter=sector_filter,
+        sector_scope=sector_scope,
         min_market_cap=min_market_cap,
         max_market_cap=max_market_cap,
         min_trading_value=min_trading_value,
+        min_vol_percentile=min_vol_percentile,
         index_prices=index_prices,
     )
     state = cache_store.load_state()
@@ -179,6 +183,7 @@ def scan(
         reliability_warning=result["reliability_warning"],
         as_of=state.get("last_update_date"),
         universe_size=result["universe_size"],
+        pool_size=result.get("pool_size", 0),
     )
 
 
@@ -193,9 +198,11 @@ def search(
     exclude_illiquid: bool = Query(True),
     exclude_index_reversal: bool = Query(True),
     sector_filter: str = Query("all", pattern="^(all|cross|same)$"),
+    sector_scope: str = Query("all"),  # "all" 또는 실제 섹터명 - 비교 후보군을 그 섹터로 한정
     min_market_cap: float | None = Query(None, ge=0),
     max_market_cap: float | None = Query(None, ge=0),
     min_trading_value: float | None = Query(None, ge=0),
+    min_vol_percentile: float = Query(config.DEFAULT_MIN_VOLATILITY_PCTL, ge=0, le=0.5),
 ):
     prices = cache_store.load_prices()
     meta = cache_store.load_meta()
@@ -224,9 +231,11 @@ def search(
         exclude_illiquid=exclude_illiquid,
         exclude_index_reversal=exclude_index_reversal,
         sector_filter=sector_filter,
+        sector_scope=sector_scope,
         min_market_cap=min_market_cap,
         max_market_cap=max_market_cap,
         min_trading_value=min_trading_value,
+        min_vol_percentile=min_vol_percentile,
         index_prices=index_prices,
     )
     state = cache_store.load_state()
@@ -241,6 +250,7 @@ def search(
         full_period=full_period,
         reliability_warning=result["any_short_sample"],
         as_of=state.get("last_update_date"),
+        pool_size=result.get("pool_size", 0),
     )
 
 

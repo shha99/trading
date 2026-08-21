@@ -124,6 +124,23 @@ def main():
             return None
         return sxy / math.sqrt(sxx * syy)
 
+    # 2: 저변동성(경기방어주) 오탐 필터용 - 연환산 변동성(일별 로그수익률 표준편차 × √252).
+    # 보유한 전체 히스토리를 사용한다(특정 조회 구간이 아니라 종목 자체의 일반적 변동성 특성).
+    _TRADING_DAYS_PER_YEAR = 252
+
+    def _annualized_volatility(row_close: list) -> float | None:
+        rets = []
+        for i in range(1, len(row_close)):
+            p0, p1 = row_close[i - 1], row_close[i]
+            if p0 and p1 and p0 > 0:
+                rets.append(math.log(p1 / p0))
+        n = len(rets)
+        if n < 30:
+            return None
+        m = sum(rets) / n
+        var = sum((r - m) ** 2 for r in rets) / (n - 1)
+        return math.sqrt(var) * math.sqrt(_TRADING_DAYS_PER_YEAR)
+
     universe_out = []
     prices_out = []
     n_reversal = 0
@@ -152,6 +169,7 @@ def main():
         is_reversal = idx_corr is not None and idx_corr <= INDEX_REVERSAL_THRESHOLD
         if is_reversal:
             n_reversal += 1
+        volatility = _annualized_volatility(row_close)
 
         universe_out.append(
             {
@@ -164,6 +182,7 @@ def main():
                 "fl": bool(is_preferred or is_halted),
                 "ic": round(idx_corr, 4) if idx_corr is not None else None,
                 "ir": is_reversal,
+                "vt": round(volatility, 4) if volatility is not None else None,
             }
         )
     print(f"지수 역행 종목(상위 {TOP_N} 중): {n_reversal}개")

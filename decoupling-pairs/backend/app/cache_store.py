@@ -63,6 +63,7 @@ def load_meta() -> pd.DataFrame:
                 "listed_shares",
                 "index_corr",
                 "index_reversal",
+                "volatility",
             ]
         )
     return pd.read_parquet(config.META_PATH)

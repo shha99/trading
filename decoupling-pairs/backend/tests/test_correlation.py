@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from app import correlation
+from app import config, correlation
 
 
 def _make_prices(n_days=60, seed=0):
@@ -155,3 +155,85 @@ def test_eligible_universe_excludes_index_reversal_by_default():
     meta.loc["B", "index_reversal"] = True
     universe = correlation.eligible_universe(meta, exclude_managed=False, exclude_illiquid=False)
     assert list(universe) == ["A"]
+
+
+def test_eligible_universe_excludes_low_volatility_when_requested():
+    meta = _make_meta(["A", "B", "C", "D", "E"], ["철강"] * 5)
+    meta["volatility"] = [0.05, 0.06, 0.30, 0.32, 0.35]  # A, B가 저변동성
+
+    # eligible_universe 자체의 기본값(0.0)으로는 필터링 안 됨
+    universe_unfiltered = correlation.eligible_universe(
+        meta, exclude_managed=False, exclude_illiquid=False, exclude_index_reversal=False
+    )
+    assert "A" in universe_unfiltered
+
+    # scan_pairs/search_correlations가 실제로 넘기는 기본 컷오프(하위 20%)를 명시하면 제외됨
+    universe_filtered = correlation.eligible_universe(
+        meta, exclude_managed=False, exclude_illiquid=False, exclude_index_reversal=False,
+        min_vol_percentile=config.DEFAULT_MIN_VOLATILITY_PCTL,
+    )
+    assert "A" not in universe_filtered
+    assert "E" in universe_filtered
+
+
+def test_eligible_universe_sector_scope_restricts_to_one_sector():
+    meta = _make_meta(["A", "B", "C"], ["철강", "화학", "철강"])
+    universe = correlation.eligible_universe(
+        meta, exclude_managed=False, exclude_illiquid=False, exclude_index_reversal=False,
+        sector_scope="철강",
+    )
+    assert set(universe) == {"A", "C"}
+
+
+def test_scan_pairs_tier2_fallback_never_empty_with_candidates(monkeypatch):
+    """1: 정렬 로직은 하드 필터가 아니라 계층적 fallback - 1티어(FDR 통과)가 하나도
+    없어도 후보(음의 상관)가 남아있으면 2티어로 top_n을 채워야 한다."""
+    monkeypatch.setattr(
+        correlation.advanced_stats,
+        "benjamini_hochberg",
+        lambda pvals, alpha: (np.zeros(len(pvals), dtype=bool), pvals),
+    )
+    prices = _make_prices()
+    meta = _make_meta(["A", "B", "C", "D"], ["철강", "철강", "화학", "IT"])
+
+    result = correlation.scan_pairs(
+        prices, meta, prices.index.min(), prices.index.max(), top_n=3,
+        exclude_managed=False, exclude_illiquid=False, exclude_index_reversal=False,
+    )
+    # 하드 필터였다면 FDR 전부 미통과라 pairs가 텅 비었을 것 - 이제는 2티어로 채워져야 한다.
+    assert len(result["pairs"]) > 0
+    assert all(p.fdr_passed is False for p in result["pairs"])
+    assert result["pool_size"] == len(result["pairs"]) + len(result["low_significance_pairs"])
+
+
+def test_scan_pairs_sector_scope_restricts_candidates_and_badge():
+    prices = _make_prices()
+    # A-C가 구성상 강한 음의 상관 - 둘을 같은 섹터에 둬서 섹터 한정 조회를 검증한다.
+    meta = _make_meta(["A", "B", "C", "D"], ["철강", "화학", "철강", "IT"])
+
+    result = correlation.scan_pairs(
+        prices, meta, prices.index.min(), prices.index.max(), top_n=10,
+        exclude_managed=False, exclude_illiquid=False, exclude_index_reversal=False,
+        sector_scope="철강",
+    )
+    pairs = _all_pairs(result)
+    assert len(pairs) >= 1
+    tickers_seen = {t for p in pairs for t in (p.stock_a.ticker, p.stock_b.ticker)}
+    assert tickers_seen == {"A", "C"}
+    assert all(p.badge == "sector_scoped" for p in pairs)
+    # 섹터 한정 조회에서는 "동일섹터 이례적" 하이라이트가 의미 없으므로 생략된다.
+    assert result["same_sector_highlights"] == []
+
+
+def test_search_correlations_sector_scope_restricts_candidates():
+    prices = _make_prices()
+    meta = _make_meta(["A", "B", "C", "D"], ["철강", "화학", "화학", "IT"])
+
+    result = correlation.search_correlations(
+        "A", prices, meta, start=prices.index.min(), end=prices.index.max(),
+        full_period=False, top_n=10, exclude_managed=False, exclude_illiquid=False,
+        exclude_index_reversal=False, sector_scope="화학",
+    )
+    pairs = _all_pairs(result)
+    assert all(p.stock_b.ticker in ("B", "C") for p in pairs)
+    assert result["same_sector_highlights"] == []

@@ -372,6 +372,7 @@
   }
   .badge.cross { background: var(--accent-soft); color: var(--accent-strong); }
   .badge.same { background: var(--neg-soft); color: var(--neg-strong); }
+  .badge.sectorscoped { background: var(--surface-2); color: var(--ink-muted); }
   .badge.warn { background: var(--warn-soft); color: var(--warn); }
   .badge.flag { background: var(--surface-2); color: var(--ink-muted); }
   .badge.fail { background: var(--surface-2); color: var(--ink-faint); }
@@ -506,6 +507,10 @@
             </select>
           </div>
           <div class="field">
+            <span class="field-label">섹터 선택(업종 내로 한정)</span>
+            <select id="scanSectorScope"><option value="all">전체 시장</option></select>
+          </div>
+          <div class="field">
             <span class="field-label">최소 시가총액(억원)</span>
             <input type="number" id="scanMinCap" min="0" placeholder="제한 없음">
           </div>
@@ -517,6 +522,10 @@
         <div class="slider-field">
           <div class="row"><span class="field-label">결과 개수</span><span class="num" id="scanTopNLabel">20개</span></div>
           <input type="range" id="scanTopN" min="5" max="50" value="20">
+        </div>
+        <div class="slider-field">
+          <div class="row"><span class="field-label">최소 변동성 기준(연환산 하위 N% 제외)</span><span class="num" id="scanVolLabel">20%</span></div>
+          <input type="range" id="scanVolPct" min="0" max="50" step="5" value="20">
         </div>
       </div>
       <div class="run-row">
@@ -570,6 +579,10 @@
             </select>
           </div>
           <div class="field">
+            <span class="field-label">섹터 선택(업종 내로 한정)</span>
+            <select id="searchSectorScope"><option value="all">전체 시장</option></select>
+          </div>
+          <div class="field">
             <span class="field-label">최소 시가총액(억원)</span>
             <input type="number" id="searchMinCap" min="0" placeholder="제한 없음">
           </div>
@@ -581,6 +594,10 @@
         <div class="slider-field">
           <div class="row"><span class="field-label">결과 개수</span><span class="num" id="searchTopNLabel">20개</span></div>
           <input type="range" id="searchTopN" min="5" max="50" value="20">
+        </div>
+        <div class="slider-field">
+          <div class="row"><span class="field-label">최소 변동성 기준(연환산 하위 N% 제외)</span><span class="num" id="searchVolLabel">20%</span></div>
+          <input type="range" id="searchVolPct" min="0" max="50" step="5" value="20">
         </div>
       </div>
       <div class="run-row">
@@ -662,6 +679,7 @@
     flagged: !!u.fl,
     indexCorr: u.ic,
     indexReversal: !!u.ir,
+    volatility: u.vt, // 연환산 변동성(일별 로그수익률 표준편차 × √252), 빌드 시점에 전체 보유 히스토리 기준 계산
   }));
 
   const priceMatrix = REAL.prices; // [ticker 인덱스][t] = 종가 | null (baked-in, 이미 dateAxis에 정렬됨)
@@ -799,7 +817,20 @@
     return vals[Math.floor(vals.length * 0.2)];
   })();
 
-  function eligibleIndices({ excludeManaged, excludeIlliquid, excludeIndexReversal, minCap, minValue }) {
+  // 2: 저변동성(경기방어주) 오탐 필터 - 연환산 변동성 하위 N% 컷오프를 슬라이더 값에 따라
+  // 동적으로 계산한다(거래대금 컷오프는 고정 20%지만, 변동성은 사용자가 조절 가능해야 함).
+  const VOL_SORTED = universe.map((s) => s.volatility).filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
+  function volCutoff(pct) {
+    if (!pct || pct <= 0 || VOL_SORTED.length === 0) return -Infinity;
+    const idx = Math.min(VOL_SORTED.length - 1, Math.floor((VOL_SORTED.length * pct) / 100));
+    return VOL_SORTED[idx];
+  }
+
+  // 3: 섹터별 조회 - 유니버스에 실제 존재하는 섹터명 목록(가나다순)
+  const ALL_SECTORS = Array.from(new Set(universe.map((s) => s.sector))).sort((a, b) => a.localeCompare(b, "ko"));
+
+  function eligibleIndices({ excludeManaged, excludeIlliquid, excludeIndexReversal, minCap, minValue, minVolPercentile, sectorScope }) {
+    const volCut = volCutoff(minVolPercentile);
     const out = [];
     universe.forEach((s, i) => {
       if (excludeManaged && s.flagged) return;
@@ -807,6 +838,8 @@
       if (excludeIndexReversal !== false && s.indexReversal) return; // 기본 제외, 토글로 강제 포함
       if (minCap != null && s.marketCap < minCap) return;
       if (minValue != null && s.avgValue < minValue) return;
+      if (Number.isFinite(s.volatility) && s.volatility < volCut) return; // 저변동성 오탐 필터
+      if (sectorScope && sectorScope !== "all" && s.sector !== sectorScope) return; // 섹터별 조회
       out.push(i);
     });
     return out;
@@ -814,6 +847,14 @@
 
   function badgeFor(a, b) {
     return a.sector !== b.sector ? "cross" : "same";
+  }
+  // sectorScope가 특정 섹터로 고정된 조회에서는 "동일섹터=이례적"이 아니라 애초에 당연한
+  // 상태이므로, 배지 라벨을 중립적인 "업종 내 디커플링"으로 바꿔 보여준다.
+  function badgeLabelFor(a, b, sectorScopeActive) {
+    const badge = badgeFor(a, b);
+    if (sectorScopeActive && badge === "same") return { cls: "sectorscoped", text: "업종 내 디커플링" };
+    if (badge === "cross") return { cls: "cross", text: "크로스섹터 디커플링" };
+    return { cls: "same", text: "동일섹터 이례적 디커플링" };
   }
 
   // 1-3 디버그: 특정 종목이 결과 상위권에 비정상적으로 자주 등장하면(진짜 데이터인지
@@ -922,14 +963,38 @@
     return signs[0] === signs[1];
   }
 
+  // 1: 정렬 로직 = "하드 필터"가 아니라 "계층적 fallback". 1티어(FDR 통과)를 우선
+  // 채우고, 모자라면 2티어(미통과, 여전히 음의 상관)로 나머지 자리를 채운다 - 후보군에
+  // 종목이 남아있는 한 "결과 없음"을 반환하지 않는다. 유니버스 정제로 후보군 자체가
+  // topN보다 작은 극단적 경우에만 있는 만큼만 보여주고 poolSize로 그 사실을 알린다.
+  function fillTiered(filtered, topN, sectorPriority) {
+    function withSectorPriority(list) {
+      if (!sectorPriority) return list;
+      return [...list].sort((p, q) => {
+        const sp = universe[p.a].sector === universe[p.b].sector;
+        const sq = universe[q.a].sector === universe[q.b].sector;
+        if (sp !== sq) return sp ? -1 : 1;
+        return p.corr - q.corr;
+      });
+    }
+    const tier1 = withSectorPriority(filtered.filter((p) => p.fdrPassed));
+    const tier2 = withSectorPriority(filtered.filter((p) => !p.fdrPassed));
+    const mainList = tier1.slice(0, topN);
+    if (mainList.length < topN) mainList.push(...tier2.slice(0, topN - mainList.length));
+    const usedTier2Count = Math.max(0, mainList.length - tier1.length);
+    const lowSig = tier2.slice(usedTier2Count, usedTier2Count + topN);
+    return { pairs: mainList, lowSig, poolSize: filtered.length };
+  }
+
   function scan(opts) {
-    const { startIdx, endIdx, topN, sectorFilter, sectorPriority } = opts;
+    const { startIdx, endIdx, topN, sectorFilter, sectorPriority, sectorScope } = opts;
     const windowDays = endIdx - startIdx + 1;
     const reliability = windowDays < MIN_RELIABLE_DAYS;
+    const sectorScopeActive = !!(sectorScope && sectorScope !== "all");
 
     let idxs = eligibleIndices(opts).filter((i) => universe[i]._startIdx <= startIdx);
     if (idxs.length < 2) {
-      return { pairs: [], lowSig: [], sameSector: [], reliability, windowDays, universeSize: idxs.length };
+      return { pairs: [], lowSig: [], sameSector: [], reliability, windowDays, universeSize: idxs.length, poolSize: 0, sectorScopeActive };
     }
 
     const stats = buildStatsForWindow(idxs, startIdx, endIdx);
@@ -941,7 +1006,7 @@
       }
     }
     if (rawPairs.length === 0) {
-      return { pairs: [], lowSig: [], sameSector: [], reliability, windowDays, universeSize: idxs.length };
+      return { pairs: [], lowSig: [], sameSector: [], reliability, windowDays, universeSize: idxs.length, poolSize: 0, sectorScopeActive };
     }
     finalizeRawPairs(rawPairs);
     rawPairs.sort((p, q) => p.corr - q.corr);
@@ -956,36 +1021,31 @@
     }
 
     // 디커플링 스크리너이므로 "음의" 상관관계 후보만 대상으로 한다 - 양의 상관(동조)은
-    // 통계적으로 유의해도 애초에 디커플링이 아니므로 상위/유의성낮음 목록 어디에도 넣지 않는다.
+    // 통계적으로 유의해도 애초에 디커플링이 아니므로 상위/참고용 목록 어디에도 넣지 않는다.
     const filtered = rawPairs.filter((p) => matchesSector(p) && p.corr < 0);
-    let passed = filtered.filter((p) => p.fdrPassed);
-    const failed = filtered.filter((p) => !p.fdrPassed);
-    if (sectorPriority) {
-      passed = [...passed].sort((p, q) => {
-        const sp = universe[p.a].sector === universe[p.b].sector;
-        const sq = universe[q.a].sector === universe[q.b].sector;
-        if (sp !== sq) return sp ? -1 : 1;
-        return p.corr - q.corr;
-      });
-    }
+    const { pairs, lowSig, poolSize } = fillTiered(filtered, topN, sectorPriority);
 
-    // 동일섹터인데 "음의" 상관관계인 경우만 이례적이다 - 양의 상관(동조)은 정상이므로 제외.
-    const sameSector = rawPairs
-      .filter((p) => universe[p.a].sector === universe[p.b].sector && p.corr < 0)
-      .slice(0, 10);
+    // 섹터 선택으로 후보군을 한 업종으로 한정한 조회에서는 전부 동일섹터가 당연하므로
+    // "동일섹터 이례적 디커플링" 하이라이트가 의미 없다 - 전체 시장 조회에서만 노출.
+    const sameSector = sectorScopeActive
+      ? []
+      : rawPairs.filter((p) => universe[p.a].sector === universe[p.b].sector && p.corr < 0).slice(0, 10);
 
     return {
-      pairs: passed.slice(0, topN),
-      lowSig: failed.slice(0, topN),
+      pairs,
+      lowSig,
       sameSector,
       reliability,
       windowDays,
       universeSize: idxs.length,
+      poolSize,
+      sectorScopeActive,
     };
   }
 
   function searchOne(baseIdx, opts) {
-    const { full, startIdx, endIdx, topN, sectorFilter, sectorPriority } = opts;
+    const { full, startIdx, endIdx, topN, sectorFilter, sectorPriority, sectorScope } = opts;
+    const sectorScopeActive = !!(sectorScope && sectorScope !== "all");
     const base = universe[baseIdx];
     const from = full ? Math.max(base._startIdx, 1) : Math.max(startIdx, 1);
     const to = full ? T - 1 : endIdx;
@@ -1039,7 +1099,7 @@
         n: xs.length, warn: xs.length < MIN_RELIABLE_DAYS,
       });
     });
-    if (rawPairs.length === 0) return { pairs: [], lowSig: [], sameSector: [], anyWarn: false };
+    if (rawPairs.length === 0) return { pairs: [], lowSig: [], sameSector: [], anyWarn: false, poolSize: 0, sectorScopeActive };
 
     finalizeRawPairs(rawPairs);
     rawPairs.sort((p, q) => p.corr - q.corr);
@@ -1052,28 +1112,23 @@
       return true;
     }
     // 디커플링 스크리너이므로 "음의" 상관관계 후보만 대상으로 한다 - 양의 상관(동조)은
-    // 통계적으로 유의해도 애초에 디커플링이 아니므로 상위/유의성낮음 목록 어디에도 넣지 않는다.
+    // 통계적으로 유의해도 애초에 디커플링이 아니므로 상위/참고용 목록 어디에도 넣지 않는다.
     const filtered = rawPairs.filter((p) => matchesSector(p) && p.corr < 0);
-    let passed = filtered.filter((p) => p.fdrPassed);
-    const failed = filtered.filter((p) => !p.fdrPassed);
-    if (sectorPriority) {
-      passed = [...passed].sort((p, q) => {
-        const sp = universe[baseIdx].sector === universe[p.b].sector;
-        const sq = universe[baseIdx].sector === universe[q.b].sector;
-        if (sp !== sq) return sp ? -1 : 1;
-        return p.corr - q.corr;
-      });
-    }
-    // 동일섹터인데 "음의" 상관관계인 경우만 이례적이다 - 양의 상관(동조)은 정상이므로 제외.
-    const sameSector = rawPairs
-      .filter((p) => universe[baseIdx].sector === universe[p.b].sector && p.corr < 0)
-      .slice(0, 10);
-    const shown = passed.slice(0, topN).concat(failed.slice(0, topN));
+    const { pairs, lowSig, poolSize } = fillTiered(filtered, topN, sectorPriority);
+
+    // 섹터 선택으로 후보군을 한 업종으로 한정한 조회에서는 전부 동일섹터가 당연하므로
+    // "동일섹터 이례적 디커플링" 하이라이트가 의미 없다 - 전체 시장 조회에서만 노출.
+    const sameSector = sectorScopeActive
+      ? []
+      : rawPairs.filter((p) => universe[baseIdx].sector === universe[p.b].sector && p.corr < 0).slice(0, 10);
+    const shown = pairs.concat(lowSig);
     return {
-      pairs: passed.slice(0, topN),
-      lowSig: failed.slice(0, topN),
+      pairs,
+      lowSig,
       sameSector,
       anyWarn: shown.some((r) => r.warn),
+      poolSize,
+      sectorScopeActive,
     };
   }
 
@@ -1082,6 +1137,10 @@
      ========================================================= */
   function eok(v) { return Math.round(v / 1e8).toLocaleString("ko-KR") + "억"; }
   function pct(v) { return (v * 100).toFixed(1) + "%"; }
+  // 1: 후보군(음의 상관 전체)이 요청 개수보다 적어서 다 못 채운 극단적 경우에만 표시.
+  function poolNote(res, topN) {
+    return (res.poolSize != null && res.pairs.length < topN) ? ` · 후보 종목 수: ${res.poolSize}개` : "";
+  }
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   }
@@ -1187,6 +1246,7 @@
     const tags = [];
     tags.push(`<span class="tag">${stock.market}</span>`);
     tags.push(`<span class="tag">${escapeHtml(stock.sector)}</span>`);
+    if (Number.isFinite(stock.volatility)) tags.push(`<span class="tag num" title="연환산 변동성(일별 수익률 표준편차 × √252)">σ ${pct(stock.volatility)}</span>`);
     if (stock.indexReversal) tags.push(`<span class="tag" title="소속 지수와 상관계수 ${pct(stock.indexCorr)}">⚠️ 지수역행</span>`);
     return `
       <div class="stock-block ${align === "right" ? "right" : ""}">
@@ -1218,9 +1278,9 @@
     return items.length ? `<div class="stat-row">${items.join("")}</div>` : "";
   }
 
-  function renderPairRow(rank, p, from, to) {
+  function renderPairRow(rank, p, from, to, sectorScopeActive) {
     const a = universe[p.a], b = universe[p.b];
-    const badge = badgeFor(a, b);
+    const badge = badgeLabelFor(a, b, sectorScopeActive);
     const intensity = Math.min(1, Math.abs(p.corr));
     const warn = (p.n != null && p.n < MIN_RELIABLE_DAYS) || (p.warn === true);
     const signCls = p.corr < 0 ? "neg" : "pos";
@@ -1239,8 +1299,8 @@
         ${stockCell(b, "right")}
       </div>
       <div class="badge-row">
-        <span class="badge ${badge}">${badge === "cross" ? "크로스섹터 디커플링" : "동일섹터 이례적 디커플링"}</span>
-        ${p.fdrPassed === false ? `<span class="badge fail">통계적 유의성 낮음</span>` : ""}
+        <span class="badge ${badge.cls}">${badge.text}</span>
+        ${p.fdrPassed === false ? `<span class="badge fail">⚠️ 참고용 (통계적 유의성 미달)</span>` : ""}
         ${stability === true ? `<span class="badge stable">안정적 디커플링(60·120일 부호 일치)</span>` : ""}
         ${warn ? `<span class="badge warn">⚠ 표본 ${p.n} 일</span>` : ""}
         ${a.flagged || b.flagged ? `<span class="badge flag">관리/우선주 포함(필터 해제됨)</span>` : ""}
@@ -1278,7 +1338,7 @@
     return pairs;
   }
 
-  function renderList(container, pairs, from, to, emptyHint) {
+  function renderList(container, pairs, from, to, emptyHint, sectorScopeActive) {
     container.innerHTML = "";
     if (pairs.length === 0) {
       const empty = document.createElement("div");
@@ -1289,7 +1349,7 @@
     }
     const list = document.createElement("div");
     list.className = "result-list";
-    pairs.forEach((p, i) => list.appendChild(renderPairRow(i + 1, p, from, to)));
+    pairs.forEach((p, i) => list.appendChild(renderPairRow(i + 1, p, from, to, sectorScopeActive)));
     container.appendChild(list);
   }
 
@@ -1308,7 +1368,7 @@
     const header = section.querySelector(".pinned-header");
     const body = section.querySelector(".pinned-body");
     const icon = section.querySelector(".pinned-toggle-icon");
-    pairs.forEach((p, i) => body.appendChild(renderPairRow(i + 1, p, from, to)));
+    pairs.forEach((p, i) => body.appendChild(renderPairRow(i + 1, p, from, to, false)));
     header.addEventListener("click", () => {
       const collapsed = body.classList.toggle("collapsed");
       icon.textContent = collapsed ? "▼ 펼치기" : "▲ 접기";
@@ -1316,23 +1376,23 @@
     container.appendChild(section);
   }
 
-  function renderLowSigSection(container, pairs, from, to) {
+  function renderLowSigSection(container, pairs, from, to, sectorScopeActive) {
     container.innerHTML = "";
     if (pairs.length === 0) return;
     attachStability(pairs);
     const wrap = document.createElement("div");
     wrap.className = "low-sig-section";
     wrap.innerHTML = `
-      <button type="button" class="low-sig-toggle">📉 통계적 유의성 낮음 (다중검정 보정 미통과) - ${pairs.length}개 더보기</button>
+      <button type="button" class="low-sig-toggle">📉 참고용 후보 더보기 (통계적 유의성 미달) - ${pairs.length}개 더보기</button>
       <div class="low-sig-body"></div>`;
     const btn = wrap.querySelector(".low-sig-toggle");
     const body = wrap.querySelector(".low-sig-body");
-    pairs.forEach((p, i) => body.appendChild(renderPairRow(i + 1, p, from, to)));
+    pairs.forEach((p, i) => body.appendChild(renderPairRow(i + 1, p, from, to, sectorScopeActive)));
     btn.addEventListener("click", () => {
       const open = body.classList.toggle("open");
       btn.textContent = open
-        ? "📉 통계적 유의성 낮음 - 접기"
-        : `📉 통계적 유의성 낮음 (다중검정 보정 미통과) - ${pairs.length}개 더보기`;
+        ? "📉 참고용 후보 - 접기"
+        : `📉 참고용 후보 더보기 (통계적 유의성 미달) - ${pairs.length}개 더보기`;
     });
     container.appendChild(wrap);
   }
@@ -1422,6 +1482,17 @@
     return { get value() { return selected; } };
   }
 
+  // 3: 섹터별 조회 - "섹터 선택" 드롭다운에 실제 유니버스 섹터 목록을 채운다(스캔/검색 공통).
+  ["scanSectorScope", "searchSectorScope"].forEach((id) => {
+    const sel = document.getElementById(id);
+    ALL_SECTORS.forEach((sec) => {
+      const opt = document.createElement("option");
+      opt.value = sec;
+      opt.textContent = sec;
+      sel.appendChild(opt);
+    });
+  });
+
   /* =========================================================
      8. 스캔 패널 배선
      ========================================================= */
@@ -1453,9 +1524,11 @@
       excludeIlliquid: document.getElementById("scanExcludeIlliquid").checked,
       excludeIndexReversal: document.getElementById("scanExcludeIndexReversal").checked,
       sectorFilter: document.getElementById("scanSectorFilter").value,
+      sectorScope: document.getElementById("scanSectorScope").value,
       sectorPriority: document.getElementById("scanSectorPriority").checked,
       minCap: numOrNull(document.getElementById("scanMinCap").value),
       minValue: numOrNull(document.getElementById("scanMinValue").value),
+      minVolPercentile: Number(document.getElementById("scanVolPct").value),
     };
     const res = scan(opts);
     attachStability(res.pairs);
@@ -1463,15 +1536,19 @@
     currentTab = "scan";
     lastTickers = collectTickersFromResult(res);
     document.getElementById("scanSummary").textContent =
-      `${res.windowDays}거래일 · 필터 통과 종목 ${res.universeSize}개 중 상위 ${res.pairs.length}개 페어 (다중검정 통과)`;
+      `${res.windowDays}거래일 · 필터 통과 종목 ${res.universeSize}개 중 상위 ${res.pairs.length}개 페어` + poolNote(res, opts.topN);
     const resultsEl = document.getElementById("scanResults");
     renderReliabilityBanner(resultsEl, res.reliability);
     renderSameSectorSection(document.getElementById("scanSameSector"), res.sameSector, opts.startIdx, opts.endIdx);
-    renderList(resultsEl, res.pairs, opts.startIdx, opts.endIdx, "조건에 맞는 페어가 없습니다. 필터를 완화해보세요.");
-    renderLowSigSection(document.getElementById("scanLowSig"), res.lowSig, opts.startIdx, opts.endIdx);
+    renderList(resultsEl, res.pairs, opts.startIdx, opts.endIdx, "이 조건에서는 음의 상관관계를 보이는 종목 쌍이 없습니다 (후보 종목 수: 0개). 필터를 완화해보세요.", res.sectorScopeActive);
+    renderLowSigSection(document.getElementById("scanLowSig"), res.lowSig, opts.startIdx, opts.endIdx, res.sectorScopeActive);
   }
   document.getElementById("scanRun").addEventListener("click", runScan);
   document.getElementById("scanSectorPriority").addEventListener("change", runScan);
+  document.getElementById("scanSectorScope").addEventListener("change", runScan);
+  document.getElementById("scanVolPct").addEventListener("input", () => {
+    document.getElementById("scanVolLabel").textContent = document.getElementById("scanVolPct").value + "%";
+  });
   runScan();
 
   /* =========================================================
@@ -1529,25 +1606,31 @@
       excludeIlliquid: document.getElementById("searchExcludeIlliquid").checked,
       excludeIndexReversal: document.getElementById("searchExcludeIndexReversal").checked,
       sectorFilter: document.getElementById("searchSectorFilter").value,
+      sectorScope: document.getElementById("searchSectorScope").value,
       sectorPriority: document.getElementById("searchSectorPriority").checked,
       minCap: numOrNull(document.getElementById("searchMinCap").value),
       minValue: numOrNull(document.getElementById("searchMinValue").value),
+      minVolPercentile: Number(document.getElementById("searchVolPct").value),
     };
     const res = searchOne(baseIdx, opts);
     currentTab = "search";
     lastTickers = collectTickersFromResult(res, [selectedTicker.code]);
     document.getElementById("searchSummary").textContent =
-      `${selectedTicker.name} (${selectedTicker.code}) 기준 · 상위 ${res.pairs.length}개${full ? " · 전체 기간" : ""}`;
+      `${selectedTicker.name} (${selectedTicker.code}) 기준 · 상위 ${res.pairs.length}개${full ? " · 전체 기간" : ""}` + poolNote(res, opts.topN);
     const chartFrom = full ? Math.max(universe[baseIdx]._startIdx, 1) : opts.startIdx;
     const chartTo = full ? T - 1 : opts.endIdx;
     const resultsEl = document.getElementById("searchResults");
     renderReliabilityBanner(resultsEl, res.anyWarn);
     renderSameSectorSection(document.getElementById("searchSameSector"), res.sameSector, chartFrom, chartTo);
-    renderList(resultsEl, res.pairs, chartFrom, chartTo, "조건에 맞는 상대 종목이 없습니다. 필터를 완화해보세요.");
-    renderLowSigSection(document.getElementById("searchLowSig"), res.lowSig, chartFrom, chartTo);
+    renderList(resultsEl, res.pairs, chartFrom, chartTo, "이 조건에서는 음의 상관관계를 보이는 상대 종목이 없습니다 (후보 종목 수: 0개). 필터를 완화해보세요.", res.sectorScopeActive);
+    renderLowSigSection(document.getElementById("searchLowSig"), res.lowSig, chartFrom, chartTo, res.sectorScopeActive);
   }
   searchRunBtn.addEventListener("click", runSearch);
   document.getElementById("searchSectorPriority").addEventListener("change", () => { if (searchPicker.value) runSearch(); });
+  document.getElementById("searchSectorScope").addEventListener("change", () => { if (searchPicker.value) runSearch(); });
+  document.getElementById("searchVolPct").addEventListener("input", () => {
+    document.getElementById("searchVolLabel").textContent = document.getElementById("searchVolPct").value + "%";
+  });
 
   /* =========================================================
      10. IF 탭 - 페어 매수 시뮬레이션
