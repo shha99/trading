@@ -1,6 +1,7 @@
 .env
 data/*.db
 data/*.parquet
+data/*.json
 __pycache__/
 *.pyc
 .venv/

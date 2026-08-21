@@ -103,11 +103,11 @@ def is_candle_closed(df: pd.DataFrame, interval: str) -> bool:
     if df is None or df.empty:
         return False
     last_open = df.index[-1]
-    delta = _interval_to_timedelta(interval)
+    delta = interval_to_timedelta(interval)
     return pd.Timestamp.utcnow().tz_localize(None) >= last_open + delta
 
 
-def _interval_to_timedelta(interval: str) -> pd.Timedelta:
+def interval_to_timedelta(interval: str) -> pd.Timedelta:
     unit = interval[-1]
     value = int(interval[:-1])
     unit_map = {"m": "min", "h": "h", "d": "D", "w": "W"}
