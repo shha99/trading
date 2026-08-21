@@ -12,60 +12,103 @@
 from __future__ import annotations
 
 import argparse
+from datetime import timedelta
 
+import numpy as np
 import pandas as pd
 
 from app.history import fetch_extended_history
-from app.strategy import KeltnerReclaimStrategy, Signal
+from app.indicators import atr, ema, keltner_lower
+from app.strategy import KeltnerReclaimStrategy
 
 
 def simulate(df: pd.DataFrame, strategy: KeltnerReclaimStrategy) -> list[dict]:
-    trades: list[dict] = []
-    i = strategy.min_bars
+    """전략의 진입/청산 조건을 그대로 재현하되, 지표를 매 봉마다 처음부터
+    다시 계산하지 않는다 (딱 한 번만 벡터 계산) — 5년치 데이터(수만 봉)에서
+    이전 구현은 봉마다 지금까지의 전체 구간을 다시 계산해 사실상 O(n^2)이라
+    build_stats.py가 실전에서 못 쓸 만큼 느렸다(실측: 1개 조합에도 여러 분).
+    EMA/ATR/켈트너는 전부 과거 값만 보는(미래를 안 보는) 계산이라, 전체
+    구간에 대해 한 번에 계산해도 봉 k 시점의 값은 "그 시점까지의 데이터로
+    계산한 값"과 정확히 같다 - 즉 전략의 판정 로직(strategy.evaluate)과
+    결과가 동일하다."""
     n = len(df)
+    if n < strategy.min_bars:
+        return []
 
-    while i <= n:
-        window = df.iloc[:i]
-        signal: Signal | None = strategy.evaluate("BT", "BT", window)
-        if signal is None:
-            i += 1
+    close = df["Close"].to_numpy()
+    high = df["High"].to_numpy()
+    low = df["Low"].to_numpy()
+    ema_trend = ema(df["Close"], strategy.trend_ema_period).to_numpy()
+    kelt_lower = keltner_lower(
+        df, strategy.keltner_ema_period, strategy.keltner_atr_period, strategy.keltner_atr_mult
+    ).to_numpy()
+    atr_values = atr(df, strategy.keltner_atr_period).to_numpy()
+    index = df.index
+
+    trades: list[dict] = []
+    k = strategy.min_bars - 1  # strategy.evaluate(df.iloc[:i])가 보던 "마지막 봉"의 0-based 인덱스 (i-1)
+
+    while k < n:
+        if (
+            np.isnan(ema_trend[k]) or np.isnan(kelt_lower[k]) or np.isnan(kelt_lower[k - 1])
+            or np.isnan(atr_values[k])
+        ):
+            k += 1
             continue
 
-        entry_idx = i - 1  # window의 마지막 봉 = 시그널이 발생한 봉
-        exit_reason, exit_price, exit_idx = _walk_forward_exit(df, entry_idx, signal)
-        entry_time = df.index[entry_idx]
-        exit_time = df.index[exit_idx] if exit_idx < n else df.index[-1]
+        trend_ok = close[k] > ema_trend[k]
+        pullback = close[k - 1] <= kelt_lower[k - 1]
+        reclaim = close[k] > kelt_lower[k]
+        if not (trend_ok and pullback and reclaim):
+            k += 1
+            continue
 
-        r = (exit_price - signal.entry_price) / (signal.entry_price - signal.stop_price)
+        entry_price = float(close[k])
+        atr_now = float(atr_values[k])
+        stop_price = entry_price - strategy.stop_atr_mult * atr_now
+        target_price = entry_price + strategy.target_atr_mult * atr_now
+        entry_ts = index[k]
+        entry_dt = entry_ts.to_pydatetime() if hasattr(entry_ts, "to_pydatetime") else entry_ts
+        time_stop_at = entry_dt + timedelta(days=strategy.time_stop_days)
+
+        exit_reason, exit_price, exit_idx = _walk_forward_exit(
+            high, low, close, index, k, stop_price, target_price, time_stop_at, n
+        )
+        exit_time = index[exit_idx]
+
+        r = (exit_price - entry_price) / (entry_price - stop_price)
         trades.append(
             {
-                "entry_time": str(entry_time),
+                "entry_time": str(entry_ts),
                 "exit_time": str(exit_time),
-                "entry_price": signal.entry_price,
-                "stop_price": signal.stop_price,
-                "target_price": signal.target_price,
+                "entry_price": entry_price,
+                "stop_price": stop_price,
+                "target_price": target_price,
                 "exit_price": exit_price,
                 "exit_reason": exit_reason,
                 "r_multiple": round(r, 3),
             }
         )
-        i = max(exit_idx + 1, i + 1)  # 포지션 종료 이후부터 다음 진입 탐색 (중복 포지션 방지)
+        k = max(exit_idx + 1, k + 1)  # 포지션 종료 이후부터 다음 진입 탐색 (중복 포지션 방지)
 
     return trades
 
 
-def _walk_forward_exit(df: pd.DataFrame, entry_idx: int, signal: Signal) -> tuple[str, float, int]:
-    for j in range(entry_idx + 1, len(df)):
-        bar = df.iloc[j]
-        ts = df.index[j]
-        if bar["Low"] <= signal.stop_price:
-            return "SL", signal.stop_price, j
-        if bar["High"] >= signal.target_price:
-            return "TP", signal.target_price, j
-        if ts.to_pydatetime() >= signal.time_stop_at:
-            return "TIME", float(bar["Close"]), j
+def _walk_forward_exit(
+    high: np.ndarray, low: np.ndarray, close: np.ndarray, index: pd.Index,
+    entry_idx: int, stop_price: float, target_price: float, time_stop_at, n: int,
+) -> tuple[str, float, int]:
+    for j in range(entry_idx + 1, n):
+        if low[j] <= stop_price:
+            return "SL", stop_price, j
+        if high[j] >= target_price:
+            return "TP", target_price, j
+        ts = index[j]
+        ts_dt = ts.to_pydatetime() if hasattr(ts, "to_pydatetime") else ts
+        if ts_dt >= time_stop_at:
+            return "TIME", float(close[j]), j
     # 데이터 끝까지 못 빠져나온 경우 마지막 종가로 강제 정리
-    return "TIME", float(df.iloc[-1]["Close"]), len(df) - 1
+    return "TIME", float(close[-1]), n - 1
 
 
 def summarize(trades: list[dict]) -> dict:

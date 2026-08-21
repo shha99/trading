@@ -1,6 +1,9 @@
 """backtest.py의 simulate()/summarize() 검증 (합성 데이터, 네트워크 없음)."""
 from __future__ import annotations
 
+import time
+
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -53,6 +56,28 @@ def test_simulate_no_signal_returns_empty():
 
 def test_summarize_empty_trades():
     assert summarize([]) == {"trades": 0}
+
+
+def test_simulate_is_linear_time_not_quadratic():
+    """회귀 방지: simulate()가 매 봉마다 처음부터 지표를 다시 계산하면(O(n^2))
+    5년치(수만 봉) 데이터에서 build_stats.py가 몇 분씩 걸려 못 쓰게 된다
+    (실제로 겪었던 문제 - 지표를 한 번만 벡터 계산하도록 고쳤음).
+    10,000봉이 넉넉한 시간 안에 끝나는지만 확인한다(느슨한 회귀 가드)."""
+    rng = np.random.default_rng(7)
+    n = 10_000
+    closes = 100 + np.cumsum(rng.normal(0, 1, n))
+    idx = pd.bdate_range("2015-01-01", periods=n, freq="h")
+    close = pd.Series(closes, index=idx)
+    high, low = close + 1.0, close - 1.0
+    open_ = close.shift(1).fillna(close.iloc[0])
+    volume = pd.Series(1_000.0, index=idx)
+    df = pd.DataFrame({"Open": open_, "High": high, "Low": low, "Close": close, "Volume": volume})
+
+    start = time.monotonic()
+    simulate(df, KeltnerReclaimStrategy())
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 5.0, f"simulate()가 {elapsed:.1f}초 걸림 - O(n^2)으로 회귀했을 수 있음"
 
 
 def test_summarize_computes_win_rate_and_totals():
