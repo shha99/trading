@@ -126,6 +126,15 @@ def compute_indicator(indicator_id: str, df: pd.DataFrame, params: dict | None =
     meta = get_indicator_meta(indicator_id)
     merged_params = dict(meta["params"])
     merged_params.update(params or {})
+    # JS의 JSON.stringify는 정수값 float(예: 2.0)을 "2"로 뭉개버려서, 브라우저를
+    # 한 번 거쳐온 파라미터는 int/float 구분이 사라진다. TA-Lib abstract API는
+    # 타입에 엄격해서(nbdevup은 float만 허용 등) 원래 기본값의 타입에 맞춰
+    # 강제 변환해준다.
+    for key, default_value in meta["params"].items():
+        if key in merged_params and isinstance(default_value, float):
+            merged_params[key] = float(merged_params[key])
+        elif key in merged_params and isinstance(default_value, int):
+            merged_params[key] = int(merged_params[key])
 
     if meta["source"] == "custom":
         result = CUSTOM_INDICATORS[indicator_id]["compute"](df, **merged_params)

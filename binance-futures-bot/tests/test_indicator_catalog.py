@@ -50,6 +50,17 @@ def test_rsi_single_output_range():
     assert ((valid >= 0) & (valid <= 100)).all()
 
 
+def test_bbands_accepts_int_params_from_json_roundtrip():
+    """브라우저를 거치면 2.0 같은 float 파라미터가 JSON에서 2(int)로 뭉개진다.
+    (JS의 JSON.stringify가 int/float를 구분 안 함) - TA-Lib는 float를
+    엄격히 요구하는 파라미터가 있어서, int로 와도 자동 변환돼야 한다."""
+    df = synthetic_df()
+    out = compute_indicator(
+        "BBANDS", df, {"timeperiod": 5, "nbdevup": 2, "nbdevdn": 2, "matype": 0}
+    )
+    assert set(out.keys()) == {"upperband", "middleband", "lowerband"}
+
+
 def test_bbands_multi_output_ordering():
     df = synthetic_df()
     out = compute_indicator("BBANDS", df, {})
