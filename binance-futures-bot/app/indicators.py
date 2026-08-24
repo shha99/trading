@@ -43,3 +43,25 @@ def keltner_channel(
     mid = ema(df["Close"], ema_period)
     width = atr(df, atr_period) * mult
     return {"upper": mid + width, "middle": mid, "lower": mid - width}
+
+
+def sma(series: pd.Series, period: int) -> pd.Series:
+    return series.rolling(period).mean()
+
+
+def bollinger_bands(df: pd.DataFrame, period: int = 20, num_std: float = 2.0) -> dict[str, pd.Series]:
+    """볼린저 밴드 상/중/하단 (전략 실험실의 여러 볼린저 계열 전략에서 공용으로 씀)."""
+    mid = sma(df["Close"], period)
+    width = df["Close"].rolling(period).std(ddof=0) * num_std
+    return {"upper": mid + width, "middle": mid, "lower": mid - width}
+
+
+def donchian(df: pd.DataFrame, period: int = 20) -> dict[str, pd.Series]:
+    """돈치안 채널 상/하단 (저항선/지지선으로 취급 - 전략 실험실 6/7번에 사용).
+
+    직전 봉까지의 고점/저점만 봐야 "이번 봉이 그 저항/지지에 부딪혔는지"를
+    판단할 수 있어서, shift(1)로 당겨 이번 봉 자신은 포함하지 않는다.
+    """
+    upper = df["High"].rolling(period).max().shift(1)
+    lower = df["Low"].rolling(period).min().shift(1)
+    return {"upper": upper, "lower": lower}

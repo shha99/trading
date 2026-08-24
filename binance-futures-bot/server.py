@@ -25,6 +25,7 @@ from app.config import settings
 from app.db import SessionLocal, SignalRecord, TradeRecord, init_db
 from app.history import is_candle_closed
 from app.indicator_catalog import build_catalog, compute_indicator
+from app.lab_stats_builder import LAB_STATS_FILE, catalog as lab_catalog
 from app.live_feed import get_live_feed
 from app.position_manager import check_time_stops, reconcile_open_positions
 from app.risk import is_kill_switch_active, todays_realized_pnl_usdt
@@ -112,6 +113,11 @@ def dashboard_page() -> FileResponse:
 @app.get("/strategy")
 def strategy_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "strategy.html")
+
+
+@app.get("/lab")
+def lab_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "lab.html")
 
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -299,6 +305,22 @@ def strategy_recent_signals(limit: int = Query(default=50, le=500)) -> list[dict
         return out
     finally:
         session.close()
+
+
+# --------------------------------------------------------------------------
+# 전략 실험실 (켈트너 1 + 후보 7 = 8종 비교) API
+# --------------------------------------------------------------------------
+
+@app.get("/api/lab/strategies")
+def lab_strategies_catalog() -> list[dict]:
+    return lab_catalog()
+
+
+@app.get("/api/lab/stats")
+def lab_stats() -> dict:
+    if not LAB_STATS_FILE.exists():
+        return {}
+    return json.loads(LAB_STATS_FILE.read_text(encoding="utf-8"))
 
 
 # --------------------------------------------------------------------------
