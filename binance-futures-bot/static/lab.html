@@ -1,1 +1,33 @@
-<!doctype html><html><body><p>strategy lab placeholder - built in next step</p></body></html>
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>전략 실험실</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='13' font-size='14'%3E%F0%9F%A7%AA%3C/text%3E%3C/svg%3E" />
+<link rel="stylesheet" href="/static/style.css" />
+<link rel="stylesheet" href="/static/lab.css" />
+</head>
+<body>
+<header class="topbar">
+  <div class="lab-header-text">
+    <h1 class="brand" id="labTitle">전략 실험실</h1>
+    <p class="lab-subtitle" id="labSubtitle">카드를 눌러 심볼·시간대별 성적을 비교해보세요</p>
+  </div>
+  <a class="strategy-link" href="/" target="_blank" rel="noopener">차트 대시보드 ↗</a>
+  <a class="strategy-link" href="/strategy" target="_blank" rel="noopener">검증된 전략 ↗</a>
+  <div class="symbol-tabs" id="symbolTabs"></div>
+  <div class="timeframe-tabs" id="timeframeTabs"></div>
+</header>
+
+<main class="lab-layout">
+  <div class="lab-grid" id="labGrid"></div>
+
+  <section class="lab-warning" id="labWarning" hidden></section>
+
+  <section class="lab-detail" id="labDetail"></section>
+</main>
+
+<script src="/static/lab.js"></script>
+</body>
+</html>
