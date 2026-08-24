@@ -6,7 +6,7 @@
 **실시간 차트 대시보드(165종 지표 + 61종 캔들패턴) + 독립 전략 페이지**를
 모두 구현했다.
 
-## 화면 둘
+## 화면 셋
 
 - **`/` 차트 대시보드**: BTC/ETH 무기한 선물 실시간 캔들+거래량 차트
   (15m/1h/4h/1d), 165종 지표(TA-Lib 160 + 커스텀 5) 검색·토글·파라미터 수정,
@@ -16,8 +16,15 @@
   하단·200EMA 오버레이+과거 매수 시그널이 있는 차트, 심볼×시간대 백테스트
   성적표(학습/검증/연도별), 최근 시그널(백테스트+실거래) 목록, 전략 한계
   고정 노출.
+- **`/lab` 전략 실험실**: 검증된 켈트너 전략 + 비교용 후보 7종(추세추종/
+  반등매수/밴드되돌림/밴드돌파/저항대응/지지대응/밴드터치)을 카드로
+  나열, 심볼×시간대별 거래당 평균 수익률로 비교. 카드가 "설계된 시간대"와
+  다른 시간대를 보면 경고 배너 표시. **후보 7종은 순수 비교/탐색용이고
+  자동매매 화이트리스트에는 절대 안 올라간다** — 진입/청산 숫자는
+  `app/lab_strategies.py`에 표준적인 방식으로 채운 가정값이니, 실제로
+  써보려면 그 파일에서 직접 확인·조정할 것.
 
-둘 다 별도 빌드 단계 없는 순수 JS(`static/`) + TradingView
+셋 다 별도 빌드 단계 없는 순수 JS(`static/`) + TradingView
 [lightweight-charts](https://github.com/tradingview/lightweight-charts)
 (vendored) + FastAPI다.
 
@@ -51,10 +58,12 @@ pip install -r requirements-dev.txt   # TA-Lib 포함 (별도 시스템 라이�
 cp .env.example .env   # 값 채우기 (아래 "보안 규칙" 필독)
 pytest                  # 전체 유닛 테스트 (네트워크 호출 없음)
 python backtest.py --symbol BTCUSDT --timeframe 1h --bars 1500   # 빠른 sanity check
-python build_stats.py  # 전략 페이지용 백테스트 성적표 생성 (몇 분 걸릴 수 있음, 아래 참고)
+python build_stats.py      # 전략 페이지용 백테스트 성적표 생성 (몇 분 걸릴 수 있음, 아래 참고)
+python build_lab_stats.py  # 전략 실험실용 8종 성적표 생성
 uvicorn server:app --reload --port 8300
 # http://localhost:8300      차트 대시보드
 # http://localhost:8300/strategy   전략 페이지
+# http://localhost:8300/lab         전략 실험실
 # http://localhost:8300/docs        API 문서
 ```
 
@@ -64,6 +73,9 @@ uvicorn server:app --reload --port 8300
 `/strategy` 페이지의 성적표는 이 스크립트가 만든
 `data/strategy_stats.json`을 읽으므로, 한 번도 안 돌렸으면 "아직 계산되지
 않았다"는 안내만 보인다. 서버가 켜져 있는 동안 다시 실행해도 안전하다.
+`build_lab_stats.py`도 같은 방식(`data/lab_stats.json`)이고, 전략이 8개라
+심볼×시간대 조합당 데이터를 한 번만 받아서 8개 전략에 재사용하므로
+`build_stats.py`보다 오래 걸리지 않는다.
 
 ## 보안 규칙 (친구분 원본 문서와 동일)
 
@@ -104,23 +116,41 @@ DB에 반영하고 손익을 계산한다 — 이게 안 되면 일일 손실 �
 - **24시간 통계**: REST 폴링(`fapi/v1/ticker/24hr`), 기본 30초 주기.
 - 429(요청 과다)/418(IP 일시 차단) 응답은 `app/history.py`가 자동으로
   대기 후 재시도한다.
+- **테스트넷 과거 K라인 스파이크 자동 보정**: 바이낸스 테스트넷의 과거
+  K라인에는 드물게 명백히 깨진 고가/저가가 섞여 나온다(예: ETHUSDT
+  1일봉에서 시가/저가/종가는 전부 ~2,500대인데 고가만 104,454.9, 혹은
+  BTCUSDT 1일봉에서 저가가 순간적으로 100~150까지 찍히는 식 — 실계좌에서는
+  보고된 바 없고, 이 프로젝트가 백테스트에 쓰는 테스트넷 히스토리에서만
+  발견됨). 이런 값을 그대로 쓰면 ATR/트레일링 스탑 계산이 왜곡돼(실제로
+  ETHUSDT 1일봉 실험실 백테스트에서 트레일링 청산가가 +3700%로 계산되는
+  결과가 나온 적이 있음) 백테스트 성적표가 비현실적으로 부풀려진다.
+  `app/history.py`의 `sanitize_klines()`가 시가/종가 대비 1.5배를 넘는
+  고가·저가를 감지해 나머지 세 값 중 정상 범위로 눌러주며, 모든 klines
+  조회(`fetch_klines`/`fetch_extended_history`, 즉 실시간 조회와 백테스트
+  둘 다)가 거치는 `_to_dataframe()` 안에서 한 번만 적용되므로 별도 처리가
+  필요 없다. 실제 변동성이 큰 정상 캔들(하루 20%+ 등락)은 이 배수 근처에도
+  못 미쳐 오탐 위험은 낮다.
 
 ## 구조
 
 ```
-server.py              FastAPI + 스케줄러(시그널 스캔/포지션 점검) + 대시보드·전략 페이지 API + WS
-backtest.py             구현한 전략의 단독 백테스트 (sanity check / stats_builder가 재사용)
+server.py              FastAPI + 스케줄러(시그널 스캔/포지션 점검) + 세 페이지 API + WS
+backtest.py             켈트너 전략 단독 백테스트 (sanity check / stats_builder·lab_stats_builder가 재사용)
 build_stats.py          심볼×시간대 백테스트 성적표 재계산 CLI (app/stats_builder.py 실행)
+build_lab_stats.py      전략 실험실 8종 성적표 재계산 CLI (app/lab_stats_builder.py 실행)
 app/
   config.py              설정 (심볼/시간대/화이트리스트/리스크/키/백테스트 구간)
   binance_client.py       바이낸스 선물 클라이언트 (testnet 토글)
   history.py              REST klines 수집 + 429/418 백오프 + 장기 히스토리 페이지네이션
   live_feed.py            실시간 현재가(bookTicker WS) + 24h 통계(REST 폴링) 피드
-  indicators.py            EMA / ATR / 켈트너 채널 (전략 전용, 순수 pandas)
+  indicators.py            EMA / ATR / 켈트너 채널 / 볼린저 밴드 / 돈치안 채널 (순수 pandas)
   indicator_catalog.py     TA-Lib 160종 + 커스텀 5종 = 165종 지표 카탈로그/계산 엔진
   custom_indicators.py     VWAP / Supertrend / Ichimoku / Donchian / Keltner
   strategy.py              KeltnerReclaimStrategy (진입조건 + SL/TP 계산 + 조건별 상태)
-  stats_builder.py          심볼×시간대 백테스트 성적 계산 (학습/검증/연도별)
+  stats_builder.py          켈트너 전략의 심볼×시간대 백테스트 성적 계산 (학습/검증/연도별)
+  lab_strategies.py         전략 실험실 후보 7종 (켈트너 제외 - 비교/탐색용, 자동매매 대상 아님)
+  lab_backtest.py           후보 7종 공용 백테스트 엔진 (롱/숏, 고정·동적·트레일링 청산, %수익률)
+  lab_stats_builder.py      켈트너+후보7 = 8종의 심볼×시간대 성적 계산
   signal_engine.py          시그널 감지 → 기록 → 알림 → (화이트리스트면) 자동매매
   notify.py                 텔레그램 알림
   broker.py                 주문 실행 (리스크 기반 수량 계산 + SL/TP 부착 + 상태 조회)
@@ -130,8 +160,9 @@ app/
 static/
   index.html, app.js, style.css              차트 대시보드
   strategy.html, strategy_page.js, strategy.css   전략 페이지
+  lab.html, lab.js, lab.css                    전략 실험실
   vendor/lightweight-charts.js                TradingView lightweight-charts (vendored)
-data/                     strategy_stats.json, bot.db (전부 gitignore)
+data/                     strategy_stats.json, lab_stats.json, bot.db (전부 gitignore)
 tests/                     pytest (전부 mock/합성 데이터, 실제 바이낸스 호출 없음)
 ```
 
@@ -149,6 +180,10 @@ tests/                     pytest (전부 mock/합성 데이터, 실제 바이�
 - `GET /api/strategy/stats` — 백테스트 성적표(`data/strategy_stats.json`)
 - `GET /api/strategy/signals/recent` — 실시간 감지된 시그널 + 매칭되는 매매 결과
 
+**전략 실험실**
+- `GET /api/lab/strategies` — 8종 카탈로그(이름/카테고리/설명/설계 시간대)
+- `GET /api/lab/stats` — 심볼×시간대별 성적(`data/lab_stats.json`)
+
 **시그널/매매 (기존 MVP)**
 - `GET /api/health`, `GET /api/signals`, `GET /api/positions/open`,
   `GET /api/trades`, `GET /api/risk/status`, `POST /api/refresh`
@@ -160,6 +195,7 @@ tests/                     pytest (전부 mock/합성 데이터, 실제 바이�
 - [x] 테스트넷 자동매매
 - [x] 실시간 차트 대시보드 + 165종 지표 + 61종 캔들패턴
 - [x] 전략 페이지 (백테스트 성적표 + 실시간 조건 패널)
+- [x] 전략 실험실 (켈트너 + 비교용 후보 7종, 심볼×시간대별 성적 비교)
 - [ ] 실계좌 자동매매 + 리스크 관리 강화 (일일 손실 한도 킬스위치와 SL/TP
       체결 반영은 이미 있음 — 실계좌 전환 전에는 반드시 오래 테스트넷으로
       먼저 검증하고, API 키 권한/IP 제한을 다시 확인할 것)

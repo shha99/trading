@@ -95,7 +95,48 @@ def _to_dataframe(raw: list[list]) -> pd.DataFrame | None:
     df = df.set_index("OpenTime")
     for col in _REQUIRED_COLUMNS:
         df[col] = df[col].astype(float)
-    return df[_REQUIRED_COLUMNS].sort_index()
+    return sanitize_klines(df[_REQUIRED_COLUMNS].sort_index())
+
+
+_WICK_FACTOR = 1.5  # 이 배수를 넘는 고가/저가는 "명백히 깨진 값"으로 간주해 보정한다.
+
+
+def sanitize_klines(df: pd.DataFrame) -> pd.DataFrame:
+    """바이낸스 테스트넷 과거 K라인에 간헐적으로 섞여 나오는 명백히 깨진 고가/저가를 보정한다.
+
+    실제로 관측된 사례(테스트넷 히스토리에서만 나타남, 실계좌에서는 보고된 바 없음):
+    ETHUSDT 1일봉에서 Open/Low/Close는 전부 ~2,500대인데 High만 104,454.9로 찍힌다거나,
+    BTCUSDT 1일봉에서 Low가 100~150까지 떨어졌다가 바로 다음 값이 정상으로 돌아오는 식이다.
+    실제 가격이 한 캔들 안에서 시가/종가 대비 이 정도(수십~수백 배)로 벌어지는 일은 없으므로,
+    `_WICK_FACTOR`(1.5배)를 넘는 High/Low는 스파이크로 보고 나머지 세 값(Open/Low/Close 혹은
+    Open/High/Close) 중 가장 근접한 값으로 눌러준다. 실제 변동성이 큰 정상 캔들(예: 하루에
+    20% 넘게 움직인 캔들)도 시가/종가 대비 고가·저가 차이가 이 배수 근처까지 가는 일은
+    없어 오탐 위험은 낮다. ATR/EMA 등 모든 지표와 백테스트가 이 함수를 거친 데이터로만
+    계산되도록 `_to_dataframe()`에서 한 번만 호출한다(라이브 조회·백테스트 조회 모두
+    `fetch_klines()`를 거치므로 자동으로 적용됨).
+    """
+    if df.empty:
+        return df
+    o, h, l, c = df["Open"], df["High"], df["Low"], df["Close"]
+    safe_high = pd.concat([o, l, c], axis=1).max(axis=1)
+    safe_low = pd.concat([o, h, c], axis=1).min(axis=1)
+
+    bad_high = h > safe_high * _WICK_FACTOR
+    bad_low = safe_low > l * _WICK_FACTOR
+
+    if not bad_high.any() and not bad_low.any():
+        return df
+
+    out = df.copy()
+    if bad_high.any():
+        n = int(bad_high.sum())
+        logger.warning("klines 스파이크 %d건 보정 (High 이상치) - %s", n, list(df.index[bad_high][:5]))
+        out.loc[bad_high, "High"] = safe_high[bad_high]
+    if bad_low.any():
+        n = int(bad_low.sum())
+        logger.warning("klines 스파이크 %d건 보정 (Low 이상치) - %s", n, list(df.index[bad_low][:5]))
+        out.loc[bad_low, "Low"] = safe_low[bad_low]
+    return out
 
 
 def is_candle_closed(df: pd.DataFrame, interval: str) -> bool:
