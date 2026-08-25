@@ -25,11 +25,15 @@ from app.config import settings
 from app.db import SessionLocal, SignalRecord, TradeRecord, init_db
 from app.history import is_candle_closed
 from app.indicator_catalog import build_catalog, compute_indicator
-from app.lab_stats_builder import LAB_STATS_FILE, catalog as lab_catalog
+from app.lab_stats_builder import LAB_STATS_FILE
+from app.lab_stats_builder import build_all as build_lab_stats
+from app.lab_stats_builder import catalog as lab_catalog
 from app.live_feed import get_live_feed
 from app.position_manager import check_time_stops, reconcile_open_positions
 from app.risk import is_kill_switch_active, todays_realized_pnl_usdt
 from app.signal_engine import run_once
+from app.stats_builder import STATS_FILE
+from app.stats_builder import build_all as build_strategy_stats
 from app.strategy import KeltnerReclaimStrategy
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -56,12 +60,28 @@ app.add_middleware(
 _scheduler: BackgroundScheduler | None = None
 
 
+def _build_missing_stats_in_background() -> None:
+    """`/strategy`, `/lab` 페이지용 성적표가 아직 없으면 백그라운드에서 생성한다.
+
+    로컬 개발에서는 `build_stats.py`/`build_lab_stats.py`를 미리 수동으로 돌려두지만,
+    (Render 등에) 처음 배포한 서버는 이 파일들이 아예 없는 상태로 뜬다 — 매번 셸에 들어가
+    스크립트를 돌리지 않아도 되도록, 서버가 뜰 때 파일이 없으면 알아서 한 번 만든다.
+    몇 분 걸릴 수 있어 별도 스레드에서 실행하고, 끝나기 전까지 두 페이지는 "아직 계산되지
+    않았다"는 안내만 보여준다(기존 API가 이미 그렇게 처리하고 있음).
+    """
+    if not STATS_FILE.exists():
+        threading.Thread(target=build_strategy_stats, daemon=True).start()
+    if not LAB_STATS_FILE.exists():
+        threading.Thread(target=build_lab_stats, daemon=True).start()
+
+
 @app.on_event("startup")
 async def on_startup() -> None:
     init_db()
     _start_scheduler()
     threading.Thread(target=run_once, daemon=True).start()
     get_live_feed().start()
+    _build_missing_stats_in_background()
 
 
 @app.on_event("shutdown")
