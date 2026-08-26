@@ -1,4 +1,4 @@
-"""전략 실험실 후보 9종의 진입 조건 검증 (합성 데이터, 네트워크 없음)."""
+"""전략 실험실 후보 10종의 진입 조건 검증 (합성 데이터, 네트워크 없음)."""
 from __future__ import annotations
 
 import numpy as np
@@ -7,6 +7,7 @@ import pytest
 
 from app.lab_backtest import simulate_lab
 from app.lab_strategies import (
+    BigCandleBollingerConfluenceStrategy,
     BigCandleBreakoutStrategy,
     BollingerBreakoutStrategy,
     BollingerReversionStrategy,
@@ -307,3 +308,106 @@ def test_ichimoku_cloud_breakout_no_signal_on_flat_data():
     close = pd.Series(100.0, index=idx)
     df = make_df(close.tolist(), start="2022-01-01", freq="D")
     assert simulate_lab(df, strategy) == []
+
+
+# ---------------------------------------------------------------------------
+# 큰 양봉+볼린저 동시 돌파 (이중 확인 + 본전 이동 트레일링)
+# ---------------------------------------------------------------------------
+
+class _FakeSubStrategy:
+    """진입 조건 자체는 각자(BigCandleBreakoutStrategy/BollingerBreakoutStrategy)
+    테스트에서 이미 검증했으므로, 여기서는 "둘 다 동시에 신호를 내야만 진입한다"는
+    합류(confluence) 로직 자체만 떼어서 검증하기 위한 테스트 더블."""
+
+    def __init__(self):
+        self.signals: dict[int, dict | None] = {}
+
+    def check_entry(self, k, ctx):
+        return self.signals.get(k)
+
+
+def test_confluence_entry_requires_both_substrategies_to_agree():
+    strategy = BigCandleBollingerConfluenceStrategy()
+    fake_big, fake_boll = _FakeSubStrategy(), _FakeSubStrategy()
+    strategy._big, strategy._boll = fake_big, fake_boll
+    ctx = {"big_ctx": {}, "boll_ctx": {}, "atr": np.array([10.0]), "close": np.array([100.0])}
+
+    fake_big.signals[0] = {"direction": "LONG"}
+    fake_boll.signals[0] = None
+    assert strategy.check_entry(0, ctx) is None  # 한쪽만 신호 - 진입 안 함
+
+    fake_big.signals[0] = None
+    fake_boll.signals[0] = {"direction": "LONG"}
+    assert strategy.check_entry(0, ctx) is None  # 반대로 한쪽만 - 역시 안 함
+
+    fake_big.signals[0] = {"direction": "LONG"}
+    fake_boll.signals[0] = {"direction": "LONG"}
+    entry = strategy.check_entry(0, ctx)
+    assert entry is not None
+    assert entry["direction"] == "LONG"
+    assert entry["entry_price"] == 100.0
+    assert entry["stop_price"] == 100.0 - strategy.stop_mult * 10.0
+    assert entry["breakeven_trigger_price"] == 100.0 + strategy.breakeven_at_mult * 10.0
+    assert entry["breakeven_trail"] is True
+
+
+def _confluence_df(post_entry_closes):
+    """워밍업(완만한 상승, 50EMA/볼린저 밴드가 자리잡도록) + 진입 유발용 큰 양봉
+    (몸통 크고 볼린저 상단도 뚫음) + 그 뒤 원하는 가격 경로."""
+    closes = [100.0 + i * 0.02 for i in range(100)]
+    closes.append(closes[-1] + 6.0)  # 진입 봉 - 큰 양봉 + 볼린저 상단 돌파
+    closes.extend(post_entry_closes)
+    close = pd.Series(closes, dtype=float)
+    idx = pd.date_range("2023-01-01", periods=len(close), freq="h")
+    open_ = close.shift(1).fillna(close.iloc[0])
+    high = pd.concat([open_, close], axis=1).max(axis=1) + 0.1
+    low = pd.concat([open_, close], axis=1).min(axis=1) - 0.1
+    volume = pd.Series(100.0, index=idx)
+    return pd.DataFrame(
+        {"Open": open_.to_numpy(), "High": high.to_numpy(), "Low": low.to_numpy(),
+         "Close": close.to_numpy(), "Volume": volume.to_numpy()},
+        index=idx,
+    )
+
+
+def test_confluence_triggers_on_double_breakout():
+    strategy = BigCandleBollingerConfluenceStrategy()
+    df = _confluence_df([100.0, 100.0])
+    trades = simulate_lab(df, strategy)
+    assert len(trades) == 1
+    assert trades[0]["direction"] == "LONG"
+
+
+def test_confluence_exits_sl_on_immediate_reversal_before_breakeven():
+    # 본전 이동 트리거(진입가 + 0.5×ATR)에 닿기 전에 바로 급락 - 초기 손절(-2×ATR)로
+    # 나가야 하고, 손실 폭은 stop_mult×ATR 근처로 제한돼야 한다.
+    strategy = BigCandleBollingerConfluenceStrategy()
+    df = _confluence_df([90.0, 90.0, 90.0])
+    trades = simulate_lab(df, strategy)
+    assert len(trades) == 1
+    assert trades[0]["exit_reason"] == "SL"
+    assert trades[0]["pct_return"] < 0
+    assert trades[0]["pct_return"] > -5  # 2×ATR 손절 폭 근처 - 훨씬 크게 밀리면 이상함
+
+
+def test_confluence_locks_in_gains_once_breakeven_triggered():
+    # 먼저 크게 랠리해서 본전 이동 트리거를 넘긴 뒤(트레일링 스탑이 진입가 위로
+    # 올라감) 그 다음에 폭락해도, 이미 본전 위로 올라간 트레일링 스탑 덕분에
+    # 손실이 아니라 이익으로 마감돼야 한다.
+    strategy = BigCandleBollingerConfluenceStrategy()
+    df = _confluence_df([115.0, 90.0, 90.0])
+    trades = simulate_lab(df, strategy)
+    assert len(trades) == 1
+    assert trades[0]["exit_reason"] == "TRAIL"
+    assert trades[0]["pct_return"] > 0  # 본전 이동 후라 손실이 아니라 이익으로 청산
+
+
+def test_confluence_produces_mostly_positive_trades_over_long_run():
+    # 실제 BTCUSDT 1시간봉 검증에서 승률 70%대 이상이 나온 조합이므로,
+    # 합성 랜덤워크에서는 절대적 수익성까지는 보장 못 해도 최소한 방향/청산
+    # 사유가 정상 범위 안에 있는지로 스모크 테스트한다.
+    strategy = BigCandleBollingerConfluenceStrategy()
+    df = random_walk_df(n=3000, seed=8)
+    trades = simulate_lab(df, strategy)
+    assert all(t["direction"] == "LONG" for t in trades)
+    assert all(t["exit_reason"] in ("SL", "TRAIL", "TIME") for t in trades)

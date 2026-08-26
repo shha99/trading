@@ -35,9 +35,9 @@ def patched_history(monkeypatch, tmp_path):
     return stats_file
 
 
-def test_build_all_includes_all_10_strategies(patched_history):
+def test_build_all_includes_all_11_strategies(patched_history):
     result = build_all(symbols=["TESTUSDT"], timeframes=["1h"])
-    assert len(result["catalog"]) == 10
+    assert len(result["catalog"]) == 11
     assert result["catalog"][0]["key"] == KeltnerReclaimStrategy.key
 
     by_strategy = result["stats"]["TESTUSDT"]["1h"]

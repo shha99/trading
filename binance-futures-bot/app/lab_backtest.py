@@ -83,6 +83,9 @@ def _walk_forward_exit(ctx: dict, index: pd.Index, entry_idx: int, entry: dict, 
     if entry.get("trailing"):
         return _walk_forward_trailing(ctx, entry_idx, direction, entry["trail_mult"], n)
 
+    if entry.get("breakeven_trail"):
+        return _walk_forward_breakeven_trail(ctx, entry_idx, entry, n)
+
     dynamic_stop_key = entry.get("dynamic_stop_key")
     stop_price = entry.get("stop_price")
     dynamic_target_key = entry.get("dynamic_target_key")
@@ -140,6 +143,53 @@ def _walk_forward_trailing(ctx: dict, entry_idx: int, direction: str, trail_mult
                 return "TRAIL", trail_level, j
 
     return "TRAIL", float(close[-1]), n - 1
+
+
+def _walk_forward_breakeven_trail(ctx: dict, entry_idx: int, entry: dict, n: int) -> tuple[str, float, int]:
+    """짧은 손절 + "본전 이동 후 트레일링" 청산 — 손실은 짧게 자르고 이익은 길게 태운다.
+
+    ① 진입 직후엔 고정 손절선(`stop_price`)만 있음.
+    ② 가격이 `breakeven_trigger_price`에 처음 닿으면 손절선을 진입가(본전)로 올린다
+       — 여기서부터는 최악이어도 손실이 0에 가깝다.
+    ③ 본전 이동 이후로는 고점(LONG)/저점(SHORT) - `trail_mult`×ATR 트레일링 스탑으로
+       계속 따라가며 추적 — 익절 상한을 두지 않고 추세가 이어지는 한 최대한 태운다.
+
+    (전략 실험실 조합 실험 - "큰 양봉 돌파"+"볼린저 돌파"가 같은 봉에서 동시에 롱
+    신호를 낼 때만 진입하는 `BigCandleBollingerConfluenceStrategy`가 이 청산 방식을 씀.
+    고정 익절을 쓰면 승률이 높아도 손절:익절 비율 때문에 기대값이 마이너스가 되는
+    문제가 있었는데, 이 방식으로 바꾸니 학습/검증 구간 양쪽에서 승률 70%대 이상과
+    플러스 기대값을 동시에 만족했다.)
+    """
+    high, low, close, atr_values = ctx["high"], ctx["low"], ctx["close"], ctx["atr"]
+    direction = entry["direction"]
+    entry_price = entry["entry_price"]
+    stop_price = entry["stop_price"]
+    trigger_price = entry["breakeven_trigger_price"]
+    trail_mult = entry["trail_mult"]
+    moved_to_breakeven = False
+    extreme = high[entry_idx] if direction == "LONG" else low[entry_idx]
+
+    for j in range(entry_idx + 1, n):
+        if direction == "LONG":
+            extreme = max(extreme, high[j])
+            if not moved_to_breakeven and high[j] >= trigger_price:
+                moved_to_breakeven = True
+                stop_price = entry_price
+            if moved_to_breakeven:
+                stop_price = max(stop_price, extreme - trail_mult * atr_values[j])
+            if low[j] <= stop_price:
+                return ("TRAIL" if moved_to_breakeven else "SL"), stop_price, j
+        else:
+            extreme = min(extreme, low[j])
+            if not moved_to_breakeven and low[j] <= trigger_price:
+                moved_to_breakeven = True
+                stop_price = entry_price
+            if moved_to_breakeven:
+                stop_price = min(stop_price, extreme + trail_mult * atr_values[j])
+            if high[j] >= stop_price:
+                return ("TRAIL" if moved_to_breakeven else "SL"), stop_price, j
+
+    return "TIME", float(close[-1]), n - 1
 
 
 def summarize_lab(trades: list[dict]) -> dict:

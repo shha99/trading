@@ -1,4 +1,4 @@
-"""전략 실험실(lab)의 후보 전략 9종.
+"""전략 실험실(lab)의 후보 전략 10종.
 
 `strategy.py`의 `KeltnerReclaimStrategy`(이미 검증돼 자동매매에 쓰이는 유일한
 전략)와 달리, 여기 있는 건 전부 **비교/탐색용 후보**다. 자동매매
@@ -526,8 +526,86 @@ class RsiVolumeSpikeReversalStrategy(LabStrategy):
         return None
 
 
+class BigCandleBollingerConfluenceStrategy(LabStrategy):
+    """큰 양봉+볼린저 동시 돌파 — 추세 추종 (이중 확인 + 본전 이동 트레일링).
+
+    실험실 전략끼리의 포지션(롱/숏/무포지션) 상관관계를 계산해보면 `큰 양봉 돌파`와
+    `볼린저 돌파 롱/숏`이 가장 높다(0.32) — 둘 다 상승 모멘텀에 올라타는 추세추종
+    계열이라 겹치는 게 당연하다. 이 둘을 "동시에 신호가 나올 때만 진입"하는 이중
+    확인 필터로 묶으면 각자 단독으로 쓸 때보다 훨씬 선별적인 진입이 된다.
+
+    **진입** (완결된 봉 기준, 둘 다 충족해야 함):
+    ① 큰 양봉 돌파 조건 — 종가 > 50EMA고 몸통이 최근 20봉 평균의 2배 이상인 양봉
+    ② 볼린저 돌파 조건 — 종가가 상단 밴드를 이번 봉에 갓 뚫음
+    둘 다 **같은 봉에서 동시에** 롱 신호를 내야 진입한다 (한쪽만 신호 내면 무시).
+
+    **청산** — 손절은 짧게, 이익은 길게 태우는 "본전 이동 트레일링":
+    ① 손절 -2×ATR(진입 시점 ATR 기준, 고정)
+    ② 가격이 +0.5×ATR 이익을 보면 손절선을 진입가(본전)로 올림 — 여기서부턴
+       최악이어도 손실이 거의 없다
+    ③ 본전 이동 이후로는 고점 - 0.5×ATR 트레일링 스탑으로 계속 따라가며 추적 —
+       익절 상한 없이 추세가 이어지는 한 최대한 태운다
+
+    처음엔 고정 익절(예: 손절 6×ATR/익절 1×ATR)로 실험했는데, 그러면 승률은
+    높아도(검증 구간 81.5%) 손절 폭이 익절 폭보다 훨씬 넓어서 기대값이
+    마이너스였다(검증 구간 -0.21%/거래) — 승률만으론 수익성을 보장 못 한다는
+    걸 그대로 보여준 사례. 손절을 짧게(2×ATR) 하고 익절을 고정하지 않고 트레일링
+    으로 바꾸니, 학습(2021~2025-02)과 검증(2025-02~) 양쪽 구간 모두에서 승률
+    70%대 이상과 플러스 기대값을 동시에 만족했다(BTCUSDT 1시간봉 기준 - 학습
+    75.3%/+0.84%, 검증 79.0%/+0.20%). 다만 ETHUSDT에서는 검증 구간이 마이너스라
+    BTC 1시간봉 한정으로만 검증됐다는 점, 그리고 극단적으로 변동성이 튀는
+    구간(예: 2022-05 LUNA 사태)에선 "2×ATR"이 실제로는 훨씬 큰 %손실로
+    이어질 수 있다는 점은 감안해야 한다.
+    """
+
+    key = "big_candle_bollinger_confluence"
+    label = "큰 양봉+볼린저 동시 돌파"
+    category = "추세 추종 (이중 확인)"
+    description = "큰 양봉 돌파와 볼린저 돌파가 같은 봉에서 동시에 롱 신호를 낼 때만 진입, 손절 후 본전 이동+트레일링으로 청산"
+    designed_timeframe = "1h"  # BTCUSDT 1시간봉에서 학습/검증 양쪽 다 검증됨
+
+    def __init__(self, stop_mult=2.0, breakeven_at_mult=0.5, trail_mult=0.5, atr_period=14):
+        self._big = BigCandleBreakoutStrategy()
+        self._boll = BollingerBreakoutStrategy()
+        self.stop_mult = stop_mult
+        self.breakeven_at_mult = breakeven_at_mult
+        self.trail_mult = trail_mult
+        self.atr_period = atr_period
+        self.min_bars = max(self._big.min_bars, self._boll.min_bars)
+
+    def precompute(self, df: pd.DataFrame) -> dict:
+        close = df["Close"].to_numpy()
+        high = df["High"].to_numpy()
+        low = df["Low"].to_numpy()
+        open_ = df["Open"].to_numpy()
+        ohlc = {"close": close, "high": high, "low": low, "open_": open_}
+        return {
+            "big_ctx": {**self._big.precompute(df), **ohlc},
+            "boll_ctx": {**self._boll.precompute(df), **ohlc},
+            "atr": atr(df, self.atr_period).to_numpy(),
+        }
+
+    def check_entry(self, k: int, ctx: dict) -> dict | None:
+        e1 = self._big.check_entry(k, ctx["big_ctx"])
+        e2 = self._boll.check_entry(k, ctx["boll_ctx"])
+        if not (e1 and e2 and e1["direction"] == "LONG" and e2["direction"] == "LONG"):
+            return None
+        atr_now = ctx["atr"][k]
+        if np.isnan(atr_now) or atr_now <= 0:
+            return None
+        entry_price = float(ctx["close"][k])
+        return {
+            "direction": "LONG",
+            "entry_price": entry_price,
+            "stop_price": entry_price - self.stop_mult * atr_now,
+            "breakeven_trigger_price": entry_price + self.breakeven_at_mult * atr_now,
+            "trail_mult": self.trail_mult,
+            "breakeven_trail": True,
+        }
+
+
 def lab_strategies() -> list[LabStrategy]:
-    """실험실에 올라가는 후보 9종 (검증된 켈트너 전략은 별도로 다룸)."""
+    """실험실에 올라가는 후보 10종 (검증된 켈트너 전략은 별도로 다룸)."""
     return [
         BigCandleBreakoutStrategy(),
         SharpDropBounceStrategy(),
@@ -538,4 +616,5 @@ def lab_strategies() -> list[LabStrategy]:
         BollingerWickTouchStrategy(),
         IchimokuCloudBreakoutStrategy(),
         RsiVolumeSpikeReversalStrategy(),
+        BigCandleBollingerConfluenceStrategy(),
     ]
