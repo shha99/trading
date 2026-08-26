@@ -139,8 +139,8 @@ def sanitize_klines(df: pd.DataFrame) -> pd.DataFrame:
     return _sanitize_neighbor_outliers(out)
 
 
-_NEIGHBOR_FACTOR = 20  # 최근 봉 사이 "평소 변동폭"의 이 배수를 넘으면 캔들 전체를 의심한다.
-_NEIGHBOR_WINDOW = 61  # 기준으로 삼을 과거 봉 개수 (일부가 깨져 있어도 중앙값이 버티도록 넉넉히)
+_NEIGHBOR_FACTOR = 20  # 주변 봉 사이 "평소 변동폭"의 이 배수를 넘으면 캔들 전체를 의심한다.
+_NEIGHBOR_WINDOW = 31  # 기준으로 삼을 대칭(전후) 봉 개수 (일부가 깨져 있어도 중앙값이 버티도록)
 
 
 def _sanitize_neighbor_outliers(df: pd.DataFrame) -> pd.DataFrame:
@@ -154,20 +154,45 @@ def _sanitize_neighbor_outliers(df: pd.DataFrame) -> pd.DataFrame:
     네 값 자기들끼리는 "비율상" 1.5배를 안 넘어서 통과해버리지만, 1분 만에 BTC가 이렇게
     움직이는 건 불가능하다.
 
-    그래서 최근 `_NEIGHBOR_WINDOW`개 봉의 "봉 사이 평소 변동폭"(종가 차이의 중앙값)을
-    구해두고, 이번 봉의 시가/고가/저가/종가 중 하나라도 최근 종가 중앙값(둘 다 중앙값이라
-    일부 봉이 이미 깨져 있어도 안 흔들림)에서 그 평소 변동폭의 `_NEIGHBOR_FACTOR`배
-    이상 벗어나면 캔들 전체를 의심해 직전까지의 기준가로 된 도지(납작한) 캔들로
-    바꿔치기한다. 시간대(1분봉이든 1일봉이든)마다 "평소 변동폭"이 다르므로 배율 기준을
-    쓰면 자동으로 스케일이 맞는다 — 예컨대 정상적인 하루 20% 등락도 그 시간대의 평소
-    변동폭 대비로는 이 배수 근처도 안 가서 오탐이 없다.
+    그래서 이번 봉을 **가운데에 둔** 앞뒤 `_NEIGHBOR_WINDOW`개 봉의 종가로 기준가(중앙값)를
+    구하고, "봉 하나가 평소에 움직이는 폭"은 **true range**(고가-저가, 직전 종가 대비
+    고가·저가 차이 중 최댓값 - ATR 계산에 쓰는 것과 같은 정의)의 중앙값으로 잡는다.
+    이번 봉의 시가/고가/저가/종가 중 하나라도 그 기준가에서 이 평소 변동폭의
+    `_NEIGHBOR_FACTOR`배 이상 벗어나면 캔들 전체를 의심해 기준가로 된 도지(납작한)
+    캔들로 바꿔치기한다. 전부 중앙값이라 그 구간 안에 깨진 봉이 몇 개 섞여 있어도
+    (과반수만 아니면) 흔들리지 않는다.
+
+    **과거(직전 봉만) 기준이 아니라 전후 대칭 윈도로 잡는 이유**: 처음엔 직전 다수
+    봉만 봤는데, 실제로 몇 시간에 걸쳐 완만하게(하지만 정상적으로) 가격이 움직이는
+    구간에서 오탐이 났다 — 예: 15분봉이 5시간 동안 64,200→63,500으로 자연스럽게
+    흘러내리는 중, "그보다 훨씬 이전(가운데 기준 61봉 전)의 중앙값"과 비교하면 추세
+    막바지 봉들이 그 오래된 기준가에서 멀어져 보여 오탐이 발생했다. 대칭(앞뒤)
+    윈도로 바꾸면 진행 중인 추세도 "지금 이 근방"의 가격 수준을 따라가서 오탐이
+    없어지고, 반대로 실제 깨진 봉(주변 몇 분만 뜬금없이 튀었다가 되돌아오는 것)은
+    앞뒤 어느 쪽으로 봐도 여전히 두드러져 그대로 잡힌다.
+
+    **"평소 변동폭"을 종가 차이가 아니라 true range로 잡는 이유**: 처음엔 종가끼리의
+    차이(중앙값)를 썼는데, 아주 조용한(횡보) 구간에서 또 오탐이 났다 — 종가는
+    거의 안 움직이는데(예: 1~2틱) 정상적인 캔들 하나의 고가/저가 꼬리는 그보다 훨씬
+    크게(예: 종가 변동의 수십 배) 벌어지는 게 흔해서, 종가 차이를 기준 삼으면 평범한
+    꼬리조차 "평소보다 수십 배"로 보여 잘못 걸렸다. true range(캔들 안에서 실제로
+    움직인 폭)를 기준으로 삼으면 꼬리 자체의 정상적인 크기가 이미 반영돼 있어 오탐이
+    없어진다.
+
+    시간대(1분봉이든 1일봉이든)마다 "평소 변동폭"이 다르므로 배율 기준을 쓰면 자동으로
+    스케일이 맞는다 — 예컨대 정상적인 하루 20% 등락도 그 시간대의 평소 변동폭 대비로는
+    이 배수 근처도 안 가서 오탐이 없다.
     """
-    if len(df) < 10:
+    if len(df) < _NEIGHBOR_WINDOW:
         return df
     o, h, l, c = df["Open"], df["High"], df["Low"], df["Close"]
 
-    ref = c.rolling(_NEIGHBOR_WINDOW, min_periods=10).median().shift(1)
-    typical_move = c.diff().abs().rolling(_NEIGHBOR_WINDOW, min_periods=10).median().shift(1)
+    half = _NEIGHBOR_WINDOW // 2
+    ref = c.rolling(_NEIGHBOR_WINDOW, center=True, min_periods=half + 1).median()
+
+    prev_close = c.shift(1)
+    true_range = pd.concat([h - l, (h - prev_close).abs(), (l - prev_close).abs()], axis=1).max(axis=1)
+    typical_move = true_range.rolling(_NEIGHBOR_WINDOW, center=True, min_periods=half + 1).median()
     typical_move = typical_move.where(typical_move > 0)  # 변동폭이 0이면 배율 기준이 무의미
 
     max_dev = pd.concat([(o - ref).abs(), (h - ref).abs(), (l - ref).abs(), (c - ref).abs()], axis=1).max(axis=1)

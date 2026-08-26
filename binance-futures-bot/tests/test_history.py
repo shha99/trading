@@ -109,6 +109,43 @@ def test_sanitize_klines_leaves_genuine_large_single_bar_move_untouched():
     pd.testing.assert_frame_equal(out, df)
 
 
+def test_sanitize_klines_leaves_quiet_period_normal_wicks_untouched():
+    # 실제 관측된 오탐 패턴: 종가끼리는 거의 안 움직이는 조용한(횡보) 구간에서도,
+    # 정상적인 캔들 하나의 고가/저가 꼬리는 종가 변동보다 훨씬 크게 벌어지는 게
+    # 흔하다 - "평소 변동폭"을 종가 차이로만 재면 이런 정상 꼬리조차 이상치로
+    # 오인한다. true range 기준으로 바꾼 뒤에는 그대로 통과해야 한다.
+    # (_NEIGHBOR_WINDOW=31이라 검사 자체가 돌아가려면 최소 31봉이 필요 - 실제
+    # 관측된 구간(17봉) 앞뒤를 같은 패턴의 조용한 봉으로 채워 32봉을 만든다.)
+    quiet = {"Open": 108000.0, "High": 108020.0, "Low": 108000.0, "Close": 108005.0}
+    real_rows = [
+        {"Open": 108006.3, "High": 108065.5, "Low": 108000.0, "Close": 108025.8},
+        {"Open": 108000.1, "High": 108087.6, "Low": 108000.0, "Close": 108001.0},
+        {"Open": 108001.0, "High": 108032.8, "Low": 108000.0, "Close": 108000.1},
+        {"Open": 108000.1, "High": 108024.6, "Low": 108000.0, "Close": 108000.0},
+        {"Open": 108000.0, "High": 108097.6, "Low": 108000.0, "Close": 108034.6},
+        {"Open": 108034.5, "High": 108231.0, "Low": 108018.3, "Close": 108069.1},
+        {"Open": 108068.7, "High": 108118.8, "Low": 108064.8, "Close": 108098.9},
+        {"Open": 108098.9, "High": 108247.5, "Low": 108000.0, "Close": 108091.8},
+        {"Open": 108086.4, "High": 108239.6, "Low": 108083.7, "Close": 108093.5},
+        {"Open": 108093.6, "High": 108135.4, "Low": 108084.7, "Close": 108085.6},
+        {"Open": 108084.8, "High": 108435.5, "Low": 108000.0, "Close": 108007.8},  # 가장 큰 꼬리
+        {"Open": 108007.7, "High": 108019.2, "Low": 108000.0, "Close": 108002.2},
+        {"Open": 108000.1, "High": 108127.0, "Low": 108000.0, "Close": 108003.7},
+        {"Open": 108003.7, "High": 108054.7, "Low": 108000.0, "Close": 108000.1},
+        {"Open": 108000.1, "High": 108203.2, "Low": 108000.0, "Close": 108000.2},
+        {"Open": 108010.7, "High": 108021.6, "Low": 108000.1, "Close": 108009.9},
+        {"Open": 108009.9, "High": 108043.9, "Low": 108000.1, "Close": 108007.1},
+    ]
+    rows = [dict(quiet) for _ in range(8)] + real_rows + [dict(quiet) for _ in range(7)]
+    for r in rows:
+        r["Volume"] = 100.0
+    idx = pd.date_range("2025-07-06 04:00:00", periods=len(rows), freq="15min")
+    df = pd.DataFrame(rows, index=idx)
+    assert len(df) >= 31
+    out = sanitize_klines(df)
+    pd.testing.assert_frame_equal(out, df)
+
+
 def test_sanitize_klines_short_series_skips_neighbor_check():
     # 10봉 미만이면 중앙값 기준 자체가 불안정하므로 이웃 봉 검사를 건너뛴다.
     df = _minute_df(n=5, seed=5)
