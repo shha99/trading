@@ -45,8 +45,8 @@ button.active { background: var(--accent); border-color: var(--accent); color: #
   flex-wrap: wrap;
 }
 .brand { font-size: 15px; margin: 0; white-space: nowrap; }
-.symbol-tabs, .timeframe-tabs { display: flex; gap: 4px; }
-.symbol-tabs button, .timeframe-tabs button { padding: 4px 10px; }
+.symbol-tabs, .timeframe-tabs, .strategy-tabs { display: flex; gap: 4px; }
+.symbol-tabs button, .timeframe-tabs button, .strategy-tabs button { padding: 4px 10px; }
 .strategy-link {
   margin-left: auto;
   color: var(--accent);

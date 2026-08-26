@@ -15,6 +15,8 @@
   grid-template-columns: repeat(4, 1fr);
   gap: 10px;
 }
+.condition-panel.single { grid-template-columns: 1fr; }
+.condition-card .condition-value.info-text { font-size: 13px; font-weight: 400; line-height: 1.6; }
 .condition-card {
   background: var(--bg-card);
   border: 1px solid var(--border);
@@ -68,6 +70,7 @@ table tr.selected { outline: 1px solid var(--accent); }
 @media (max-width: 900px) {
   .detail-columns, .signals-columns { grid-template-columns: 1fr; }
   .condition-panel { grid-template-columns: repeat(2, 1fr); }
+  .condition-panel.single { grid-template-columns: 1fr; }
 }
 
 .limitations-section {
