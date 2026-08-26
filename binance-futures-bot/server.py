@@ -60,6 +60,7 @@ app.add_middleware(
 )
 
 _scheduler: BackgroundScheduler | None = None
+_stats_refresh_lock = threading.Lock()
 
 
 def _build_missing_stats_in_background() -> None:
@@ -70,6 +71,9 @@ def _build_missing_stats_in_background() -> None:
     스크립트를 돌리지 않아도 되도록, 서버가 뜰 때 파일이 없으면 알아서 한 번 만든다.
     몇 분 걸릴 수 있어 별도 스레드에서 실행하고, 끝나기 전까지 두 페이지는 "아직 계산되지
     않았다"는 안내만 보여준다(기존 API가 이미 그렇게 처리하고 있음).
+
+    이건 "파일이 없을 때 한 번" 만이고, 계속 최신 상태로 유지하는 건
+    `_refresh_all_stats_in_background()`(주기적 재계산, 아래)가 맡는다.
     """
     if not STATS_FILE.exists():
         threading.Thread(target=build_strategy_stats, daemon=True).start()
@@ -79,6 +83,34 @@ def _build_missing_stats_in_background() -> None:
         # 15분/5분봉은 3년 이상 데이터를 받아와야 해서(특히 5분봉) 위 두 개보다
         # 오래 걸릴 수 있다 - 별도 스레드라 서버 기동 자체는 막지 않는다.
         threading.Thread(target=build_validated_lab_stats, daemon=True).start()
+
+
+def _refresh_all_stats() -> None:
+    """세 백테스트 성적표(켈트너/실험실 11종/검증된 2종)를 전부 다시 계산한다.
+
+    브라우저를 열어두지 않아도 서버 프로세스가 켜져 있는 동안은 스케줄러가
+    주기적으로(기본 24시간, `STATS_REFRESH_INTERVAL_HOURS`) 이 함수를 불러
+    스스로 최신 데이터로 갱신한다 - 사람이 페이지를 띄워놓거나 스크립트를
+    수동으로 돌릴 필요가 없다. 이전 갱신이 아직 끝나지 않았으면(특히 검증된
+    전략의 5분봉 백테스트는 몇 분씩 걸림) 겹쳐 돌지 않도록 건너뛴다.
+    """
+    if not _stats_refresh_lock.acquire(blocking=False):
+        logger.info("백테스트 성적표 정기 갱신 건너뜀 - 이전 갱신이 아직 진행 중")
+        return
+    try:
+        logger.info("백테스트 성적표 정기 갱신 시작")
+        build_strategy_stats()
+        build_lab_stats()
+        build_validated_lab_stats()
+        logger.info("백테스트 성적표 정기 갱신 완료")
+    except Exception:
+        logger.exception("백테스트 성적표 정기 갱신 실패 (다음 주기에 재시도)")
+    finally:
+        _stats_refresh_lock.release()
+
+
+def _refresh_all_stats_in_background() -> None:
+    threading.Thread(target=_refresh_all_stats, daemon=True).start()
 
 
 @app.on_event("startup")
@@ -119,10 +151,15 @@ def _start_scheduler() -> BackgroundScheduler:
         _position_watch_tick, trigger="interval", seconds=settings.position_watch_interval_seconds,
         id="position_watch", max_instances=1, coalesce=True,
     )
+    _scheduler.add_job(
+        _refresh_all_stats_in_background, trigger="interval", hours=settings.stats_refresh_interval_hours,
+        id="stats_refresh", max_instances=1, coalesce=True,
+    )
     _scheduler.start()
     logger.info(
-        "스케줄러 시작: 시그널 스캔 %d초, 포지션 점검 %d초 간격",
+        "스케줄러 시작: 시그널 스캔 %d초, 포지션 점검 %d초, 백테스트 성적표 갱신 %.1f시간 간격",
         settings.scan_interval_seconds, settings.position_watch_interval_seconds,
+        settings.stats_refresh_interval_hours,
     )
     return _scheduler
 

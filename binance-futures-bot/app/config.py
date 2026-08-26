@@ -82,6 +82,13 @@ class Settings:
     position_watch_interval_seconds: int = field(
         default_factory=lambda: int(os.getenv("POSITION_WATCH_INTERVAL_SECONDS", "300"))
     )
+    # /strategy, /lab 페이지의 백테스트 성적표(strategy_stats.json/lab_stats.json/
+    # validated_lab_stats.json) 3종을 브라우저를 안 열어놔도 서버가 스스로 주기적으로
+    # 다시 계산하는 간격. 서버 프로세스가 켜져 있는 동안만 동작한다(무료 플랜처럼
+    # 유휴 시 슬립하는 환경에서는 잠든 동안 갱신도 같이 멈춘다 - README 참고).
+    stats_refresh_interval_hours: float = field(
+        default_factory=lambda: float(os.getenv("STATS_REFRESH_INTERVAL_HOURS", "24"))
+    )
     cors_origins: list[str] = field(default_factory=lambda: _csv("CORS_ORIGINS", "*"))
 
     # --- 실시간 차트 대시보드 ---
