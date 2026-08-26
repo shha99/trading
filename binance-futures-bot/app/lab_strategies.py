@@ -1,4 +1,4 @@
-"""전략 실험실(lab)의 후보 전략 7종.
+"""전략 실험실(lab)의 후보 전략 8종.
 
 `strategy.py`의 `KeltnerReclaimStrategy`(이미 검증돼 자동매매에 쓰이는 유일한
 전략)와 달리, 여기 있는 건 전부 **비교/탐색용 후보**다. 자동매매
@@ -11,14 +11,15 @@ docstring에). 다른 값을 원하면 여기 상수만 바꾸면 된다.
 
 각 전략은 `precompute(df)`(지표를 벡터로 한 번만 계산)와
 `check_entry(k, ctx)`(봉 k에서 진입 신호 판정)만 구현하면 되고, 진입 이후
-청산(고정 손절/익절, 동적 밴드 익절, 트레일링 스탑, 시간손절)은
-`lab_backtest.py`가 공통으로 처리한다.
+청산(고정 손절/익절, 동적 밴드 익절, 동적 손절선, ATR 트레일링 스탑,
+시간손절)은 `lab_backtest.py`가 공통으로 처리한다.
 """
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
 
+from .custom_indicators import ichimoku
 from .indicators import atr, bollinger_bands, donchian, ema
 
 
@@ -386,8 +387,68 @@ class BollingerWickTouchStrategy(LabStrategy):
         return None
 
 
+class IchimokuCloudBreakoutStrategy(LabStrategy):
+    """이치모쿠 구름 돌파 — 추세 추종 (일목균형표).
+
+    교과서적인 이치모쿠 매매법을 그대로 따른다 — 전통적으로 쓰이는 5가지
+    확인 요소 중 핵심 3가지를 쓴다("미래 구름의 색"과 "구름 두께"는 판단이
+    다소 주관적이라 여기선 뺐다):
+
+    ① 종가가 구름(선행스팬A·B 중 더 높은/낮은 값)을 돌파
+    ② 전환선(단기, 9봉)이 기준선(중기, 26봉) 위/아래에 있어 모멘텀 방향 확인
+    ③ 후행스팬 확인 — 지금 종가가 26봉 전 종가보다 위/아래인지로 이중 확인
+
+    청산은 손절/익절 가격을 고정하지 않고, **기준선을 종가가 반대 방향으로
+    가로지르면** 청산하는 전통적인 "기준선 트레일" 방식을 쓴다 — 추세가
+    살아있는 한 계속 들고 가고, 추세가 꺾이는 시점(기준선 이탈)에 나온다.
+    """
+
+    key = "ichimoku_cloud_breakout"
+    label = "이치모쿠 구름 돌파"
+    category = "추세 추종 (일목균형표)"
+    description = "종가가 구름을 돌파 + 전환선/기준선 방향 확인 + 후행스팬 확인, 기준선을 종가가 반대로 가로지르면 청산"
+    designed_timeframe = "1d"  # 이치모쿠는 원래 일봉 기준으로 설계된 지표
+
+    def __init__(self, tenkan_period=9, kijun_period=26, senkou_b_period=52, displacement=26):
+        self.tenkan_period = tenkan_period
+        self.kijun_period = kijun_period
+        self.senkou_b_period = senkou_b_period
+        self.displacement = displacement
+        self.min_bars = max(tenkan_period, kijun_period, senkou_b_period + displacement) + 5
+
+    def precompute(self, df: pd.DataFrame) -> dict:
+        ich = ichimoku(df, self.tenkan_period, self.kijun_period, self.senkou_b_period, self.displacement)
+        senkou_a = ich["senkou_a"].to_numpy()
+        senkou_b = ich["senkou_b"].to_numpy()
+        return {
+            "tenkan": ich["tenkan"].to_numpy(),
+            "kijun": ich["kijun"].to_numpy(),
+            "cloud_top": np.fmax(senkou_a, senkou_b),
+            "cloud_bottom": np.fmin(senkou_a, senkou_b),
+        }
+
+    def check_entry(self, k: int, ctx: dict) -> dict | None:
+        if k < self.displacement:
+            return None
+        tenkan, kijun = ctx["tenkan"][k], ctx["kijun"][k]
+        cloud_top_prev, cloud_top_now = ctx["cloud_top"][k - 1], ctx["cloud_top"][k]
+        cloud_bottom_prev, cloud_bottom_now = ctx["cloud_bottom"][k - 1], ctx["cloud_bottom"][k]
+        if _isnan_any(tenkan, kijun, cloud_top_prev, cloud_top_now, cloud_bottom_prev, cloud_bottom_now):
+            return None
+        close = ctx["close"]
+        entry = float(close[k])
+        chikou_up = close[k] > close[k - self.displacement]
+        chikou_down = close[k] < close[k - self.displacement]
+
+        if close[k - 1] <= cloud_top_prev and close[k] > cloud_top_now and tenkan > kijun and chikou_up:
+            return {"direction": "LONG", "entry_price": entry, "dynamic_stop_key": "kijun"}
+        if close[k - 1] >= cloud_bottom_prev and close[k] < cloud_bottom_now and tenkan < kijun and chikou_down:
+            return {"direction": "SHORT", "entry_price": entry, "dynamic_stop_key": "kijun"}
+        return None
+
+
 def lab_strategies() -> list[LabStrategy]:
-    """실험실에 올라가는 후보 7종 (검증된 켈트너 전략은 별도로 다룸)."""
+    """실험실에 올라가는 후보 8종 (검증된 켈트너 전략은 별도로 다룸)."""
     return [
         BigCandleBreakoutStrategy(),
         SharpDropBounceStrategy(),
@@ -396,4 +457,5 @@ def lab_strategies() -> list[LabStrategy]:
         ResistanceBreakFailStrategy(),
         SupportHoldBreakStrategy(),
         BollingerWickTouchStrategy(),
+        IchimokuCloudBreakoutStrategy(),
     ]

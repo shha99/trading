@@ -77,24 +77,34 @@ def _walk_forward_exit(ctx: dict, index: pd.Index, entry_idx: int, entry: dict, 
     if entry.get("trailing"):
         return _walk_forward_trailing(ctx, entry_idx, direction, entry["trail_mult"], n)
 
-    stop_price = entry["stop_price"]
+    dynamic_stop_key = entry.get("dynamic_stop_key")
+    stop_price = entry.get("stop_price")
     dynamic_target_key = entry.get("dynamic_target_key")
     fixed_target = entry.get("target_price")
 
     for j in range(entry_idx + 1, n):
+        # 이동하는 선(예: 기준선)을 "종가"가 반대로 가로지르면 청산하는 방식
+        # (일목균형표 기준선 트레일 등) — 저가/고가로 찌르는 고정 손절과 달리
+        # 종가 기준이라 그 봉의 종가 자체를 청산가로 쓴다.
+        if dynamic_stop_key is not None:
+            stop_now = ctx[dynamic_stop_key][j]
+            if stop_now is not None and not np.isnan(stop_now):
+                if direction == "LONG" and close[j] < stop_now:
+                    return "SL", float(close[j]), j
+                if direction == "SHORT" and close[j] > stop_now:
+                    return "SL", float(close[j]), j
+        elif stop_price is not None:
+            if direction == "LONG" and low[j] <= stop_price:
+                return "SL", stop_price, j
+            if direction == "SHORT" and high[j] >= stop_price:
+                return "SL", stop_price, j
+
         target_now = ctx[dynamic_target_key][j] if dynamic_target_key else fixed_target
         target_valid = target_now is not None and not np.isnan(target_now)
-
-        if direction == "LONG":
-            if low[j] <= stop_price:
-                return "SL", stop_price, j
-            if target_valid and high[j] >= target_now:
-                return "TP", float(target_now), j
-        else:
-            if high[j] >= stop_price:
-                return "SL", stop_price, j
-            if target_valid and low[j] <= target_now:
-                return "TP", float(target_now), j
+        if direction == "LONG" and target_valid and high[j] >= target_now:
+            return "TP", float(target_now), j
+        if direction == "SHORT" and target_valid and low[j] <= target_now:
+            return "TP", float(target_now), j
 
         if time_stop_at is not None:
             ts = index[j]

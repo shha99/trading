@@ -1,4 +1,4 @@
-"""전략 실험실 후보 7종의 진입 조건 검증 (합성 데이터, 네트워크 없음)."""
+"""전략 실험실 후보 8종의 진입 조건 검증 (합성 데이터, 네트워크 없음)."""
 from __future__ import annotations
 
 import numpy as np
@@ -11,6 +11,7 @@ from app.lab_strategies import (
     BollingerBreakoutStrategy,
     BollingerReversionStrategy,
     BollingerWickTouchStrategy,
+    IchimokuCloudBreakoutStrategy,
     ResistanceBreakFailStrategy,
     SharpDropBounceStrategy,
     SupportHoldBreakStrategy,
@@ -151,3 +152,64 @@ def test_bollinger_wick_touch_produces_trades_over_long_run():
     trades = simulate_lab(df, strategy)
     assert len(trades) > 0
     assert all(t["direction"] in ("LONG", "SHORT") for t in trades)
+
+
+# ---------------------------------------------------------------------------
+# 이치모쿠 구름 돌파
+# ---------------------------------------------------------------------------
+
+def _consolidation_then_trend_df(n=400, trend_start=150, drift=0.9, seed=7):
+    """앞부분은 횡보(구름 안/근처)만 하다가, 중간부터 뚜렷한 추세가 붙는 데이터.
+
+    이치모쿠 구름 자체가 오랜 기간(선행스팬B 52봉 + 26봉 시프트)을 필요로
+    해서, 순수 랜덤워크 초반부는 구름값이 NaN이라 검증이 어렵다 - 횡보 뒤
+    추세가 붙는 구간을 만들어 "돌파 이벤트"가 스캔 구간 안에서 실제로
+    발생하도록 한다.
+    """
+    rng = np.random.default_rng(seed)
+    price = np.empty(n)
+    price[0] = 100.0
+    for i in range(1, n):
+        step = rng.normal(0, 0.8)
+        if i >= trend_start:
+            step += drift
+        price[i] = price[i - 1] + step
+    close = price
+    open_ = np.empty(n)
+    open_[0] = close[0]
+    open_[1:] = close[:-1]
+    high = np.maximum(open_, close) + np.abs(rng.normal(0.5, 0.3, n))
+    low = np.minimum(open_, close) - np.abs(rng.normal(0.5, 0.3, n))
+    idx = pd.date_range("2022-01-01", periods=n, freq="D")
+    volume = np.abs(rng.normal(1000, 200, n))
+    return pd.DataFrame({"Open": open_, "High": high, "Low": low, "Close": close, "Volume": volume}, index=idx)
+
+
+def test_ichimoku_cloud_breakout_triggers_long_on_uptrend_after_consolidation():
+    strategy = IchimokuCloudBreakoutStrategy()
+    df = _consolidation_then_trend_df(n=400, trend_start=150, drift=0.9, seed=7)
+    trades = simulate_lab(df, strategy)
+    assert len(trades) > 0
+    # 횡보->추세 전환 구간의 노이즈가 먼저 반대 방향의 짧은 신호를 낼 수도
+    # 있어서(실제로 이 seed에서도 그렇다), "언젠가 롱이 나오는지"로 검증한다
+    # - 실제 추세가 붙는 구간에서는 큰 폭의 롱 트레이드가 나온다.
+    assert any(t["direction"] == "LONG" for t in trades)
+    # 이 전략엔 고정/동적 익절이 없다 - 기준선을 종가가 반대로 가로지르면
+    # "SL"로 청산되거나, 데이터 끝까지 안 꺾이면 "TIME"으로 강제 마감된다.
+    assert all(t["exit_reason"] in ("SL", "TIME") for t in trades)
+
+
+def test_ichimoku_cloud_breakout_triggers_short_on_downtrend_after_consolidation():
+    strategy = IchimokuCloudBreakoutStrategy()
+    df = _consolidation_then_trend_df(n=400, trend_start=150, drift=-0.9, seed=11)
+    trades = simulate_lab(df, strategy)
+    assert len(trades) > 0
+    assert any(t["direction"] == "SHORT" for t in trades)
+
+
+def test_ichimoku_cloud_breakout_no_signal_on_flat_data():
+    strategy = IchimokuCloudBreakoutStrategy()
+    idx = pd.date_range("2022-01-01", periods=200, freq="D")
+    close = pd.Series(100.0, index=idx)
+    df = make_df(close.tolist(), start="2022-01-01", freq="D")
+    assert simulate_lab(df, strategy) == []
