@@ -63,18 +63,30 @@
 주문 실행까지 연결하려면 포지션을 주기적으로 감시하며 손절 주문을
 갱신하는 별도 루프가 추가로 필요하다(추후 작업).
 
+아래 수치는 켈트너 전략과 동일한 방식(학습 2021-07~2025-02 / 검증
+2025-02~현재, 5년 이상 전체 히스토리)으로 `app/validated_lab_stats_builder.py`
+가 계산해 `data/validated_lab_stats.json`에 저장한 공식 수치다
+(`python build_validated_lab_stats.py`로 재계산, `GET /api/lab/validated-stats`
+로 조회 가능) — `/lab` 카드에 뜨는 요약(짧은 기간/학습·검증 미분리)과는
+다를 수 있다.
+
 - **BTCUSDT 1시간봉**: `big_candle_bollinger_confluence`(큰 양봉+볼린저
-  동시 돌파, 본전 이동 트레일링 청산) — 학습 75.3%/+0.84%, 검증
-  79.0%/+0.20% (BTC 1시간봉 한정 검증, ETHUSDT 1시간봉 검증 구간은 마이너스).
+  동시 돌파, 본전 이동 트레일링 청산) — 788건, 학습(531건) 75.3%/+0.84%,
+  검증(257건) 79.0%/+0.20%. **ETHUSDT 1시간봉은 검증 구간이 마이너스**
+  (743건, 학습 75.9%/+0.79%, 검증 -0.11%)라 BTC 1시간봉 한정으로만 쓴다.
 - **BTCUSDT 15분봉·5분봉**: `bollinger_wick_breakeven_trail`(볼린저 꼬리터치
-  되돌림, 본전 이동 트레일링 청산) — 15분봉 학습 89.1%/+0.49%·검증
-  87.6%/+0.27%(7397건), 5분봉 학습 87.7%/+0.33%·검증 85.5%/+0.16%(18426건).
-  BTC뿐 아니라 **ETHUSDT로 교차검증**(같은 파라미터)도 15분봉
-  83.5%/+0.46%, 5분봉 81.3%/+0.26%로 견조해서, 콘플루언스 전략보다 훨씬
-  폭넓게 검증됐다. 다만 거래 표본이 수천~수만 건이라 "원금 100% 복리"로
-  계산하면 숫자가 비현실적으로 부풀므로, 실제로는 거래당 계좌 자본의
-  일부(1~5%)만 리스크에 거는 자금관리가 필수다 — 자세한 근거는
-  `app/lab_strategies.py`의 `BollingerWickBreakevenTrailStrategy` docstring.
+  되돌림, 본전 이동 트레일링 청산) — 전부 학습/검증 양쪽 다 견조:
+  - BTC 15분봉: 13,336건, 학습 90.2%/+1.31%, 검증 87.6%/+0.27%
+  - BTC 5분봉: 32,975건, 학습 85.1%/+0.52%, 검증 85.5%/+0.16%
+  - ETH 15분봉(교차검증): 12,304건, 학습 87.6%/+0.85%, 검증 83.1%/+0.40%
+  - ETH 5분봉(교차검증): 32,650건, 학습 87.3%/+0.30%, 검증 80.4%/+0.17%
+
+  BTC뿐 아니라 ETH·15분·5분봉·5년 이상 전체 구간에서 전부 학습/검증 둘 다
+  플러스라, 콘플루언스 전략보다 훨씬 폭넓게 검증됐다. 다만 거래 표본이
+  수만 건이라 "원금 100% 복리"로 계산하면 숫자가 비현실적으로 부풀므로,
+  실제로는 거래당 계좌 자본의 일부(1~5%)만 리스크에 거는 자금관리가
+  필수다 — 자세한 근거는 `app/lab_strategies.py`의
+  `BollingerWickBreakevenTrailStrategy` docstring.
 
 ### 청산 로직(본전 이동 트레일링) 스트레스 테스트
 
@@ -117,6 +129,7 @@ pytest                  # 전체 유닛 테스트 (네트워크 호출 없음)
 python backtest.py --symbol BTCUSDT --timeframe 1h --bars 1500   # 빠른 sanity check
 python build_stats.py      # 전략 페이지용 백테스트 성적표 생성 (몇 분 걸릴 수 있음, 아래 참고)
 python build_lab_stats.py  # 전략 실험실용 12종 성적표 생성
+python build_validated_lab_stats.py  # 검증된 2종의 학습/검증/연도별 성적 생성 (5분봉 포함이라 더 걸릴 수 있음)
 uvicorn server:app --reload --port 8300
 # http://localhost:8300      차트 대시보드
 # http://localhost:8300/strategy   전략 페이지
@@ -132,9 +145,12 @@ uvicorn server:app --reload --port 8300
 않았다"는 안내만 보인다. 서버가 켜져 있는 동안 다시 실행해도 안전하다.
 `build_lab_stats.py`도 같은 방식(`data/lab_stats.json`)이고, 전략이 12개라
 심볼×시간대 조합당 데이터를 한 번만 받아서 12개 전략에 재사용하므로
-`build_stats.py`보다 오래 걸리지 않는다.
+`build_stats.py`보다 오래 걸리지 않는다. `build_validated_lab_stats.py`는
+켈트너급 검증(학습/검증/연도별 분리)을 위해 15분·5분봉도 3년 이상(5분봉은
+사실상 전체 5년 이상) 데이터를 받아오므로 셋 중 가장 오래 걸린다(테스트넷
+기준 5분 안팎 확인).
 
-두 스크립트를 미리 안 돌려놔도 된다 — `server.py`가 켜질 때 이 두 파일이
+세 스크립트를 미리 안 돌려놔도 된다 — `server.py`가 켜질 때 이 파일들이
 없으면 백그라운드 스레드에서 알아서 만든다(완성 전까지 `/strategy`,
 `/lab`은 "아직 계산되지 않았다"는 안내만 보여줌). 배포 환경처럼 셸에
 직접 못 들어가는 곳에서도 신경 쓸 필요 없게 하기 위함.
@@ -225,6 +241,7 @@ server.py              FastAPI + 스케줄러(시그널 스캔/포지션 점검)
 backtest.py             켈트너 전략 단독 백테스트 (sanity check / stats_builder·lab_stats_builder가 재사용)
 build_stats.py          심볼×시간대 백테스트 성적표 재계산 CLI (app/stats_builder.py 실행)
 build_lab_stats.py      전략 실험실 12종 성적표 재계산 CLI (app/lab_stats_builder.py 실행)
+build_validated_lab_stats.py  검증된 2종의 학습/검증/연도별 성적 재계산 CLI (app/validated_lab_stats_builder.py 실행)
 app/
   config.py              설정 (심볼/시간대/화이트리스트/리스크/키/백테스트 구간)
   binance_client.py       바이낸스 선물 클라이언트 (testnet 토글)
@@ -238,6 +255,7 @@ app/
   lab_strategies.py         전략 실험실 후보 11종 (켈트너 제외 - 비교/탐색용, 자동매매 대상 아님)
   lab_backtest.py           후보 11종 공용 백테스트 엔진 (롱/숏, 고정·동적·트레일링 청산, %수익률)
   lab_stats_builder.py      켈트너+후보11 = 12종의 심볼×시간대 성적 계산
+  validated_lab_stats_builder.py  켈트너급(학습/검증/연도별)으로 검증된 2종의 성적 계산
   signal_engine.py          시그널 감지 → 기록 → 알림 → (화이트리스트면) 자동매매
   notify.py                 텔레그램 알림
   broker.py                 주문 실행 (리스크 기반 수량 계산 + SL/TP 부착 + 상태 조회)
@@ -270,6 +288,8 @@ tests/                     pytest (전부 mock/합성 데이터, 실제 바이�
 **전략 실험실**
 - `GET /api/lab/strategies` — 12종 카탈로그(이름/카테고리/설명/설계 시간대)
 - `GET /api/lab/stats` — 심볼×시간대별 성적(`data/lab_stats.json`)
+- `GET /api/lab/validated-stats` — 켈트너급(학습/검증/연도별 분리)으로 검증된
+  2종의 성적(`data/validated_lab_stats.json`) — "시간대별 운용 방침" 참고
 
 **시그널/매매 (기존 MVP)**
 - `GET /api/health`, `GET /api/signals`, `GET /api/positions/open`,
