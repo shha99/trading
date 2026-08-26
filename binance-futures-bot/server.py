@@ -35,6 +35,8 @@ from app.signal_engine import run_once
 from app.stats_builder import STATS_FILE
 from app.stats_builder import build_all as build_strategy_stats
 from app.strategy import KeltnerReclaimStrategy
+from app.validated_lab_stats_builder import VALIDATED_STATS_FILE
+from app.validated_lab_stats_builder import build_all as build_validated_lab_stats
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -73,6 +75,10 @@ def _build_missing_stats_in_background() -> None:
         threading.Thread(target=build_strategy_stats, daemon=True).start()
     if not LAB_STATS_FILE.exists():
         threading.Thread(target=build_lab_stats, daemon=True).start()
+    if not VALIDATED_STATS_FILE.exists():
+        # 15분/5분봉은 3년 이상 데이터를 받아와야 해서(특히 5분봉) 위 두 개보다
+        # 오래 걸릴 수 있다 - 별도 스레드라 서버 기동 자체는 막지 않는다.
+        threading.Thread(target=build_validated_lab_stats, daemon=True).start()
 
 
 @app.on_event("startup")
@@ -341,6 +347,16 @@ def lab_stats() -> dict:
     if not LAB_STATS_FILE.exists():
         return {}
     return json.loads(LAB_STATS_FILE.read_text(encoding="utf-8"))
+
+
+@app.get("/api/lab/validated-stats")
+def validated_lab_stats() -> dict:
+    """켈트너 전략과 동급(학습/검증/연도별 분리)으로 검증된 lab 후보들의 성적
+    (big_candle_bollinger_confluence, bollinger_wick_breakeven_trail) - 여전히
+    비교/참고용이고 자동매매 엔진에는 연결돼 있지 않다."""
+    if not VALIDATED_STATS_FILE.exists():
+        return {}
+    return json.loads(VALIDATED_STATS_FILE.read_text(encoding="utf-8"))
 
 
 # --------------------------------------------------------------------------
