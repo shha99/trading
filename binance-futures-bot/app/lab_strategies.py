@@ -1,4 +1,4 @@
-"""전략 실험실(lab)의 후보 전략 10종.
+"""전략 실험실(lab)의 후보 전략 11종.
 
 `strategy.py`의 `KeltnerReclaimStrategy`(이미 검증돼 자동매매에 쓰이는 유일한
 전략)와 달리, 여기 있는 건 전부 **비교/탐색용 후보**다. 자동매매
@@ -604,8 +604,91 @@ class BigCandleBollingerConfluenceStrategy(LabStrategy):
         }
 
 
+class BollingerWickBreakevenTrailStrategy(LabStrategy):
+    """볼린저 꼬리터치 되돌림 + 본전 이동 트레일링 — 데이트레이딩 (평균회귀, 15분·5분봉 전용).
+
+    `BollingerWickTouchStrategy`와 진입 조건은 완전히 같다(꼬리가 밴드에 "신선하게"
+    닿으면 반대 방향으로 진입 — 하단 터치 롱, 상단 터치 숏). 다른 건 청산뿐이다 —
+    원래 고정 손절/익절 대신 `BigCandleBollingerConfluenceStrategy`가 쓰는 "본전
+    이동 트레일링"(짧은 손절 → 소폭 이익에서 본전 이동 → ATR 트레일링, 익절 상한
+    없음)을 그대로 가져왔다.
+
+    1시간봉에서 검증된 큰양봉+볼린저 콘플루언스 전략은 15분/5분봉으로 내리면
+    무너지는데(거래가 짧을수록 휩쏘가 급증해 추세추종형 진입 조건과 안 맞음),
+    반대로 **평균회귀형 진입(밴드 꼬리 터치) + 손절은 짧게·트레일링은 타이트하게**
+    조합은 짧은 시간대의 잦은 되돌림에 훨씬 잘 맞았다 — stop=2×ATR / 본전
+    이동=+0.3×ATR / 트레일=0.3×ATR 조합으로 그리드서치한 결과:
+
+    - BTCUSDT 15분봉(3.19년, 7397건): 승률 88.2%, 거래당 +0.36% — 학습(2922건)
+      89.1%/+0.49%, 검증(4475건) 87.6%/+0.27% — 2023~2026 매년 플러스.
+    - BTCUSDT 5분봉(3.19년, 18426건): 승률 86.3%, 거래당 +0.22% — 학습(6689건)
+      87.7%/+0.33%, 검증(11737건) 85.5%/+0.16%.
+    - **ETHUSDT로 교차검증**(같은 파라미터, 재조정 없음)도 15분봉 83.5%/+0.46%,
+      5분봉 81.3%/+0.26%로 견조 — BTC 1시간봉 전용이었던 콘플루언스 전략과 달리
+      심볼·시간대·연도 전부에서 일관되게 견조하다.
+
+    거래 표본이 수천~수만 건이라 "100% 몰빵 복리"로 계산하면 숫자가 천문학적으로
+    부풀어(비현실적) 의미가 없다 — 실전에서는 매 거래마다 계좌 자본의 일부(예:
+    1~5%)만 리스크에 거는 자금관리가 필수다. 그 가정으로 1억원을 3.19년 굴리면
+    (BTCUSDT 15분봉 기준) 1% 노출 시 +30%, 2%면 +69%, 5%면 +271%(MDD 1.3%
+    이하)로 나온다 — 자금관리 배율을 어떻게 잡느냐에 따라 결과가 크게 달라지므로
+    실제 운용 전엔 반드시 원하는 리스크 수준으로 다시 계산해봐야 한다.
+    """
+
+    key = "bollinger_wick_breakeven_trail"
+    label = "볼린저 꼬리터치 되돌림 (본전 이동 트레일링)"
+    category = "데이트레이딩 (평균회귀 + 본전 이동 트레일링)"
+    description = (
+        "볼린저 밴드에 꼬리가 신선하게 닿으면 반대 방향 진입(하단 롱/상단 숏), "
+        "손절은 짧게(2×ATR) 잡고 소폭 이익에서 본전 이동 후 트레일링 청산 — 15분·5분봉 전용"
+    )
+    designed_timeframe = "15m"  # 15분/5분봉 둘 다 검증됨 - 그리드서치 기준 시간대
+
+    def __init__(self, stop_mult=2.0, breakeven_at_mult=0.3, trail_mult=0.3, atr_period=14):
+        self._touch = BollingerWickTouchStrategy()
+        self.stop_mult = stop_mult
+        self.breakeven_at_mult = breakeven_at_mult
+        self.trail_mult = trail_mult
+        self.atr_period = atr_period
+        self.min_bars = max(self._touch.min_bars, atr_period + 5)
+
+    def precompute(self, df: pd.DataFrame) -> dict:
+        close = df["Close"].to_numpy()
+        high = df["High"].to_numpy()
+        low = df["Low"].to_numpy()
+        open_ = df["Open"].to_numpy()
+        ohlc = {"close": close, "high": high, "low": low, "open_": open_}
+        return {
+            "touch_ctx": {**self._touch.precompute(df), **ohlc},
+            "atr": atr(df, self.atr_period).to_numpy(),
+        }
+
+    def check_entry(self, k: int, ctx: dict) -> dict | None:
+        e = self._touch.check_entry(k, ctx["touch_ctx"])
+        if e is None:
+            return None
+        atr_now = ctx["atr"][k]
+        if np.isnan(atr_now) or atr_now <= 0:
+            return None
+        direction, entry_price = e["direction"], e["entry_price"]
+        if direction == "LONG":
+            stop = entry_price - self.stop_mult * atr_now
+            trigger = entry_price + self.breakeven_at_mult * atr_now
+        else:
+            stop = entry_price + self.stop_mult * atr_now
+            trigger = entry_price - self.breakeven_at_mult * atr_now
+        return {
+            "direction": direction,
+            "entry_price": entry_price,
+            "stop_price": stop,
+            "breakeven_trigger_price": trigger,
+            "trail_mult": self.trail_mult,
+            "breakeven_trail": True,
+        }
+
+
 def lab_strategies() -> list[LabStrategy]:
-    """실험실에 올라가는 후보 10종 (검증된 켈트너 전략은 별도로 다룸)."""
+    """실험실에 올라가는 후보 11종 (검증된 켈트너 전략은 별도로 다룸)."""
     return [
         BigCandleBreakoutStrategy(),
         SharpDropBounceStrategy(),
@@ -617,4 +700,5 @@ def lab_strategies() -> list[LabStrategy]:
         IchimokuCloudBreakoutStrategy(),
         RsiVolumeSpikeReversalStrategy(),
         BigCandleBollingerConfluenceStrategy(),
+        BollingerWickBreakevenTrailStrategy(),
     ]

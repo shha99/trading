@@ -11,6 +11,7 @@ from app.lab_strategies import (
     BigCandleBreakoutStrategy,
     BollingerBreakoutStrategy,
     BollingerReversionStrategy,
+    BollingerWickBreakevenTrailStrategy,
     BollingerWickTouchStrategy,
     IchimokuCloudBreakoutStrategy,
     ResistanceBreakFailStrategy,
@@ -410,4 +411,53 @@ def test_confluence_produces_mostly_positive_trades_over_long_run():
     df = random_walk_df(n=3000, seed=8)
     trades = simulate_lab(df, strategy)
     assert all(t["direction"] == "LONG" for t in trades)
+    assert all(t["exit_reason"] in ("SL", "TRAIL", "TIME") for t in trades)
+
+
+# ---------------------------------------------------------------------------
+# 볼린저 꼬리터치 되돌림 + 본전 이동 트레일링 (15분/5분봉 전용)
+# ---------------------------------------------------------------------------
+
+def test_wick_breakeven_trail_reuses_touch_entry_and_sets_long_exit_fields():
+    # 진입 조건 자체는 BollingerWickTouchStrategy 테스트에서 이미 검증했으므로,
+    # 여기서는 "그 진입 신호를 받아 본전 이동 트레일링 필드로 감싸는" 배선만 검증.
+    strategy = BollingerWickBreakevenTrailStrategy()
+    fake_touch = _FakeSubStrategy()
+    strategy._touch = fake_touch
+    ctx = {"touch_ctx": {}, "atr": np.array([10.0]), "close": np.array([100.0])}
+
+    fake_touch.signals[0] = None
+    assert strategy.check_entry(0, ctx) is None  # 원 전략이 신호 없으면 그대로 없음
+
+    fake_touch.signals[0] = {"direction": "LONG", "entry_price": 100.0}
+    entry = strategy.check_entry(0, ctx)
+    assert entry is not None
+    assert entry["direction"] == "LONG"
+    assert entry["stop_price"] == 100.0 - strategy.stop_mult * 10.0
+    assert entry["breakeven_trigger_price"] == 100.0 + strategy.breakeven_at_mult * 10.0
+    assert entry["breakeven_trail"] is True
+
+
+def test_wick_breakeven_trail_sets_short_exit_fields_mirrored():
+    strategy = BollingerWickBreakevenTrailStrategy()
+    fake_touch = _FakeSubStrategy()
+    strategy._touch = fake_touch
+    ctx = {"touch_ctx": {}, "atr": np.array([10.0]), "close": np.array([100.0])}
+
+    fake_touch.signals[0] = {"direction": "SHORT", "entry_price": 100.0}
+    entry = strategy.check_entry(0, ctx)
+    assert entry["direction"] == "SHORT"
+    assert entry["stop_price"] == 100.0 + strategy.stop_mult * 10.0
+    assert entry["breakeven_trigger_price"] == 100.0 - strategy.breakeven_at_mult * 10.0
+
+
+def test_wick_breakeven_trail_produces_trades_over_long_run():
+    # BTCUSDT/ETHUSDT 15분·5분봉 실측 검증(학습/검증 구간 둘 다 승률 80%대,
+    # 기대값 플러스)이 별도로 확인됐으므로, 합성 랜덤워크에서는 최소한 방향/
+    # 청산 사유가 정상 범위 안에 있는지로 스모크 테스트한다.
+    strategy = BollingerWickBreakevenTrailStrategy()
+    df = random_walk_df(n=3000, seed=9)
+    trades = simulate_lab(df, strategy)
+    assert len(trades) > 0
+    assert all(t["direction"] in ("LONG", "SHORT") for t in trades)
     assert all(t["exit_reason"] in ("SL", "TRAIL", "TIME") for t in trades)

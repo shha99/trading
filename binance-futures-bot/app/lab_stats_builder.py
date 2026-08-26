@@ -1,4 +1,4 @@
-"""전략 실험실(켈트너 1종 + 후보 10종 = 11종)의 심볼×시간대별 성적을
+"""전략 실험실(켈트너 1종 + 후보 11종 = 12종)의 심볼×시간대별 성적을
 계산해 data/lab_stats.json에 저장한다.
 
 기존 backtest.py(켈트너 전용, R-배수)와 lab_backtest.py(후보 10종, % 수익률)
@@ -110,7 +110,7 @@ def build_all(symbols: list[str] | None = None, timeframes: list[str] | None = N
         "stats": stats,
         "_meta": {
             "generated_at": datetime.now(timezone.utc).isoformat(),
-            "note": "켈트너 전략(#1)만 자동매매 화이트리스트 대상 - 나머지 7개는 비교용 후보임",
+            "note": "켈트너 전략(#1)만 자동매매 화이트리스트 대상 - 나머지 11개는 비교용 후보임",
         },
     }
 
