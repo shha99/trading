@@ -1,11 +1,15 @@
 """app/history.py의 캔들 스파이크 보정(sanitize_klines) 테스트.
 
-바이낸스 테스트넷 과거 K라인에서 실제로 관측된 패턴(정상적인 시가/저가/종가 사이에
-비정상적으로 큰 고가, 혹은 비정상적으로 작은 저가가 단일 캔들에 섞여 나오는 것)을
-재현해 보정 로직을 검증한다.
+바이낸스 테스트넷 과거 K라인에서 실제로 관측된 두 가지 패턴을 재현해 검증한다:
+1. 같은 캔들 안에서 고가/저가만 나머지 세 값 대비 비정상적으로 벌어진 경우
+   (예: ETHUSDT 1일봉 고가만 104,454.9).
+2. 시가/고가/저가/종가가 통째로 몇 분간 요동치는 경우(예: BTCUSDT 1분봉
+   2025-04-24 11:50~12:10 구간) - 캔들 자기 자신은 내부적으로 "일관"돼
+   보여서 1번 검사로는 못 잡는다.
 """
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 from app.history import sanitize_klines
@@ -52,3 +56,62 @@ def test_sanitize_klines_empty_df_returns_as_is():
     df = pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
     out = sanitize_klines(df)
     assert out.empty
+
+
+def _minute_df(n=120, seed=1, base=92000.0):
+    """실제 1분봉과 비슷한 규모의 변동(봉마다 ~0.05~0.2%)을 가진 합성 데이터."""
+    rng = np.random.default_rng(seed)
+    close = base + np.cumsum(rng.normal(0, base * 0.001, n))
+    rows = [{"Open": c, "High": c, "Low": c, "Close": c, "Volume": 1000.0} for c in close]
+    idx = pd.date_range("2025-01-01", periods=n, freq="min")
+    return pd.DataFrame(rows, index=idx)
+
+
+def test_sanitize_klines_catches_self_consistent_neighbor_outlier_cluster():
+    # 실제 관측된 패턴 재현: 캔들 자기 자신의 O/H/L/C끼리는 1.5배 안쪽이라
+    # 같은 캔들 검사(_WICK_FACTOR)로는 못 잡지만, 주변 봉(~92,000대) 대비로는
+    # 명백히 깨진 값들(47,000~138,000대)이 몇 분간 이어지는 상황.
+    df = _minute_df(n=120, seed=2)
+    bad_idx = df.index[60:70]
+    df.loc[bad_idx[0], ["Open", "High", "Low", "Close"]] = [93374.0, 97273.7, 80000.0, 97000.0]
+    df.loc[bad_idx[1], ["Open", "High", "Low", "Close"]] = [97000.0, 99999.0, 75601.3, 91996.8]
+    df.loc[bad_idx[2], ["Open", "High", "Low", "Close"]] = [70000.0, 110000.0, 60999.0, 92535.9]
+    df.loc[bad_idx[3], ["Open", "High", "Low", "Close"]] = [92590.0, 138000.0, 47000.0, 47000.0]
+    df.loc[bad_idx[4], ["Open", "High", "Low", "Close"]] = [47000.0, 138023.7, 47000.0, 92336.3]
+
+    out = sanitize_klines(df)
+    fixed = out.loc[bad_idx[:5]]
+    # 전부 주변 정상가(~92,000대) 근처로 눌려야 하고, 원래의 극단값이 남아있으면 안 된다
+    assert (fixed["High"] < 95000).all() and (fixed["Low"] > 88000).all()
+    assert fixed["High"].max() < 100000
+    # 오염 구간 바깥의 정상 캔들은 그대로여야 한다
+    untouched = df.index.difference(bad_idx[:5])
+    pd.testing.assert_frame_equal(out.loc[untouched], df.loc[untouched])
+
+
+def test_sanitize_klines_leaves_realistic_minute_volatility_untouched():
+    df = _minute_df(n=200, seed=3)
+    out = sanitize_klines(df)
+    pd.testing.assert_frame_equal(out, df)
+
+
+def test_sanitize_klines_leaves_genuine_large_single_bar_move_untouched():
+    # 평소 조용하다가 어느 한 봉에서 실제로 크게(그 시간대 평소 변동폭의
+    # 10배 정도로, _NEIGHBOR_FACTOR=20배에는 못 미치게) 움직인 경우는
+    # "이상치"로 보정하면 안 된다 - 실제 관측된 오염(수십~수백 배)과는
+    # 규모 자체가 다르다.
+    df = _minute_df(n=120, seed=4)
+    jump_idx = df.index[80]
+    prev_close = df.loc[df.index[79], "Close"]
+    jumped = prev_close * 1.01  # 이 합성 데이터의 평소 변동폭(~0.1%) 대비 10배 정도의 급등
+    df.loc[jump_idx, ["Open", "High", "Low", "Close"]] = [prev_close, jumped, prev_close, jumped]
+    out = sanitize_klines(df)
+    pd.testing.assert_frame_equal(out, df)
+
+
+def test_sanitize_klines_short_series_skips_neighbor_check():
+    # 10봉 미만이면 중앙값 기준 자체가 불안정하므로 이웃 봉 검사를 건너뛴다.
+    df = _minute_df(n=5, seed=5)
+    df.loc[df.index[2], ["Open", "High", "Low", "Close"]] = [92000.0, 92050.0, 91950.0, 92000.0]
+    out = sanitize_klines(df)
+    pd.testing.assert_frame_equal(out, df)

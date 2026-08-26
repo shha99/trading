@@ -125,7 +125,7 @@ def sanitize_klines(df: pd.DataFrame) -> pd.DataFrame:
     bad_low = safe_low > l * _WICK_FACTOR
 
     if not bad_high.any() and not bad_low.any():
-        return df
+        return _sanitize_neighbor_outliers(df)
 
     out = df.copy()
     if bad_high.any():
@@ -136,6 +136,54 @@ def sanitize_klines(df: pd.DataFrame) -> pd.DataFrame:
         n = int(bad_low.sum())
         logger.warning("klines 스파이크 %d건 보정 (Low 이상치) - %s", n, list(df.index[bad_low][:5]))
         out.loc[bad_low, "Low"] = safe_low[bad_low]
+    return _sanitize_neighbor_outliers(out)
+
+
+_NEIGHBOR_FACTOR = 20  # 최근 봉 사이 "평소 변동폭"의 이 배수를 넘으면 캔들 전체를 의심한다.
+_NEIGHBOR_WINDOW = 61  # 기준으로 삼을 과거 봉 개수 (일부가 깨져 있어도 중앙값이 버티도록 넉넉히)
+
+
+def _sanitize_neighbor_outliers(df: pd.DataFrame) -> pd.DataFrame:
+    """위(같은 캔들 안 고가/저가 비교)와 달리, **시가/종가 자체가 통째로 깨진** 경우를 잡는다.
+
+    실제로 관측된 사례: BTCUSDT 1분봉 2025-04-24 11:50~12:10 구간에서 정상가가
+    ~92,000대인데, 몇 분 간격으로 시가/고가/저가/종가가 전부 47,000/60,999/70,000/
+    92,590/110,000/138,000대를 오가며 요동친다 — 심지어 종가 자체가 다음 봉의 시가로
+    이어져서 오염이 연쇄된다. 위쪽 검사(같은 캔들의 고가 vs 나머지 세 값)는 이런 경우
+    상당수를 못 잡는다 — 예를 들어 시가 93,374/고가 97,273.7/저가 80,000/종가 97,000은
+    네 값 자기들끼리는 "비율상" 1.5배를 안 넘어서 통과해버리지만, 1분 만에 BTC가 이렇게
+    움직이는 건 불가능하다.
+
+    그래서 최근 `_NEIGHBOR_WINDOW`개 봉의 "봉 사이 평소 변동폭"(종가 차이의 중앙값)을
+    구해두고, 이번 봉의 시가/고가/저가/종가 중 하나라도 최근 종가 중앙값(둘 다 중앙값이라
+    일부 봉이 이미 깨져 있어도 안 흔들림)에서 그 평소 변동폭의 `_NEIGHBOR_FACTOR`배
+    이상 벗어나면 캔들 전체를 의심해 직전까지의 기준가로 된 도지(납작한) 캔들로
+    바꿔치기한다. 시간대(1분봉이든 1일봉이든)마다 "평소 변동폭"이 다르므로 배율 기준을
+    쓰면 자동으로 스케일이 맞는다 — 예컨대 정상적인 하루 20% 등락도 그 시간대의 평소
+    변동폭 대비로는 이 배수 근처도 안 가서 오탐이 없다.
+    """
+    if len(df) < 10:
+        return df
+    o, h, l, c = df["Open"], df["High"], df["Low"], df["Close"]
+
+    ref = c.rolling(_NEIGHBOR_WINDOW, min_periods=10).median().shift(1)
+    typical_move = c.diff().abs().rolling(_NEIGHBOR_WINDOW, min_periods=10).median().shift(1)
+    typical_move = typical_move.where(typical_move > 0)  # 변동폭이 0이면 배율 기준이 무의미
+
+    max_dev = pd.concat([(o - ref).abs(), (h - ref).abs(), (l - ref).abs(), (c - ref).abs()], axis=1).max(axis=1)
+    bad_candle = ref.notna() & typical_move.notna() & (max_dev > typical_move * _NEIGHBOR_FACTOR)
+
+    if not bad_candle.any():
+        return df
+
+    n = int(bad_candle.sum())
+    logger.warning("klines 스파이크 %d건 보정 (인접 봉 대비 통째로 이상치) - %s", n, list(df.index[bad_candle][:5]))
+    out = df.copy()
+    flat = ref[bad_candle]
+    out.loc[bad_candle, "Open"] = flat
+    out.loc[bad_candle, "High"] = flat
+    out.loc[bad_candle, "Low"] = flat
+    out.loc[bad_candle, "Close"] = flat
     return out
 
 
