@@ -1,0 +1,32 @@
+name: Keep Render service awake
+
+# Render 무료 플랜은 ~15분 동안 요청이 없으면 서버가 슬립 상태로 들어간다
+# (슬립 중엔 백테스트 자동 갱신 스케줄러도 같이 멈춘다 - README "웹 도메인으로
+# 배포하기" 참고). 이 워크플로는 그보다 짧은 주기로 배포된 사이트에 GET
+# 요청을 보내 계속 깨어있게 한다 - GitHub Actions 무료 실행 시간만 쓰고
+# 별도 가입/과금이 필요 없다.
+#
+# 한계 (알고 쓸 것):
+# - cron 스케줄은 분 단위로 정확히 맞지 않을 수 있다(GitHub 인프라 사정으로
+#   몇 분 지연될 수 있음) - 15분 슬립 타임아웃보다 충분히 짧은 10분 주기로
+#   여유를 둔 이유.
+# - GitHub는 저장소에 60일 이상 커밋이 없으면 스케줄 워크플로를 자동으로
+#   끈다 - 이 저장소에서 계속 작업 중이면 문제없지만, 오래 손 놓으면
+#   Settings > Actions에서 재활성화하거나 아무 커밋이나 하나 올리면 된다.
+# - 이 방식은 "슬립 방지"만 해결한다. Render 자체의 월 사용시간 한도는
+#   별개이니 최신 요금 정책은 Render 대시보드/요금 페이지에서 확인할 것.
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping deployed site
+        run: |
+          URL="${{ vars.RENDER_URL || 'https://binance-futures-bot-w5ei.onrender.com' }}"
+          echo "Pinging $URL"
+          curl -sS -o /dev/null -w "HTTP %{http_code}\n" --max-time 60 "$URL"
