@@ -56,6 +56,21 @@ def bollinger_bands(df: pd.DataFrame, period: int = 20, num_std: float = 2.0) ->
     return {"upper": mid + width, "middle": mid, "lower": mid - width}
 
 
+def rsi(series: pd.Series, period: int = 14) -> pd.Series:
+    """RSI (Wilder 방식 스무딩 - atr()과 같은 관례, TA-Lib 기본값과 일치).
+
+    데이트레이딩 실험실 전략(RSI+거래량 되돌림)에서 씀.
+    """
+    delta = series.diff()
+    gain = delta.clip(lower=0)
+    loss = (-delta).clip(lower=0)
+    avg_gain = gain.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+    rs = avg_gain / avg_loss.replace(0, float("nan"))
+    out = 100 - (100 / (1 + rs))
+    return out.where(avg_loss != 0, 100.0)  # 평균 손실이 0이면(계속 상승만) RSI=100
+
+
 def donchian(df: pd.DataFrame, period: int = 20) -> dict[str, pd.Series]:
     """돈치안 채널 상/하단 (저항선/지지선으로 취급 - 전략 실험실 6/7번에 사용).
 

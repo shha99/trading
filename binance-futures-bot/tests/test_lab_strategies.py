@@ -1,4 +1,4 @@
-"""전략 실험실 후보 8종의 진입 조건 검증 (합성 데이터, 네트워크 없음)."""
+"""전략 실험실 후보 9종의 진입 조건 검증 (합성 데이터, 네트워크 없음)."""
 from __future__ import annotations
 
 import numpy as np
@@ -13,6 +13,7 @@ from app.lab_strategies import (
     BollingerWickTouchStrategy,
     IchimokuCloudBreakoutStrategy,
     ResistanceBreakFailStrategy,
+    RsiVolumeSpikeReversalStrategy,
     SharpDropBounceStrategy,
     SupportHoldBreakStrategy,
 )
@@ -205,6 +206,99 @@ def test_ichimoku_cloud_breakout_triggers_short_on_downtrend_after_consolidation
     trades = simulate_lab(df, strategy)
     assert len(trades) > 0
     assert any(t["direction"] == "SHORT" for t in trades)
+
+
+# ---------------------------------------------------------------------------
+# RSI+거래량 스파이크 되돌림
+# ---------------------------------------------------------------------------
+
+def _rsi_volume_df(bounce_direction: str, n=100, warmup=80, decline_bars=10, post_bounce_step=None):
+    """80봉 평평한 워밍업 -> 10봉 급락(또는 급등)으로 RSI를 과매도(또는
+    과매수)로 밀어넣은 뒤 -> 정확히 그 다음 봉에 반등(또는 반락) + 거래량
+    스파이크를 심어둔 결정론적 데이터. `RsiVolumeSpikeReversalStrategy`의
+    min_bars(14/20/14 중 최댓값 + 50 = 70)를 넘긴 지점에서 신호가 나오도록
+    warmup을 80으로 잡았다."""
+    assert bounce_direction in ("up", "down")
+    close = [100.0] * warmup
+    step = -1.0 if bounce_direction == "up" else 1.0  # 반등 전 방향(급락/급등)
+    for _ in range(decline_bars):
+        close.append(close[-1] + step)
+    bounce_idx = len(close)
+    close.append(close[-1] - step * 3)  # 반대 방향으로 강하게 반등/반락
+    if post_bounce_step is None:
+        post_bounce_step = 0.1 if bounce_direction == "up" else -0.1
+    while len(close) < n:
+        close.append(close[-1] + post_bounce_step)
+
+    close = pd.Series(close, dtype=float)
+    idx = pd.date_range("2023-01-01", periods=n, freq="min")
+    open_ = close.shift(1).fillna(close.iloc[0])
+    high = pd.concat([open_, close], axis=1).max(axis=1) + 0.2
+    low = pd.concat([open_, close], axis=1).min(axis=1) - 0.2
+    # 워밍업 구간에 아주 작은 변동을 줘서 ATR이 정확히 0이 되지 않게 함
+    high.iloc[:warmup] += np.abs(np.sin(np.arange(warmup))) * 0.3
+    low.iloc[:warmup] -= np.abs(np.cos(np.arange(warmup))) * 0.3
+    volume = pd.Series(1000.0, index=idx)
+    volume.iloc[bounce_idx] = 3000.0  # 반등/반락 봉에만 거래량 스파이크(평균의 3배)
+    return pd.DataFrame(
+        {"Open": open_.to_numpy(), "High": high.to_numpy(), "Low": low.to_numpy(),
+         "Close": close.to_numpy(), "Volume": volume.to_numpy()},
+        index=idx,
+    )
+
+
+def test_rsi_volume_spike_reversal_triggers_long_on_oversold_bounce_with_volume():
+    strategy = RsiVolumeSpikeReversalStrategy()
+    df = _rsi_volume_df("up")
+    trades = simulate_lab(df, strategy)
+    assert len(trades) == 1
+    assert trades[0]["direction"] == "LONG"
+    assert trades[0]["exit_reason"] in ("SL", "TP", "TIME")
+
+
+def test_rsi_volume_spike_reversal_triggers_short_on_overbought_bounce_with_volume():
+    strategy = RsiVolumeSpikeReversalStrategy()
+    df = _rsi_volume_df("down")
+    trades = simulate_lab(df, strategy)
+    assert len(trades) == 1
+    assert trades[0]["direction"] == "SHORT"
+
+
+def test_rsi_volume_spike_reversal_no_signal_without_volume_spike():
+    strategy = RsiVolumeSpikeReversalStrategy()
+    df = _rsi_volume_df("up")
+    df["Volume"] = 1000.0  # 스파이크 제거 - RSI 조건은 그대로 만족하지만 거래량 필터에 막혀야 함
+    assert simulate_lab(df, strategy) == []
+
+
+def test_rsi_volume_spike_reversal_time_stop_fires_at_exact_bar_count():
+    strategy = RsiVolumeSpikeReversalStrategy(time_stop_bars=40)
+    # 반등 이후 가격을 완전히 평평하게 둬서(post_bounce_step=0) 손절/익절에
+    # 안 닿게 하고, 40봉 시간손절이 실제로 그 시점에 발동하는지 확인 -
+    # 그러려면 반등 이후 최소 40봉+여유가 더 있어야 하므로 n을 늘린다.
+    df = _rsi_volume_df("up", n=140, post_bounce_step=0.0)
+    trades = simulate_lab(df, strategy)
+    assert len(trades) == 1
+    assert trades[0]["exit_reason"] == "TIME"
+    entry_idx = df.index.get_loc(pd.Timestamp(trades[0]["entry_time"]))
+    exit_idx = df.index.get_loc(pd.Timestamp(trades[0]["exit_time"]))
+    assert exit_idx - entry_idx == 40
+
+
+def test_rsi_volume_spike_reversal_produces_trades_over_long_run_with_injected_spikes():
+    # 순수 랜덤워크는 평균 거래량 대비 1.5배 스파이크가 거의 안 나와서
+    # (정규분포 표준편차상 극히 드묾) 여기서는 스파이크를 규칙적으로
+    # 섞어넣어 - 실제 시장의 거래량 급증 구간을 흉내낸다.
+    df = random_walk_df(n=3000, seed=6)
+    rng = np.random.default_rng(6)
+    spike_mask = rng.random(len(df)) < 0.05  # 약 5%의 봉에 거래량 스파이크
+    df.loc[spike_mask, "Volume"] *= 4.0
+
+    strategy = RsiVolumeSpikeReversalStrategy()
+    trades = simulate_lab(df, strategy)
+    assert len(trades) > 0
+    assert all(t["direction"] in ("LONG", "SHORT") for t in trades)
+    assert all(t["exit_reason"] in ("SL", "TP", "TIME") for t in trades)
 
 
 def test_ichimoku_cloud_breakout_no_signal_on_flat_data():

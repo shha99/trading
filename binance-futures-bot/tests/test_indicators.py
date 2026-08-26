@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from app.indicators import atr, ema, keltner_lower
+from app.indicators import atr, ema, keltner_lower, rsi
 
 
 def make_df(closes, highs=None, lows=None):
@@ -35,3 +35,21 @@ def test_keltner_lower_is_below_ema_midline():
     lower = keltner_lower(df, ema_period=20, atr_period=10, mult=2.0)
     valid = mid.notna() & lower.notna()
     assert (lower[valid] <= mid[valid]).all()
+
+
+def test_rsi_is_bounded_between_0_and_100():
+    df = make_df([100.0 + i * 0.7 + (2 if i % 3 == 0 else -1) for i in range(60)])
+    result = rsi(df["Close"], 14).dropna()
+    assert (result >= 0).all() and (result <= 100).all()
+
+
+def test_rsi_near_100_on_uninterrupted_uptrend():
+    df = make_df([100.0 + i for i in range(40)])  # 매 봉 상승만 - 손실이 전혀 없음
+    result = rsi(df["Close"], 14).dropna()
+    assert (result > 95).all()
+
+
+def test_rsi_near_0_on_uninterrupted_downtrend():
+    df = make_df([100.0 - i for i in range(40)])  # 매 봉 하락만 - 이익이 전혀 없음
+    result = rsi(df["Close"], 14).dropna()
+    assert (result < 5).all()

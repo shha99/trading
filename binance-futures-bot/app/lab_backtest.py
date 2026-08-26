@@ -74,6 +74,12 @@ def _walk_forward_exit(ctx: dict, index: pd.Index, entry_idx: int, entry: dict, 
         entry_dt = entry_ts.to_pydatetime() if hasattr(entry_ts, "to_pydatetime") else entry_ts
         time_stop_at = entry_dt + timedelta(days=entry["time_stop_days"])
 
+    # 날짜(day) 대신 "봉 개수" 기준 시간손절 - 데이트레이딩 전략처럼 시간대가
+    # 1분/5분 등으로 짧을 때 "N일"보다 "N봉"이 더 자연스러운 경우에 씀.
+    time_stop_bar_idx = None
+    if entry.get("time_stop_bars") is not None:
+        time_stop_bar_idx = entry_idx + entry["time_stop_bars"]
+
     if entry.get("trailing"):
         return _walk_forward_trailing(ctx, entry_idx, direction, entry["trail_mult"], n)
 
@@ -111,6 +117,8 @@ def _walk_forward_exit(ctx: dict, index: pd.Index, entry_idx: int, entry: dict, 
             ts_dt = ts.to_pydatetime() if hasattr(ts, "to_pydatetime") else ts
             if ts_dt >= time_stop_at:
                 return "TIME", float(close[j]), j
+        if time_stop_bar_idx is not None and j >= time_stop_bar_idx:
+            return "TIME", float(close[j]), j
 
     return "TIME", float(close[-1]), n - 1
 

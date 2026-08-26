@@ -1,4 +1,4 @@
-"""전략 실험실(lab)의 후보 전략 8종.
+"""전략 실험실(lab)의 후보 전략 9종.
 
 `strategy.py`의 `KeltnerReclaimStrategy`(이미 검증돼 자동매매에 쓰이는 유일한
 전략)와 달리, 여기 있는 건 전부 **비교/탐색용 후보**다. 자동매매
@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 
 from .custom_indicators import ichimoku
-from .indicators import atr, bollinger_bands, donchian, ema
+from .indicators import atr, bollinger_bands, donchian, ema, rsi
 
 
 class LabStrategy:
@@ -447,8 +447,87 @@ class IchimokuCloudBreakoutStrategy(LabStrategy):
         return None
 
 
+class RsiVolumeSpikeReversalStrategy(LabStrategy):
+    """RSI+거래량 스파이크 되돌림 — 데이트레이딩 (RSI+거래량).
+
+    1분~5분봉처럼 짧은 시간대의 스캘핑/데이트레이딩을 겨냥한 전략.
+    RSI 과매도/과매수 되돌림만 보면 저유동성 구간의 잡음에도 계속
+    걸리기 때문에, **거래량 스파이크**를 같이 요구해 "진짜 매수/매도세가
+    붙은 되돌림"만 걸러낸다.
+
+    진입(롱): RSI(14)가 30 밑으로 갔다가 이번 봉에 30 위로 다시 올라오고,
+      동시에 이번 봉 거래량이 최근 20봉 평균 거래량의 1.5배 이상일 때.
+    진입(숏): RSI가 70 위로 갔다가 이번 봉에 70 아래로 다시 내려오고,
+      동시에 거래량 스파이크가 있을 때.
+    청산: 손절 -1×ATR / 익절 +1.5×ATR / 데이트레이딩이라 오래 안 들고
+      가도록 40봉 시간손절(1분봉 기준 40분, 5분봉 기준 약 3.3시간).
+    """
+
+    key = "rsi_volume_spike_reversal"
+    label = "RSI+거래량 스파이크 되돌림"
+    category = "데이트레이딩 (RSI+거래량)"
+    description = "RSI 과매도/과매수 되돌림 + 거래량 스파이크(최근 평균의 1.5배 이상)로 진짜 되돌림만 필터링"
+    designed_timeframe = "5m"  # 데이트레이딩/스캘핑용 - 1분~5분봉 겨냥
+
+    def __init__(
+        self, rsi_period=14, oversold=30.0, overbought=70.0,
+        volume_avg_period=20, volume_mult=1.5,
+        atr_period=14, stop_mult=1.0, target_mult=1.5, time_stop_bars=40,
+    ):
+        self.rsi_period = rsi_period
+        self.oversold = oversold
+        self.overbought = overbought
+        self.volume_avg_period = volume_avg_period
+        self.volume_mult = volume_mult
+        self.atr_period = atr_period
+        self.stop_mult = stop_mult
+        self.target_mult = target_mult
+        self.time_stop_bars = time_stop_bars
+        self.min_bars = max(rsi_period, volume_avg_period, atr_period) + 50  # RSI 워밍업 여유
+
+    def precompute(self, df: pd.DataFrame) -> dict:
+        avg_volume = df["Volume"].rolling(self.volume_avg_period).mean().shift(1)
+        return {
+            "rsi": rsi(df["Close"], self.rsi_period).to_numpy(),
+            "avg_volume": avg_volume.to_numpy(),
+            "volume": df["Volume"].to_numpy(),
+            "atr": atr(df, self.atr_period).to_numpy(),
+        }
+
+    def check_entry(self, k: int, ctx: dict) -> dict | None:
+        if k < 1:
+            return None
+        rsi_prev, rsi_now = ctx["rsi"][k - 1], ctx["rsi"][k]
+        avg_vol, atr_now = ctx["avg_volume"][k], ctx["atr"][k]
+        if _isnan_any(rsi_prev, rsi_now, avg_vol, atr_now):
+            return None
+        volume_spike = ctx["volume"][k] >= self.volume_mult * avg_vol
+        if not volume_spike:
+            return None
+        close = ctx["close"]
+        entry = float(close[k])
+        # 진입가 자체가 손절 폭 안에 들어오는 걸 막기 위해 최소한의 양의 ATR만 확인
+        if atr_now <= 0:
+            return None
+        if rsi_prev < self.oversold and rsi_now >= self.oversold:
+            return {
+                "direction": "LONG", "entry_price": entry,
+                "stop_price": entry - self.stop_mult * atr_now,
+                "target_price": entry + self.target_mult * atr_now,
+                "time_stop_bars": self.time_stop_bars,
+            }
+        if rsi_prev > self.overbought and rsi_now <= self.overbought:
+            return {
+                "direction": "SHORT", "entry_price": entry,
+                "stop_price": entry + self.stop_mult * atr_now,
+                "target_price": entry - self.target_mult * atr_now,
+                "time_stop_bars": self.time_stop_bars,
+            }
+        return None
+
+
 def lab_strategies() -> list[LabStrategy]:
-    """실험실에 올라가는 후보 8종 (검증된 켈트너 전략은 별도로 다룸)."""
+    """실험실에 올라가는 후보 9종 (검증된 켈트너 전략은 별도로 다룸)."""
     return [
         BigCandleBreakoutStrategy(),
         SharpDropBounceStrategy(),
@@ -458,4 +537,5 @@ def lab_strategies() -> list[LabStrategy]:
         SupportHoldBreakStrategy(),
         BollingerWickTouchStrategy(),
         IchimokuCloudBreakoutStrategy(),
+        RsiVolumeSpikeReversalStrategy(),
     ]
