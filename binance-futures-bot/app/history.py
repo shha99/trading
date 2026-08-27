@@ -1,0 +1,256 @@
+"""바이낸스 선물 과거/최신 캔들(klines) 조회.
+
+REST 폴링만 사용한다 (이 프로젝트가 뜨는 네트워크 환경에서 선물 웹소켓의
+kline/aggTrade 스트림이 막혀 있는 경우가 있었다는 것이 원본 프로젝트의
+관찰이었음 — 15분봉 이상 전략에는 REST 폴링으로 충분하고, 분당 호출량도
+바이낸스 제한의 극히 일부라 굳이 웹소켓이 필요 없다).
+
+429(요청 과다)/418(IP 일시 차단) 응답을 받으면 Retry-After 헤더(또는 지수
+백오프)를 존중해 자동으로 대기 후 재시도한다.
+"""
+from __future__ import annotations
+
+import logging
+import time
+
+import pandas as pd
+from binance.exceptions import BinanceAPIException, BinanceRequestException
+
+from .binance_client import get_binance_client
+
+logger = logging.getLogger(__name__)
+
+_REQUIRED_COLUMNS = ["Open", "High", "Low", "Close", "Volume"]
+_MAX_RETRIES = 5
+
+
+def _sleep_seconds_for(exc) -> float:
+    """429/418 예외에서 얼마나 대기해야 할지 계산한다."""
+    response = getattr(exc, "response", None)
+    if response is not None:
+        retry_after = response.headers.get("Retry-After")
+        if retry_after:
+            try:
+                return max(float(retry_after), 1.0)
+            except ValueError:
+                pass
+    return 30.0
+
+
+def fetch_klines(
+    symbol: str, interval: str, limit: int = 500, end_time_ms: int | None = None
+) -> pd.DataFrame | None:
+    """가장 최근 `limit`개의 완결/진행 캔들을 오래된 -> 최신 순으로 반환한다.
+
+    `end_time_ms`를 주면 그 시각 이전 구간을 조회한다 (백테스트에서 여러 번
+    호출해 1500봉 제한보다 긴 과거 데이터를 이어붙일 때 사용).
+
+    컬럼: Open/High/Low/Close/Volume, 인덱스: 캔들 오픈 시각(UTC, tz 없음).
+    실패(재시도 소진 포함)하면 None.
+    """
+    client = get_binance_client()
+    attempt = 0
+    while attempt < _MAX_RETRIES:
+        try:
+            kwargs = {"symbol": symbol, "interval": interval, "limit": limit}
+            if end_time_ms is not None:
+                kwargs["endTime"] = end_time_ms
+            raw = client.futures_klines(**kwargs)
+            return _to_dataframe(raw)
+        except BinanceAPIException as exc:
+            status = getattr(exc, "status_code", None)
+            if status in (418, 429):
+                wait_s = _sleep_seconds_for(exc)
+                logger.warning(
+                    "바이낸스 레이트리밋(%s) - %s초 대기 후 재시도 (%s %s, %d/%d)",
+                    status, wait_s, symbol, interval, attempt + 1, _MAX_RETRIES,
+                )
+                time.sleep(wait_s)
+                attempt += 1
+                continue
+            logger.exception("바이낸스 klines 조회 실패: %s %s", symbol, interval)
+            return None
+        except BinanceRequestException:
+            logger.exception("바이낸스 klines 요청 오류: %s %s", symbol, interval)
+            return None
+        except Exception:
+            logger.exception("klines 조회 중 알 수 없는 오류: %s %s", symbol, interval)
+            return None
+
+    logger.error("klines 조회 재시도 소진: %s %s", symbol, interval)
+    return None
+
+
+def _to_dataframe(raw: list[list]) -> pd.DataFrame | None:
+    if not raw:
+        return None
+    df = pd.DataFrame(
+        raw,
+        columns=[
+            "OpenTime", "Open", "High", "Low", "Close", "Volume",
+            "CloseTime", "QuoteVolume", "Trades", "TakerBuyBase", "TakerBuyQuote", "Ignore",
+        ],
+    )
+    df["OpenTime"] = pd.to_datetime(df["OpenTime"], unit="ms")
+    df = df.set_index("OpenTime")
+    for col in _REQUIRED_COLUMNS:
+        df[col] = df[col].astype(float)
+    return sanitize_klines(df[_REQUIRED_COLUMNS].sort_index())
+
+
+_WICK_FACTOR = 1.5  # 이 배수를 넘는 고가/저가는 "명백히 깨진 값"으로 간주해 보정한다.
+
+
+def sanitize_klines(df: pd.DataFrame) -> pd.DataFrame:
+    """바이낸스 테스트넷 과거 K라인에 간헐적으로 섞여 나오는 명백히 깨진 고가/저가를 보정한다.
+
+    실제로 관측된 사례(테스트넷 히스토리에서만 나타남, 실계좌에서는 보고된 바 없음):
+    ETHUSDT 1일봉에서 Open/Low/Close는 전부 ~2,500대인데 High만 104,454.9로 찍힌다거나,
+    BTCUSDT 1일봉에서 Low가 100~150까지 떨어졌다가 바로 다음 값이 정상으로 돌아오는 식이다.
+    실제 가격이 한 캔들 안에서 시가/종가 대비 이 정도(수십~수백 배)로 벌어지는 일은 없으므로,
+    `_WICK_FACTOR`(1.5배)를 넘는 High/Low는 스파이크로 보고 나머지 세 값(Open/Low/Close 혹은
+    Open/High/Close) 중 가장 근접한 값으로 눌러준다. 실제 변동성이 큰 정상 캔들(예: 하루에
+    20% 넘게 움직인 캔들)도 시가/종가 대비 고가·저가 차이가 이 배수 근처까지 가는 일은
+    없어 오탐 위험은 낮다. ATR/EMA 등 모든 지표와 백테스트가 이 함수를 거친 데이터로만
+    계산되도록 `_to_dataframe()`에서 한 번만 호출한다(라이브 조회·백테스트 조회 모두
+    `fetch_klines()`를 거치므로 자동으로 적용됨).
+    """
+    if df.empty:
+        return df
+    o, h, l, c = df["Open"], df["High"], df["Low"], df["Close"]
+    safe_high = pd.concat([o, l, c], axis=1).max(axis=1)
+    safe_low = pd.concat([o, h, c], axis=1).min(axis=1)
+
+    bad_high = h > safe_high * _WICK_FACTOR
+    bad_low = safe_low > l * _WICK_FACTOR
+
+    if not bad_high.any() and not bad_low.any():
+        return _sanitize_neighbor_outliers(df)
+
+    out = df.copy()
+    if bad_high.any():
+        n = int(bad_high.sum())
+        logger.warning("klines 스파이크 %d건 보정 (High 이상치) - %s", n, list(df.index[bad_high][:5]))
+        out.loc[bad_high, "High"] = safe_high[bad_high]
+    if bad_low.any():
+        n = int(bad_low.sum())
+        logger.warning("klines 스파이크 %d건 보정 (Low 이상치) - %s", n, list(df.index[bad_low][:5]))
+        out.loc[bad_low, "Low"] = safe_low[bad_low]
+    return _sanitize_neighbor_outliers(out)
+
+
+_NEIGHBOR_FACTOR = 20  # 주변 봉 사이 "평소 변동폭"의 이 배수를 넘으면 캔들 전체를 의심한다.
+_NEIGHBOR_WINDOW = 31  # 기준으로 삼을 대칭(전후) 봉 개수 (일부가 깨져 있어도 중앙값이 버티도록)
+
+
+def _sanitize_neighbor_outliers(df: pd.DataFrame) -> pd.DataFrame:
+    """위(같은 캔들 안 고가/저가 비교)와 달리, **시가/종가 자체가 통째로 깨진** 경우를 잡는다.
+
+    실제로 관측된 사례: BTCUSDT 1분봉 2025-04-24 11:50~12:10 구간에서 정상가가
+    ~92,000대인데, 몇 분 간격으로 시가/고가/저가/종가가 전부 47,000/60,999/70,000/
+    92,590/110,000/138,000대를 오가며 요동친다 — 심지어 종가 자체가 다음 봉의 시가로
+    이어져서 오염이 연쇄된다. 위쪽 검사(같은 캔들의 고가 vs 나머지 세 값)는 이런 경우
+    상당수를 못 잡는다 — 예를 들어 시가 93,374/고가 97,273.7/저가 80,000/종가 97,000은
+    네 값 자기들끼리는 "비율상" 1.5배를 안 넘어서 통과해버리지만, 1분 만에 BTC가 이렇게
+    움직이는 건 불가능하다.
+
+    그래서 이번 봉을 **가운데에 둔** 앞뒤 `_NEIGHBOR_WINDOW`개 봉의 종가로 기준가(중앙값)를
+    구하고, "봉 하나가 평소에 움직이는 폭"은 **true range**(고가-저가, 직전 종가 대비
+    고가·저가 차이 중 최댓값 - ATR 계산에 쓰는 것과 같은 정의)의 중앙값으로 잡는다.
+    이번 봉의 시가/고가/저가/종가 중 하나라도 그 기준가에서 이 평소 변동폭의
+    `_NEIGHBOR_FACTOR`배 이상 벗어나면 캔들 전체를 의심해 기준가로 된 도지(납작한)
+    캔들로 바꿔치기한다. 전부 중앙값이라 그 구간 안에 깨진 봉이 몇 개 섞여 있어도
+    (과반수만 아니면) 흔들리지 않는다.
+
+    **과거(직전 봉만) 기준이 아니라 전후 대칭 윈도로 잡는 이유**: 처음엔 직전 다수
+    봉만 봤는데, 실제로 몇 시간에 걸쳐 완만하게(하지만 정상적으로) 가격이 움직이는
+    구간에서 오탐이 났다 — 예: 15분봉이 5시간 동안 64,200→63,500으로 자연스럽게
+    흘러내리는 중, "그보다 훨씬 이전(가운데 기준 61봉 전)의 중앙값"과 비교하면 추세
+    막바지 봉들이 그 오래된 기준가에서 멀어져 보여 오탐이 발생했다. 대칭(앞뒤)
+    윈도로 바꾸면 진행 중인 추세도 "지금 이 근방"의 가격 수준을 따라가서 오탐이
+    없어지고, 반대로 실제 깨진 봉(주변 몇 분만 뜬금없이 튀었다가 되돌아오는 것)은
+    앞뒤 어느 쪽으로 봐도 여전히 두드러져 그대로 잡힌다.
+
+    **"평소 변동폭"을 종가 차이가 아니라 true range로 잡는 이유**: 처음엔 종가끼리의
+    차이(중앙값)를 썼는데, 아주 조용한(횡보) 구간에서 또 오탐이 났다 — 종가는
+    거의 안 움직이는데(예: 1~2틱) 정상적인 캔들 하나의 고가/저가 꼬리는 그보다 훨씬
+    크게(예: 종가 변동의 수십 배) 벌어지는 게 흔해서, 종가 차이를 기준 삼으면 평범한
+    꼬리조차 "평소보다 수십 배"로 보여 잘못 걸렸다. true range(캔들 안에서 실제로
+    움직인 폭)를 기준으로 삼으면 꼬리 자체의 정상적인 크기가 이미 반영돼 있어 오탐이
+    없어진다.
+
+    시간대(1분봉이든 1일봉이든)마다 "평소 변동폭"이 다르므로 배율 기준을 쓰면 자동으로
+    스케일이 맞는다 — 예컨대 정상적인 하루 20% 등락도 그 시간대의 평소 변동폭 대비로는
+    이 배수 근처도 안 가서 오탐이 없다.
+    """
+    if len(df) < _NEIGHBOR_WINDOW:
+        return df
+    o, h, l, c = df["Open"], df["High"], df["Low"], df["Close"]
+
+    half = _NEIGHBOR_WINDOW // 2
+    ref = c.rolling(_NEIGHBOR_WINDOW, center=True, min_periods=half + 1).median()
+
+    prev_close = c.shift(1)
+    true_range = pd.concat([h - l, (h - prev_close).abs(), (l - prev_close).abs()], axis=1).max(axis=1)
+    typical_move = true_range.rolling(_NEIGHBOR_WINDOW, center=True, min_periods=half + 1).median()
+    typical_move = typical_move.where(typical_move > 0)  # 변동폭이 0이면 배율 기준이 무의미
+
+    max_dev = pd.concat([(o - ref).abs(), (h - ref).abs(), (l - ref).abs(), (c - ref).abs()], axis=1).max(axis=1)
+    bad_candle = ref.notna() & typical_move.notna() & (max_dev > typical_move * _NEIGHBOR_FACTOR)
+
+    if not bad_candle.any():
+        return df
+
+    n = int(bad_candle.sum())
+    logger.warning("klines 스파이크 %d건 보정 (인접 봉 대비 통째로 이상치) - %s", n, list(df.index[bad_candle][:5]))
+    out = df.copy()
+    flat = ref[bad_candle]
+    out.loc[bad_candle, "Open"] = flat
+    out.loc[bad_candle, "High"] = flat
+    out.loc[bad_candle, "Low"] = flat
+    out.loc[bad_candle, "Close"] = flat
+    return out
+
+
+def is_candle_closed(df: pd.DataFrame, interval: str) -> bool:
+    """마지막 행이 완결된 캔들인지(진행 중인 캔들이 아닌지) 판단한다."""
+    if df is None or df.empty:
+        return False
+    last_open = df.index[-1]
+    delta = interval_to_timedelta(interval)
+    return pd.Timestamp.utcnow().tz_localize(None) >= last_open + delta
+
+
+def interval_to_timedelta(interval: str) -> pd.Timedelta:
+    unit = interval[-1]
+    value = int(interval[:-1])
+    unit_map = {"m": "min", "h": "h", "d": "D", "w": "W"}
+    return pd.Timedelta(value, unit=unit_map.get(unit, "min"))
+
+
+def fetch_extended_history(symbol: str, interval: str, total_bars: int) -> pd.DataFrame | None:
+    """1500봉 제한을 넘는 과거 데이터를 여러 번 나눠 호출해 이어붙인다.
+
+    백테스트(sanity check)용 — 실거래 스캔에서는 사용하지 않는다.
+    """
+    chunks: list[pd.DataFrame] = []
+    end_time_ms: int | None = None
+    remaining = total_bars
+
+    while remaining > 0:
+        batch = min(remaining, 1500)
+        df = fetch_klines(symbol, interval, limit=batch, end_time_ms=end_time_ms)
+        if df is None or df.empty:
+            break
+        chunks.append(df)
+        remaining -= len(df)
+        earliest = df.index[0]
+        end_time_ms = int(earliest.timestamp() * 1000) - 1
+        if len(df) < batch:
+            break  # 더 이상 과거 데이터가 없음
+        time.sleep(0.3)  # 레이트리밋 여유
+
+    if not chunks:
+        return None
+    merged = pd.concat(chunks[::-1])
+    return merged[~merged.index.duplicated(keep="first")].sort_index()

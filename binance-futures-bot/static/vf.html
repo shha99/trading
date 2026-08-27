@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>검증된 전략 (VF)</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='13' font-size='14'%3E%E2%9C%85%3C/text%3E%3C/svg%3E" />
+<link rel="manifest" href="/static/manifest.webmanifest" />
+<meta name="theme-color" content="#1c2129" />
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="선물 시그널" />
+<link rel="stylesheet" href="/static/style.css" />
+<link rel="stylesheet" href="/static/strategy.css" />
+<script src="/static/vendor/lightweight-charts.js"></script>
+<script>
+  // 켈트너 전략 실험실을 거쳐 학습/검증 분리 백테스트로 검증된 전략들만
+  // 모아보는 페이지 - 기본 탭은 가장 최근에 최적화된 전략(볼린저 꼬리터치
+  // 되돌림+RSI 확인)으로 연다. 나머지 구현은 /strategy와 완전히 동일한
+  // strategy_page.js를 그대로 재사용한다(PROFILES에 3종 다 들어있음).
+  window.DEFAULT_STRATEGY_TAB = "wick";
+</script>
+</head>
+<body>
+<header class="topbar">
+  <h1 class="brand" id="brandTitle">검증된 전략 (VF)</h1>
+  <div class="strategy-tabs" id="strategyTabs"></div>
+  <div class="symbol-tabs" id="symbolTabs"></div>
+  <div class="timeframe-tabs" id="timeframeTabs"></div>
+  <a class="strategy-link" href="/" target="_blank" rel="noopener">차트 대시보드 ↗</a>
+  <a class="strategy-link" href="/strategy" target="_blank" rel="noopener">켈트너 전략 페이지 ↗</a>
+  <a class="strategy-link" href="/lab" target="_blank" rel="noopener">전략 실험실 ↗</a>
+</header>
+
+<main class="strategy-layout">
+  <section class="condition-panel" id="conditionPanel">
+    <div class="condition-card" id="condTrend">
+      <div class="condition-title">① 종가 &gt; 200EMA</div>
+      <div class="condition-value" id="condTrendValue">-</div>
+    </div>
+    <div class="condition-card" id="condPullback">
+      <div class="condition-title">② 직전봉 켈트너 하단 이탈(눌림목)</div>
+      <div class="condition-value" id="condPullbackValue">-</div>
+    </div>
+    <div class="condition-card" id="condReclaim">
+      <div class="condition-title">③ 이번봉 켈트너 하단 복귀</div>
+      <div class="condition-value" id="condReclaimValue">-</div>
+    </div>
+    <div class="condition-card summary" id="condSummary">
+      <div class="condition-title">진입 신호</div>
+      <div class="condition-value" id="condSummaryValue">-</div>
+    </div>
+  </section>
+
+  <section class="condition-panel single" id="infoPanel" style="display:none">
+    <div class="condition-card">
+      <div class="condition-title" id="infoPanelTitle">진입 조건 (실시간 판정 패널 없음 - 아직 자동매매 엔진에 미연결)</div>
+      <div class="condition-value info-text" id="infoPanelValue">-</div>
+    </div>
+  </section>
+
+  <section class="strategy-chart-section">
+    <div class="chart-main" id="chartMain"></div>
+  </section>
+
+  <section class="scorecard-section">
+    <h2>백테스트 성적표 (심볼 × 시간대)</h2>
+    <p class="meta-line" id="statsMeta">-</p>
+    <div class="table-scroll">
+      <table class="scorecard-table" id="scorecardTable"></table>
+    </div>
+  </section>
+
+  <section class="detail-section">
+    <h2>선택 구간 상세 (<span id="detailLabel">-</span>)</h2>
+    <div class="detail-columns">
+      <div>
+        <h3>학습/검증 구간 비교</h3>
+        <table class="detail-table" id="splitTable"></table>
+      </div>
+      <div>
+        <h3>연도별 성적</h3>
+        <table class="detail-table" id="yearlyTable"></table>
+      </div>
+    </div>
+  </section>
+
+  <section class="signals-section">
+    <h2>최근 시그널</h2>
+    <div class="signals-columns">
+      <div>
+        <h3>백테스트 트레이드 (최근)</h3>
+        <table class="signals-table" id="backtestSignalsTable"></table>
+      </div>
+      <div>
+        <h3>실시간 감지된 시그널 (봇 가동 이후)</h3>
+        <table class="signals-table" id="liveSignalsTable"></table>
+      </div>
+    </div>
+  </section>
+
+  <section class="paper-trading-section" id="paperTradingSection">
+    <h2>🔴 실시간 모의투자 — 100만원, 지금부터 실제로 굴러가는 중</h2>
+    <p class="meta-line">실제 주문은 전혀 나가지 않는다(100% 가상 잔고) — BTCUSDT 15분봉에서 이 전략(볼린저
+      꼬리터치+RSI, 수수료 0.1% 반영)을 서버가 주기적으로 재평가해 실제로 잔고를 갱신한다. 서버가
+      재시작/재배포되면(무료 호스팅 특성상 영구 디스크가 없음) 100만원부터 다시 시작될 수 있다.</p>
+    <p class="meta-line" id="paperMeta">-</p>
+    <div class="paper-stats" id="paperStats"></div>
+    <div class="table-scroll">
+      <table class="signals-table" id="paperTradesTable"></table>
+    </div>
+  </section>
+
+  <section class="limitations-section">
+    <h2>한계 (반드시 인지하고 사용할 것)</h2>
+    <ul id="limitationsList">
+      <li>규칙은 <strong>BTC 1시간봉</strong>에서 찾은 것이다. 다른 시간대/종목 성적은 위 표로 직접 확인할 것.</li>
+      <li><strong>ETH 1시간봉에서는 검증 구간에서 손실</strong>이었다.</li>
+      <li><strong>2022년 하락장에서 -9.8% 손실</strong> — 상승장 편향이 있는 전략이다.</li>
+      <li>표본이 적어 우연일 가능성이 남는다. 114개 조합을 시험해 고른 것이라 <strong>다중검정/과최적화 편향</strong>도 있다.</li>
+      <li>여기 구현된 시그널은 참고용 스크리닝 도구이며, 매매 추천이나 투자 조언이 아니다.</li>
+    </ul>
+  </section>
+</main>
+
+<script src="/static/strategy_page.js"></script>
+<script src="/static/pwa.js"></script>
+</body>
+</html>

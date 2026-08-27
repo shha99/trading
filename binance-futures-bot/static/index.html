@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Binance Futures 실시간 차트</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='13' font-size='14'%3E%F0%9F%93%88%3C/text%3E%3C/svg%3E" />
+<link rel="manifest" href="/static/manifest.webmanifest" />
+<meta name="theme-color" content="#1c2129" />
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="선물 시그널" />
+<link rel="stylesheet" href="/static/style.css" />
+<script src="/static/vendor/lightweight-charts.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <h1 class="brand">Binance Futures 시그널 대시보드</h1>
+  <div class="symbol-tabs" id="symbolTabs"></div>
+  <div class="timeframe-tabs" id="timeframeTabs"></div>
+  <a class="strategy-link" href="/vf" target="_blank" rel="noopener">검증된 전략 ↗</a>
+  <a class="strategy-link" href="/lab" target="_blank" rel="noopener">전략 실험실 ↗</a>
+  <span class="ws-status" id="wsStatus">연결 중…</span>
+</header>
+
+<section class="stat-cards" id="statCards">
+  <div class="stat-card">
+    <div class="stat-label">현재가</div>
+    <div class="stat-value" id="statPrice">-</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">24h 등락률</div>
+    <div class="stat-value" id="statChangePct">-</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">24h 고가 / 저가</div>
+    <div class="stat-value" id="statHighLow">-</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">24h 거래대금(USDT)</div>
+    <div class="stat-value" id="statQuoteVolume">-</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">다음 봉 마감까지</div>
+    <div class="stat-value" id="statCountdown">-</div>
+  </div>
+</section>
+
+<main class="layout">
+  <div class="chart-column">
+    <div class="chart-toolbar">
+      <div class="layout-switch" id="layoutSwitch">
+        <button data-layout="vertical" class="active">세로</button>
+        <button data-layout="grid6">6개씩</button>
+        <button data-layout="fit">한 화면</button>
+      </div>
+      <label class="pattern-toggle">
+        <input type="checkbox" id="patternToggleAll" />
+        캔들패턴 표시 (선택된 항목)
+      </label>
+    </div>
+    <div class="crosshair-panel" id="crosshairPanel">OHLCV 정보는 차트 위에 마우스를 올리면 표시됩니다.</div>
+    <div class="chart-main" id="chartMain"></div>
+    <div class="subpane-container" id="subpaneContainer"></div>
+  </div>
+
+  <aside class="sidebar">
+    <input type="search" id="indicatorSearch" placeholder="지표 검색 (예: RSI, 볼린저, CDL)" />
+    <div class="category-filter" id="categoryFilter"></div>
+    <div class="bulk-buttons">
+      <button id="btnEnableAll">모두 켜기(검색결과)</button>
+      <button id="btnDisableAll">모두 끄기</button>
+    </div>
+    <div class="indicator-list" id="indicatorList"></div>
+  </aside>
+</main>
+
+<script src="/static/app.js"></script>
+<script src="/static/pwa.js"></script>
+</body>
+</html>
