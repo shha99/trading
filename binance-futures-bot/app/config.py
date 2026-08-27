@@ -89,6 +89,12 @@ class Settings:
     stats_refresh_interval_hours: float = field(
         default_factory=lambda: float(os.getenv("STATS_REFRESH_INTERVAL_HOURS", "24"))
     )
+    # "검증됨" 등급 전략(app/validated_lab_stats_builder.py)의 백테스트에 반영하는
+    # 거래 1건당 왕복 수수료(%). 바이낸스 선물 테이커 수수료 편도 0.05% x 2회 가정.
+    # (VIP 등급/메이커 주문/BNB 할인 적용 시 실제로는 더 낮을 수 있음 - 보수적 기본값)
+    taker_fee_pct_roundtrip: float = field(
+        default_factory=lambda: float(os.getenv("TAKER_FEE_PCT_ROUNDTRIP", "0.1"))
+    )
     cors_origins: list[str] = field(default_factory=lambda: _csv("CORS_ORIGINS", "*"))
 
     # --- 실시간 차트 대시보드 ---

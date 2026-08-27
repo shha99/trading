@@ -69,14 +69,17 @@ def _split_trades(trades: list[dict]) -> dict:
     }
 
 
-def build_symbol_timeframe(strategy: LabStrategy, symbol: str, timeframe: str) -> dict:
+def build_symbol_timeframe(strategy: LabStrategy, symbol: str, timeframe: str, fee_pct: float = 0.0) -> dict:
     total_bars = bars_needed_for_span(timeframe)
-    logger.info("검증 전략 백테스트: %s %s %s (최대 %d봉)", strategy.key, symbol, timeframe, total_bars)
+    logger.info(
+        "검증 전략 백테스트: %s %s %s (최대 %d봉, 수수료 %.3f%%)",
+        strategy.key, symbol, timeframe, total_bars, fee_pct,
+    )
     df = fetch_extended_history(symbol, timeframe, total_bars)
     if df is None or df.empty:
         return {"error": "데이터를 가져오지 못했습니다"}
 
-    trades = simulate_lab(df, strategy)
+    trades = simulate_lab(df, strategy, fee_pct=fee_pct)
     result = _split_trades(trades)
     result["bars"] = len(df)
     result["range"] = {"start": str(df.index[0]), "end": str(df.index[-1])}
@@ -84,16 +87,22 @@ def build_symbol_timeframe(strategy: LabStrategy, symbol: str, timeframe: str) -
 
 
 def _default_specs() -> list[dict]:
+    # fee_pct: 실제 바이낸스 선물 왕복 수수료(settings.taker_fee_pct_roundtrip)를
+    # 반영한다 - "검증됨" 등급은 수수료 0원 가정으로는 실전 판단이 왜곡될 수
+    # 있기 때문(잦은 매매 전략일수록 영향이 크다 - README 참고).
+    fee_pct = settings.taker_fee_pct_roundtrip
     return [
         {
             "strategy": BigCandleBollingerConfluenceStrategy(),
             "symbols": ["BTCUSDT", "ETHUSDT"],
             "timeframes": ["1h"],
+            "fee_pct": fee_pct,
         },
         {
             "strategy": BollingerWickBreakevenTrailStrategy(),
             "symbols": ["BTCUSDT", "ETHUSDT"],
             "timeframes": ["15m", "5m"],
+            "fee_pct": fee_pct,
         },
     ]
 
@@ -104,12 +113,15 @@ def build_all(specs: list[dict] | None = None) -> dict:
     stats: dict = {}
     for spec in specs:
         strategy = spec["strategy"]
+        fee_pct = spec.get("fee_pct", 0.0)
         stats[strategy.key] = {}
         for symbol in spec["symbols"]:
             stats[strategy.key][symbol] = {}
             for timeframe in spec["timeframes"]:
                 try:
-                    stats[strategy.key][symbol][timeframe] = build_symbol_timeframe(strategy, symbol, timeframe)
+                    stats[strategy.key][symbol][timeframe] = build_symbol_timeframe(
+                        strategy, symbol, timeframe, fee_pct=fee_pct
+                    )
                 except Exception:
                     logger.exception("검증 전략 백테스트 실패: %s %s %s", strategy.key, symbol, timeframe)
                     stats[strategy.key][symbol][timeframe] = {"error": "계산 실패 (서버 로그 확인)"}
@@ -118,9 +130,11 @@ def build_all(specs: list[dict] | None = None) -> dict:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "note": (
             "켈트너 전략(#1 - /strategy 페이지)과 동급으로 학습/검증/연도별 분리 "
-            "검증을 통과한 lab 후보만 포함. 여전히 자동매매 엔진에는 연결 안 됨 "
+            "검증을 통과한 lab 후보만 포함. 거래 1건당 왕복 수수료(taker_fee_pct_roundtrip)를 "
+            "반영한 순수익률이다. 여전히 자동매매 엔진에는 연결 안 됨 "
             "(문서/정책 수준 - AUTO_TRADE_WHITELIST 기본값 그대로)."
         ),
+        "taker_fee_pct_roundtrip": settings.taker_fee_pct_roundtrip,
         "train_start": settings.backtest_train_start,
         "train_end": settings.backtest_train_end,
         "validation_end": str(validation_end_ts()),

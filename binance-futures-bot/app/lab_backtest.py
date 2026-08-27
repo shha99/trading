@@ -19,7 +19,17 @@ import pandas as pd
 from .lab_strategies import LabStrategy
 
 
-def simulate_lab(df: pd.DataFrame, strategy: LabStrategy) -> list[dict]:
+def simulate_lab(df: pd.DataFrame, strategy: LabStrategy, fee_pct: float = 0.0) -> list[dict]:
+    """`fee_pct`: 거래 1건(진입~청산 왕복)당 총 notional 대비 수수료 비용(%).
+
+    기본값 0.0(수수료 미반영, 기존 동작 그대로) - 후보 11종 비교용 lab 성적은
+    지금도 이 기본값을 쓴다. "검증됨" 등급(`validated_lab_stats_builder.py`)은
+    실제 바이낸스 선물 테이커 왕복 수수료(`settings.taker_fee_pct_roundtrip`,
+    기본 0.1%)를 넘겨 실제 비용을 반영한 성적을 낸다 - 얇은 마진의 잦은 매매
+    전략은 수수료를 안 넣으면 승률/수익률이 크게 부풀려 보일 수 있기 때문
+    (실측: 본전 이동 트레일링 전략의 검증 구간 평균 수익률이 수수료 0.1%만
+    반영해도 절반 이하로 줄어드는 조합이 있었음).
+    """
     n = len(df)
     if n < strategy.min_bars:
         return []
@@ -57,7 +67,8 @@ def simulate_lab(df: pd.DataFrame, strategy: LabStrategy) -> list[dict]:
             "entry_price": round(float(entry_price), 6),
             "exit_price": round(float(exit_price), 6),
             "exit_reason": exit_reason,
-            "pct_return": round(pct, 4),
+            "pct_return": round(pct - fee_pct, 4),
+            "gross_pct_return": round(pct, 4),
         })
         k = max(exit_idx + 1, k + 1)  # 포지션 종료 이후부터 다음 진입 탐색 (중복 포지션 방지)
 

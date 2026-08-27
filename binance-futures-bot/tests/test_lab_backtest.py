@@ -45,6 +45,23 @@ def test_long_hits_stop_loss():
     assert trades[0]["pct_return"] < 0
 
 
+def test_fee_pct_is_subtracted_from_pct_return_but_gross_kept():
+    df = make_df(20)
+    df.loc[df.index[8], "High"] = 115.0
+    strategy = _FixedEntryStrategy(5, {"direction": "LONG", "entry_price": 100.0, "stop_price": 95.0, "target_price": 110.0})
+    trades = simulate_lab(df, strategy, fee_pct=0.1)
+    assert trades[0]["gross_pct_return"] == pytest.approx(10.0)  # (110-100)/100*100
+    assert trades[0]["pct_return"] == pytest.approx(10.0 - 0.1)
+
+
+def test_fee_pct_defaults_to_zero_no_behavior_change():
+    df = make_df(20)
+    df.loc[df.index[8], "High"] = 115.0
+    strategy = _FixedEntryStrategy(5, {"direction": "LONG", "entry_price": 100.0, "stop_price": 95.0, "target_price": 110.0})
+    trades = simulate_lab(df, strategy)
+    assert trades[0]["pct_return"] == trades[0]["gross_pct_return"]
+
+
 def test_long_hits_take_profit():
     df = make_df(20)
     df.loc[df.index[8], "High"] = 115.0

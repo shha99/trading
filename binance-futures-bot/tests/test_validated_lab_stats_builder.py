@@ -117,3 +117,23 @@ def test_default_specs_cover_both_promoted_strategies():
 
     keys = {spec["strategy"].key for spec in _default_specs()}
     assert keys == {"big_candle_bollinger_confluence", "bollinger_wick_breakeven_trail"}
+
+
+def test_default_specs_apply_real_taker_fee(monkeypatch):
+    from app.validated_lab_stats_builder import _default_specs
+
+    monkeypatch.setattr(settings, "taker_fee_pct_roundtrip", 0.1)
+    for spec in _default_specs():
+        assert spec["fee_pct"] == 0.1
+
+
+def test_build_all_applies_fee_pct_to_trades(patched_history):
+    """fee_pct를 준 spec으로 돌리면 순수익률(pct_return)이 그만큼 줄어들어야 한다 -
+    recent_trades에 남는 gross_pct_return과 비교해서 확인."""
+    specs = [{"strategy": _FixedEntryLabStrategy(), "symbols": ["TESTUSDT"], "timeframes": ["1h"], "fee_pct": 0.1}]
+    stats = build_all(specs=specs)
+    key = _FixedEntryLabStrategy().key
+    trades = stats[key]["TESTUSDT"]["1h"]["recent_trades"]
+    assert trades  # 표본 있어야 검증 의미 있음
+    for t in trades:
+        assert t["pct_return"] == pytest.approx(t["gross_pct_return"] - 0.1, abs=1e-6)
