@@ -585,6 +585,7 @@
     await loadPaperTrading();
     setInterval(() => { if (currentProfile().hasLiveStatus) loadLiveStatus(); }, 15000);
     setInterval(loadPaperTrading, 15000);
+    setInterval(loadChart, 15000); // 차트는 탭/심볼/시간대 전환 때만 갱신됐음 - 실시간 캔들 반영 위해 주기적 재조회 추가
   }
 
   init();
