@@ -73,6 +73,31 @@ table tr.selected { outline: 1px solid var(--accent); }
   .condition-panel.single { grid-template-columns: 1fr; }
 }
 
+.paper-trading-section {
+  background: var(--bg-card);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 12px 18px;
+}
+.paper-trading-section h2 { color: var(--accent); }
+.paper-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.paper-stat {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 14px;
+}
+.paper-stat-label { font-size: 12px; color: var(--text-dim); margin-bottom: 6px; }
+.paper-stat-value { font-size: 15px; font-weight: 600; }
+@media (max-width: 900px) {
+  .paper-stats { grid-template-columns: repeat(2, 1fr); }
+}
+
 .limitations-section {
   background: var(--bg-card);
   border: 1px solid var(--warn);

@@ -96,6 +96,78 @@ class TradeRecord(Base):
         }
 
 
+class PaperAccount(Base):
+    """모의투자(paper trading) 가상 계좌 — 전략 1개(`strategy_key`+심볼+시간대)당 하나.
+
+    실제 주문을 절대 내지 않는다 — `run_once()`가 매 스캔마다 최근 캔들을 다시
+    백테스트해서(`app/lab_backtest.simulate_lab`) 새로 청산된 거래만 여기 잔고에
+    반영한다. 실제 자동매매 엔진(`TradeRecord`/`ScanState`)과는 완전히 분리된
+    테이블이라 화이트리스트/포지션 카운트 등 실거래 로직과 절대 섞이지 않는다.
+    """
+
+    __tablename__ = "paper_account"
+    __table_args__ = (
+        UniqueConstraint("strategy_key", "symbol", "timeframe", name="uq_paper_account_key"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    strategy_key = Column(String, nullable=False)
+    symbol = Column(String, nullable=False)
+    timeframe = Column(String, nullable=False)
+    starting_balance = Column(Float, nullable=False)
+    balance = Column(Float, nullable=False)
+    started_at = Column(DateTime, nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "strategy_key": self.strategy_key,
+            "symbol": self.symbol,
+            "timeframe": self.timeframe,
+            "starting_balance": self.starting_balance,
+            "balance": self.balance,
+            "started_at": self.started_at.isoformat() if self.started_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class PaperTrade(Base):
+    """모의투자 계좌에 실제로 청산 반영된 거래 1건."""
+
+    __tablename__ = "paper_trades"
+    __table_args__ = (
+        UniqueConstraint("account_id", "entry_time", name="uq_paper_trade_account_entry"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, nullable=False, index=True)
+    direction = Column(String, nullable=False)  # LONG/SHORT
+    entry_time = Column(DateTime, nullable=False)
+    exit_time = Column(DateTime, nullable=False)
+    entry_price = Column(Float, nullable=False)
+    exit_price = Column(Float, nullable=False)
+    exit_reason = Column(String, nullable=False)  # SL/TRAIL/TIME
+    pct_return = Column(Float, nullable=False)  # 수수료 반영 순수익률(%)
+    balance_before = Column(Float, nullable=False)
+    balance_after = Column(Float, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "direction": self.direction,
+            "entry_time": self.entry_time.isoformat() if self.entry_time else None,
+            "exit_time": self.exit_time.isoformat() if self.exit_time else None,
+            "entry_price": self.entry_price,
+            "exit_price": self.exit_price,
+            "exit_reason": self.exit_reason,
+            "pct_return": self.pct_return,
+            "balance_before": self.balance_before,
+            "balance_after": self.balance_after,
+        }
+
+
 class ScanState(Base):
     """(symbol, timeframe)별 마지막으로 처리한 완결 봉 시각 — 중복 시그널 방지."""
 

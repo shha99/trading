@@ -25,14 +25,21 @@ from app.db import init_db  # noqa: E402
 def _fresh_db():
     """각 테스트 전에 스키마를 보장하고, 테스트 간 데이터가 섞이지 않도록 정리한다."""
     init_db()
-    from app.db import SessionLocal, ScanState, SignalRecord, TradeRecord
+    from app.db import PaperAccount, PaperTrade, SessionLocal, ScanState, SignalRecord, TradeRecord
 
     session = SessionLocal()
     try:
         session.query(TradeRecord).delete()
         session.query(SignalRecord).delete()
         session.query(ScanState).delete()
+        session.query(PaperTrade).delete()
+        session.query(PaperAccount).delete()
         session.commit()
     finally:
         session.close()
+
+    import app.paper_trading as paper_trading_module
+
+    paper_trading_module._last_open_position = None
+    paper_trading_module._last_scan_at = None
     yield

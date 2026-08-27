@@ -222,7 +222,15 @@
     backtestSignalsTable: document.getElementById("backtestSignalsTable"),
     liveSignalsTable: document.getElementById("liveSignalsTable"),
     limitationsList: document.getElementById("limitationsList"),
+    paperTradingSection: document.getElementById("paperTradingSection"),
+    paperMeta: document.getElementById("paperMeta"),
+    paperStats: document.getElementById("paperStats"),
+    paperTradesTable: document.getElementById("paperTradesTable"),
   };
+
+  // 실시간 모의투자 패널은 /vf에만 있고(strategy_page.js는 /strategy와 공유),
+  // 그 중에서도 "wick"(볼린저 꼬리터치+RSI, 실제로 추적 중인 전략) 탭에서만 보여준다.
+  const PAPER_TRADING_STRATEGY_KEY = "wick";
 
   function renderTabs() {
     const profile = currentProfile();
@@ -277,6 +285,7 @@
     if (profile.hasLiveStatus) await loadLiveStatus();
     if (profile.hasLiveSignals) await loadLiveSignals();
     else renderNoLiveSignals();
+    await loadPaperTrading();
   }
 
   function togglePanels() {
@@ -496,6 +505,63 @@
   }
 
   // ------------------------------------------------------------------
+  // 실시간 모의투자 (/vf, wick 탭 전용) - 100% 가상 잔고, 실제 주문 없음
+  // ------------------------------------------------------------------
+  function renderOpenPosition(pos) {
+    if (!pos) return "없음 (대기 중)";
+    const cls = pos.unrealized_pct_return >= 0 ? "up" : "down";
+    return `${pos.direction} @ ${fmt(pos.entry_price)} (진입 ${pos.entry_time})<br>미실현 <span class="${cls}">${pos.unrealized_pct_return}%</span>`;
+  }
+
+  function renderPaperTrading(status) {
+    if (!el.paperTradingSection) return; // /strategy 페이지엔 이 섹션 자체가 없음
+    const visible = currentProfile().key === PAPER_TRADING_STRATEGY_KEY;
+    el.paperTradingSection.style.display = visible ? "" : "none";
+    if (!visible) return;
+
+    if (!status.ready) {
+      el.paperMeta.textContent = "모의투자 계좌를 준비하는 중입니다 (서버가 막 시작됐다면 첫 스캔까지 최대 1분 정도 걸릴 수 있습니다).";
+      el.paperStats.innerHTML = "";
+      el.paperTradesTable.innerHTML = "";
+      return;
+    }
+
+    const cls = status.return_pct > 0 ? "up" : status.return_pct < 0 ? "down" : "";
+    el.paperMeta.textContent =
+      `${status.symbol} ${status.timeframe} · 시작 ${status.started_at} · 마지막 스캔 ${status.last_scan_at || "-"} · ` +
+      `청산된 거래 ${status.trade_count}건 · 승률 ${status.win_rate != null ? status.win_rate + "%" : "-"}`;
+
+    el.paperStats.innerHTML =
+      `<div class="paper-stat"><div class="paper-stat-label">시작 잔고</div><div class="paper-stat-value">${Math.round(status.starting_balance).toLocaleString()}원</div></div>` +
+      `<div class="paper-stat"><div class="paper-stat-label">현재 잔고</div><div class="paper-stat-value ${cls}">${Math.round(status.balance).toLocaleString()}원</div></div>` +
+      `<div class="paper-stat"><div class="paper-stat-label">누적 수익률</div><div class="paper-stat-value ${cls}">${status.return_pct}%</div></div>` +
+      `<div class="paper-stat"><div class="paper-stat-label">진행중 포지션</div><div class="paper-stat-value">${renderOpenPosition(status.open_position)}</div></div>`;
+
+    const trades = status.recent_trades || [];
+    if (!trades.length) {
+      el.paperTradesTable.innerHTML = "<tr><td>아직 청산된 거래가 없습니다 (진입 신호를 기다리는 중).</td></tr>";
+      return;
+    }
+    let html = "<tr><th>진입시각</th><th>청산시각</th><th>방향</th><th>진입가</th><th>청산가</th><th>사유</th><th>수익률</th><th>청산 후 잔고</th></tr>";
+    trades.forEach((t) => {
+      html += `<tr><td>${t.entry_time}</td><td>${t.exit_time}</td><td>${t.direction}</td><td>${fmt(t.entry_price)}</td>` +
+        `<td>${fmt(t.exit_price)}</td><td>${t.exit_reason}</td>` +
+        `<td class="${t.pct_return >= 0 ? "up" : "down"}">${t.pct_return}%</td><td>${Math.round(t.balance_after).toLocaleString()}원</td></tr>`;
+    });
+    el.paperTradesTable.innerHTML = html;
+  }
+
+  async function loadPaperTrading() {
+    if (!el.paperTradingSection) return;
+    try {
+      const res = await fetch("/api/paper-trading/status");
+      renderPaperTrading(await res.json());
+    } catch (e) {
+      // 폴링 실패는 조용히 넘어간다 - 다음 주기에 재시도
+    }
+  }
+
+  // ------------------------------------------------------------------
   // 초기화
   // ------------------------------------------------------------------
   async function onContextChanged() {
@@ -516,7 +582,9 @@
     await loadChart();
     await loadLiveStatus();
     await loadLiveSignals();
+    await loadPaperTrading();
     setInterval(() => { if (currentProfile().hasLiveStatus) loadLiveStatus(); }, 15000);
+    setInterval(loadPaperTrading, 15000);
   }
 
   init();

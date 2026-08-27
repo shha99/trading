@@ -29,6 +29,8 @@ from app.lab_stats_builder import LAB_STATS_FILE
 from app.lab_stats_builder import build_all as build_lab_stats
 from app.lab_stats_builder import catalog as lab_catalog
 from app.live_feed import get_live_feed
+from app.paper_trading import get_status as paper_trading_status
+from app.paper_trading import run_once as run_paper_trading_once
 from app.position_manager import check_time_stops, reconcile_open_positions
 from app.risk import is_kill_switch_active, todays_realized_pnl_usdt
 from app.signal_engine import run_once
@@ -118,6 +120,7 @@ async def on_startup() -> None:
     init_db()
     _start_scheduler()
     threading.Thread(target=run_once, daemon=True).start()
+    threading.Thread(target=run_paper_trading_once, daemon=True).start()
     get_live_feed().start()
     _build_missing_stats_in_background()
 
@@ -155,11 +158,15 @@ def _start_scheduler() -> BackgroundScheduler:
         _refresh_all_stats_in_background, trigger="interval", hours=settings.stats_refresh_interval_hours,
         id="stats_refresh", max_instances=1, coalesce=True,
     )
+    _scheduler.add_job(
+        run_paper_trading_once, trigger="interval", seconds=settings.scan_interval_seconds,
+        id="paper_trading_scan", max_instances=1, coalesce=True,
+    )
     _scheduler.start()
     logger.info(
-        "스케줄러 시작: 시그널 스캔 %d초, 포지션 점검 %d초, 백테스트 성적표 갱신 %.1f시간 간격",
+        "스케줄러 시작: 시그널 스캔 %d초, 포지션 점검 %d초, 백테스트 성적표 갱신 %.1f시간 간격, 모의투자 스캔 %d초",
         settings.scan_interval_seconds, settings.position_watch_interval_seconds,
-        settings.stats_refresh_interval_hours,
+        settings.stats_refresh_interval_hours, settings.scan_interval_seconds,
     )
     return _scheduler
 
@@ -402,6 +409,19 @@ def validated_lab_stats() -> dict:
     if not VALIDATED_STATS_FILE.exists():
         return {}
     return json.loads(VALIDATED_STATS_FILE.read_text(encoding="utf-8"))
+
+
+# --------------------------------------------------------------------------
+# 실시간 모의투자 (paper trading) API
+# --------------------------------------------------------------------------
+
+@app.get("/api/paper-trading/status")
+def paper_trading_status_endpoint() -> dict:
+    """검증된 볼린저 꼬리터치+RSI 전략(BTCUSDT 15분봉)을 100만원 가상 잔고로
+    지금부터 실시간 굴리는 모의투자 계좌의 현재 상태. 실제 주문은 전혀 나가지
+    않는다 - 백그라운드 스케줄러(`app/paper_trading.run_once`)가 주기적으로
+    최근 캔들을 다시 백테스트해서 새로 청산된 거래만 반영한다."""
+    return paper_trading_status()
 
 
 # --------------------------------------------------------------------------
