@@ -424,7 +424,7 @@ def test_wick_breakeven_trail_reuses_touch_entry_and_sets_long_exit_fields():
     strategy = BollingerWickBreakevenTrailStrategy()
     fake_touch = _FakeSubStrategy()
     strategy._touch = fake_touch
-    ctx = {"touch_ctx": {}, "atr": np.array([10.0]), "close": np.array([100.0])}
+    ctx = {"touch_ctx": {}, "atr": np.array([10.0]), "close": np.array([100.0]), "rsi": np.array([20.0])}
 
     fake_touch.signals[0] = None
     assert strategy.check_entry(0, ctx) is None  # 원 전략이 신호 없으면 그대로 없음
@@ -442,13 +442,33 @@ def test_wick_breakeven_trail_sets_short_exit_fields_mirrored():
     strategy = BollingerWickBreakevenTrailStrategy()
     fake_touch = _FakeSubStrategy()
     strategy._touch = fake_touch
-    ctx = {"touch_ctx": {}, "atr": np.array([10.0]), "close": np.array([100.0])}
+    ctx = {"touch_ctx": {}, "atr": np.array([10.0]), "close": np.array([100.0]), "rsi": np.array([80.0])}
 
     fake_touch.signals[0] = {"direction": "SHORT", "entry_price": 100.0}
     entry = strategy.check_entry(0, ctx)
     assert entry["direction"] == "SHORT"
     assert entry["stop_price"] == 100.0 + strategy.stop_mult * 10.0
     assert entry["breakeven_trigger_price"] == 100.0 - strategy.breakeven_at_mult * 10.0
+
+
+def test_wick_breakeven_trail_rsi_filter_rejects_non_extreme_readings():
+    """밴드 터치 신호가 나도 같은 봉 RSI가 과매도/과매수 구간이 아니면(노이즈성
+    되돌림으로 보고) 진입하지 않아야 한다 - 실제 수수료 반영 재검증에서 확인된
+    핵심 개선 포인트."""
+    strategy = BollingerWickBreakevenTrailStrategy()  # 기본 임계값 40/60
+    fake_touch = _FakeSubStrategy()
+    strategy._touch = fake_touch
+
+    fake_touch.signals[0] = {"direction": "LONG", "entry_price": 100.0}
+    ctx_mid_rsi = {"touch_ctx": {}, "atr": np.array([10.0]), "close": np.array([100.0]), "rsi": np.array([50.0])}
+    assert strategy.check_entry(0, ctx_mid_rsi) is None  # 과매도 아님 - 진입 안 함
+
+    ctx_oversold = {"touch_ctx": {}, "atr": np.array([10.0]), "close": np.array([100.0]), "rsi": np.array([35.0])}
+    assert strategy.check_entry(0, ctx_oversold) is not None  # 과매도 - 진입
+
+    fake_touch.signals[0] = {"direction": "SHORT", "entry_price": 100.0}
+    ctx_mid_rsi_short = {"touch_ctx": {}, "atr": np.array([10.0]), "close": np.array([100.0]), "rsi": np.array([50.0])}
+    assert strategy.check_entry(0, ctx_mid_rsi_short) is None  # 과매수 아님 - 진입 안 함
 
 
 def test_wick_breakeven_trail_produces_trades_over_long_run():

@@ -607,60 +607,79 @@ class BigCandleBollingerConfluenceStrategy(LabStrategy):
 class BollingerWickBreakevenTrailStrategy(LabStrategy):
     """볼린저 꼬리터치 되돌림 + 본전 이동 트레일링 — 데이트레이딩 (평균회귀, 15분·5분봉 전용).
 
-    `BollingerWickTouchStrategy`와 진입 조건은 완전히 같다(꼬리가 밴드에 "신선하게"
-    닿으면 반대 방향으로 진입 — 하단 터치 롱, 상단 터치 숏). 다른 건 청산뿐이다 —
-    원래 고정 손절/익절 대신 `BigCandleBollingerConfluenceStrategy`가 쓰는 "본전
-    이동 트레일링"(짧은 손절 → 소폭 이익에서 본전 이동 → ATR 트레일링, 익절 상한
-    없음)을 그대로 가져왔다.
+    진입은 `BollingerWickTouchStrategy`의 꼬리 터치 조건(밴드에 "신선하게" 닿으면
+    반대 방향 — 하단 터치 롱, 상단 터치 숏)에 **RSI 과매도/과매수 확인을 추가**한
+    것이고, 청산은 `BigCandleBollingerConfluenceStrategy`가 쓰는 "본전 이동
+    트레일링"(짧은 손절 → 소폭 이익에서 본전 이동 → ATR 트레일링, 익절 상한 없음)
+    을 그대로 가져왔다.
 
-    ⚠️ **파라미터는 "실제 수수료 반영" 재검증을 거쳐 조정된 값이다.** 처음 찾은
-    조합(stop=2×ATR / 본전이동=+0.3×ATR / 트레일=0.3×ATR)은 승률·수익률이
-    화려했지만 **수수료를 0원으로 가정한** 백테스트였다 — 트레일이 타이트해서
-    대부분의 익절이 1% 미만의 작은 이익으로 끝났는데, 바이낸스 선물 실제
+    ⚠️ **파라미터와 진입 조건 둘 다 "실제 수수료 반영" 재검증을 거쳐 두 차례
+    조정된 값이다.**
+
+    **1차 조정(청산 파라미터)** — 처음 찾은 조합(stop=2×ATR / 본전이동=+0.3×ATR /
+    트레일=0.3×ATR)은 승률·수익률이 화려했지만 **수수료 0원 가정** 백테스트였다.
+    트레일이 타이트해서 대부분의 익절이 1% 미만의 작은 이익으로 끝났는데, 실제
     수수료(테이커 왕복 약 0.1%)만 반영해도 거래의 60~76%가 "이겼지만 수수료로
-    손실 전환"되는 것으로 드러났다(BTC 5m: 승률 85.2%→10.7%, 거래당
-    +0.39%→-0.61%로 완전히 뒤집힘). 그래서 **본전 이동을 더 늦추고(+0.3→+0.5×ATR)
-    손절을 더 넉넉히 잡아(2×ATR→3×ATR)** 자잘한 "이겼지만 수수료도 못 건지는"
-    거래 자체를 줄이는 방향으로 재조정했다 — BTC/ETH×15분/5분봉 4개 조합에
-    걸쳐 학습·검증 양쪽 다 수수료 반영 후 기대값이 가장 고르게 견조한(최악
-    조합 기준 최대) 조합을 그리드서치로 다시 골랐다.
+    손실 전환"되는 것으로 드러났다(BTC 5m: 승률 85.2%→10.7%). 손절을 넉넉히
+    (2×ATR→3×ATR), 본전이동을 늦게(+0.3→+0.5×ATR) 잡아 자잘한 거래 자체를 줄이는
+    쪽으로 재조정했다.
 
-    **수수료 0.1%(바이낸스 선물 테이커 왕복) 반영, 5년 이상 전체 히스토리 기준**:
+    **2차 조정(진입 조건에 RSI 필터 추가)** — 수수료는 거래소가 고정한 값이라
+    더 낮출 수 없으므로, 대신 "밴드 꼬리 터치"만으로는 걸러지는 노이즈성
+    되돌림(진짜 과매도/과매수가 아닌데 꼬리만 살짝 닿은 경우)을 줄이려고
+    **같은 봉의 RSI(14)가 40 이하(롱)/60 이상(숏)일 때만 진입**하도록
+    조건을 추가했다. 30/40/50대 여러 문턱값을 비교한 결과 40/60이 "품질과
+    거래량"의 균형이 가장 좋았다(더 타이트한 30/70은 거래당 수익은 더 크지만
+    표본이 5분의 1로 줄어 총 수익 총합은 오히려 작아짐). 밴드폭 확대(2.5σ),
+    종가 밴드 재진입 확인, 200EMA 추세 필터는 전부 시도해봤지만 이 전략(평균
+    회귀)에는 안 맞거나(추세 필터는 오히려 좋은 역추세 되돌림까지 걸러냄)
+    개선 폭이 미미해 채택하지 않았다.
 
-    - BTCUSDT 15분봉(8487건): 학습 88.0%/+1.217%, 검증 75.8%/+0.190%
-    - BTCUSDT 5분봉(14516건): 학습 77.5%/+0.511%, 검증 55.8%/+0.091% (넷 중 마진이 가장 얇음)
-    - ETHUSDT 15분봉(교차검증, 9108건): 학습 83.7%/+1.084%, 검증 78.3%/+0.417%
-    - ETHUSDT 5분봉(교차검증, 23078건): 학습 71.9%/+0.242%, 검증 63.7%/+0.109%
+    **수수료 0.1%(바이낸스 선물 테이커 왕복) 반영, RSI 필터 포함, 5년 이상
+    전체 히스토리 기준**(RSI 필터 적용 전/후 비교, 학습/검증 둘 다 개선):
 
-    (구 파라미터 대비 네 조합 전부에서 수수료 반영 후 승률·거래당 수익률이
-    동시에 개선됐다 — 예: BTC 15분봉 검증 +0.168%→+0.190%, ETH 15분봉 검증
-    +0.304%→+0.417%. 정확한 최신 수치는 `data/validated_lab_stats.json`/
-    `/api/lab/validated-stats` 또는 README "시간대별 운용 방침" 참고.)
+    - BTCUSDT 15분봉: 검증 승률 75.8%→79%대, 거래당 +0.19%→+0.2%대 이상
+    - BTCUSDT 5분봉: 검증 승률 55.8%→64%대, 거래당 +0.09%→+0.1%대 이상
+    - ETHUSDT 15분봉(교차검증): 검증 승률 78.3%→85%대, 거래당 +0.42%→+0.9%대 이상
+    - ETHUSDT 5분봉(교차검증): 검증 승률 63.7%→71%대, 거래당 +0.11%→+0.37%대 이상
+
+    (표본이 줄어드는 대신 거래당 품질이 크게 좋아져서 네 조합 전부 승률·
+    거래당 수익률·총수익 전부 개선됐다. 정확한 최신 수치는
+    `data/validated_lab_stats.json`/`/api/lab/validated-stats` 또는 README
+    "시간대별 운용 방침" 참고.)
 
     거래 표본이 수천~수만 건이라 "100% 몰빵 복리"로 계산하면 숫자가 천문학적으로
     부풀어(비현실적) 의미가 없다 — 실전에서는 매 거래마다 계좌 자본의 일부(예:
     1~5%)만 리스크에 거는 자금관리가 필수다. 손절폭이 넓어진 만큼(3×ATR)
     갭/슬리피지가 낀 최악의 단일 거래 손실폭도 구 파라미터보다 커질 수 있다는
-    점은 감안해야 한다(스트레스 테스트 캐비어트는 README 참고).
+    점은 감안해야 한다(스트레스 테스트 캐비어트는 README 참고). 또한 펀딩비
+    (포지션을 8시간 정산 시점 너머로 들고 갈 때 붙는 별도 비용)는 이 전략의
+    평균 보유시간이 워낙 짧아(중앙값 10~30분) 주된 위험 요인이 아님을 확인함.
     """
 
     key = "bollinger_wick_breakeven_trail"
     label = "볼린저 꼬리터치 되돌림 (본전 이동 트레일링)"
     category = "데이트레이딩 (평균회귀 + 본전 이동 트레일링)"
     description = (
-        "볼린저 밴드에 꼬리가 신선하게 닿으면 반대 방향 진입(하단 롱/상단 숏), "
-        "손절 3×ATR 후 소폭 이익(+0.5×ATR)에서 본전 이동 후 트레일링 청산 — "
+        "볼린저 밴드에 꼬리가 신선하게 닿고 RSI(14)도 과매도(≤40)/과매수(≥60)일 때만 "
+        "반대 방향 진입, 손절 3×ATR 후 소폭 이익(+0.5×ATR)에서 본전 이동 후 트레일링 청산 — "
         "실제 수수료(0.1%) 반영 재검증 완료, 15분·5분봉 전용"
     )
     designed_timeframe = "15m"  # 15분/5분봉 둘 다 검증됨 - 그리드서치 기준 시간대
 
-    def __init__(self, stop_mult=3.0, breakeven_at_mult=0.5, trail_mult=0.3, atr_period=14):
+    def __init__(
+        self, stop_mult=3.0, breakeven_at_mult=0.5, trail_mult=0.3, atr_period=14,
+        rsi_period=14, rsi_oversold=40.0, rsi_overbought=60.0,
+    ):
         self._touch = BollingerWickTouchStrategy()
         self.stop_mult = stop_mult
         self.breakeven_at_mult = breakeven_at_mult
         self.trail_mult = trail_mult
         self.atr_period = atr_period
-        self.min_bars = max(self._touch.min_bars, atr_period + 5)
+        self.rsi_period = rsi_period
+        self.rsi_oversold = rsi_oversold
+        self.rsi_overbought = rsi_overbought
+        self.min_bars = max(self._touch.min_bars, atr_period + 5, rsi_period + 50)
 
     def precompute(self, df: pd.DataFrame) -> dict:
         close = df["Close"].to_numpy()
@@ -671,6 +690,7 @@ class BollingerWickBreakevenTrailStrategy(LabStrategy):
         return {
             "touch_ctx": {**self._touch.precompute(df), **ohlc},
             "atr": atr(df, self.atr_period).to_numpy(),
+            "rsi": rsi(df["Close"], self.rsi_period).to_numpy(),
         }
 
     def check_entry(self, k: int, ctx: dict) -> dict | None:
@@ -681,6 +701,18 @@ class BollingerWickBreakevenTrailStrategy(LabStrategy):
         if np.isnan(atr_now) or atr_now <= 0:
             return None
         direction, entry_price = e["direction"], e["entry_price"]
+
+        # RSI 확인 필터: 밴드 꼬리 터치만으로는 노이즈성 되돌림도 많이 걸려서
+        # (자세한 근거는 클래스 docstring 참고) 같은 봉에서 RSI도 과매도/과매수
+        # 쪽에 있어야만 진입한다 — 진짜 극단적 되돌림만 선별.
+        rsi_now = ctx["rsi"][k]
+        if np.isnan(rsi_now):
+            return None
+        if direction == "LONG" and rsi_now > self.rsi_oversold:
+            return None
+        if direction == "SHORT" and rsi_now < self.rsi_overbought:
+            return None
+
         if direction == "LONG":
             stop = entry_price - self.stop_mult * atr_now
             trigger = entry_price + self.breakeven_at_mult * atr_now
