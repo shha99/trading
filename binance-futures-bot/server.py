@@ -198,6 +198,14 @@ def validated_strategies_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "vf.html")
 
 
+@app.get("/sw.js")
+def service_worker() -> FileResponse:
+    """PWA 서비스워커 - 루트 경로("/sw.js")로 내려줘야 스코프가 사이트 전체가 된다
+    (스코프는 기본적으로 스크립트 위치 디렉터리로 제한되므로 /static/sw.js로
+    두면 /static/ 아래만 제어하게 됨)."""
+    return FileResponse(STATIC_DIR / "sw.js", media_type="application/javascript")
+
+
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 

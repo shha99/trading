@@ -36,6 +36,15 @@
 (vendored) + FastAPI다. `/vf`와 `/strategy`는 `static/strategy_page.js` 하나를
 그대로 공유한다(기본 탭만 HTML에서 `window.DEFAULT_STRATEGY_TAB`으로 지정).
 
+**PWA(설치 가능한 웹앱)**: 배포된 주소를 모바일 브라우저(Android Chrome/iOS
+Safari)나 PC 브라우저에서 열면 "홈 화면에 추가"/"앱 설치"로 아이콘이 생기고,
+그 아이콘으로 열면 주소창 없이 앱처럼(standalone) 뜬다. 별도 빌드나 앱스토어
+등록 없이 `static/manifest.webmanifest` + `static/sw.js`(정적 자산만
+stale-while-revalidate로 캐싱 — 시세/백테스트/모의투자 데이터는 항상
+네트워크로만 받아 오래된 값이 보이지 않게 함) + `static/icons/`로 구현했다.
+네이티브 앱스토어 배포(iOS/Android)나 데스크톱 실행파일(Electron)은
+별개의 작업이라 여기 포함되지 않는다.
+
 ## 전략: 200EMA + 켈트너 하단 눌림목 복귀
 
 친구분이 BTC 1시간봉 5년치(45,000봉)로 후보 114개 조합을 백테스트해서,
@@ -453,6 +462,8 @@ tests/                     pytest (전부 mock/합성 데이터, 실제 바이�
 - [x] 전략 페이지 (백테스트 성적표 + 실시간 조건 패널)
 - [x] 전략 실험실 (켈트너 + 비교용 후보 11종, 심볼×시간대별 성적 비교)
 - [x] 검증된 전략 페이지(`/vf`) + 실시간 모의투자(100만원, BTCUSDT 15분봉, 실제 주문 없음)
+- [x] PWA(설치 가능한 웹앱 - 홈 화면 추가, standalone 실행)
+- [ ] 네이티브 앱스토어 배포(iOS/Android) 또는 데스크톱 실행파일(Electron) - 필요해지면 별도 작업
 - [ ] 실계좌 자동매매 + 리스크 관리 강화 (일일 손실 한도 킬스위치와 SL/TP
       체결 반영은 이미 있음 — 실계좌 전환 전에는 반드시 오래 테스트넷으로
       먼저 검증하고, API 키 권한/IP 제한을 다시 확인할 것)
