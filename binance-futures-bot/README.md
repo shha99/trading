@@ -6,16 +6,22 @@
 **실시간 차트 대시보드(165종 지표 + 61종 캔들패턴) + 독립 전략 페이지**를
 모두 구현했다.
 
-## 화면 셋
+## 화면 넷
 
 - **`/` 차트 대시보드**: BTC/ETH 무기한 선물 실시간 캔들+거래량 차트
   (15m/1h/4h/1d), 165종 지표(TA-Lib 160 + 커스텀 5) 검색·토글·파라미터 수정,
   캔들패턴 61종 마커, 보조지표 레이아웃 3종(세로/6개씩/한 화면), 실시간
   현재가·24h 통계, 다음 봉 마감 카운트다운, 크로스헤어 정보 패널.
-- **`/strategy` 전략 페이지**: 진입조건 3개 실시간 충족 현황, 켈트너
-  하단·200EMA 오버레이+과거 매수 시그널이 있는 차트, 심볼×시간대 백테스트
-  성적표(학습/검증/연도별), 최근 시그널(백테스트+실거래) 목록, 전략 한계
-  고정 노출.
+- **`/vf` 검증된 전략(Validated Final)**: 켈트너급(학습/검증/연도별 분리)
+  검증을 통과한 전략 3종 — 200EMA+켈트너 하단 복귀(BTC 1h) / 큰 양봉+볼린저
+  콘플루언스(BTC 1h) / 볼린저 꼬리터치+RSI 확인(BTC·ETH 15m·5m) — 을 상단
+  탭으로 바로 전환해가며 차트 오버레이·백테스트 성적표(학습/검증/연도별)·
+  최근 시그널을 볼 수 있다. 기본 탭은 가장 최근에 최적화된 볼린저
+  꼬리터치+RSI 전략. 도메인에서 바로 `/vf`로 들어가면 됨.
+- **`/strategy` 전략 페이지**: `/vf`와 같은 화면(3종 전환 전부 가능)이고
+  기본 탭만 켈트너 전략으로 열린다는 점만 다르다 — 진입조건 3개 실시간
+  충족 현황은 켈트너 탭에서만 보인다(유일하게 실시간 판정 API가 있는
+  전략이라서).
 - **`/lab` 전략 실험실**: 검증된 켈트너 전략 + 비교용 후보 11종(추세추종/
   반등매수/밴드되돌림/밴드돌파/저항대응/지지대응/밴드터치/일목균형표/
   RSI+거래량 데이트레이딩/이중 확인 콤보/밴드터치+본전이동트레일링)을
@@ -25,9 +31,10 @@
   숫자는 `app/lab_strategies.py`에 표준적인 방식으로 채운 가정값이니,
   실제로 써보려면 그 파일에서 직접 확인·조정할 것.
 
-셋 다 별도 빌드 단계 없는 순수 JS(`static/`) + TradingView
+넷 다 별도 빌드 단계 없는 순수 JS(`static/`) + TradingView
 [lightweight-charts](https://github.com/tradingview/lightweight-charts)
-(vendored) + FastAPI다.
+(vendored) + FastAPI다. `/vf`와 `/strategy`는 `static/strategy_page.js` 하나를
+그대로 공유한다(기본 탭만 HTML에서 `window.DEFAULT_STRATEGY_TAB`으로 지정).
 
 ## 전략: 200EMA + 켈트너 하단 눌림목 복귀
 
@@ -227,7 +234,7 @@ uvicorn server:app --reload --port 8300
    → 루트 디렉터리(Root Directory)를 `binance-futures-bot`으로 지정
    → `render.yaml`을 자동으로 읽어서 서비스가 만들어짐
 3. 몇 분 배포 대기 후 Render가 주는 `https://xxxx.onrender.com` 주소로 접속
-   — `/`, `/strategy`, `/lab` 전부 그대로 열림
+   — `/`, `/vf`, `/strategy`, `/lab` 전부 그대로 열림
 
 **무료 플랜 한계 (알고 써야 함)**:
 - 영구 디스크(persistent disk)를 못 붙여서 재배포/재시작마다
@@ -333,7 +340,8 @@ app/
   db.py                     SQLite: 시그널/매매 이력, 중복실행 방지 상태
 static/
   index.html, app.js, style.css              차트 대시보드
-  strategy.html, strategy_page.js, strategy.css   전략 페이지
+  vf.html                                    검증된 전략 3종 전환 페이지 (strategy_page.js 공유, 기본 탭=wick)
+  strategy.html, strategy_page.js, strategy.css   전략 페이지 (vf.html과 JS 공유, 기본 탭=keltner)
   lab.html, lab.js, lab.css                    전략 실험실
   vendor/lightweight-charts.js                TradingView lightweight-charts (vendored)
 data/                     strategy_stats.json, lab_stats.json, bot.db (전부 gitignore)

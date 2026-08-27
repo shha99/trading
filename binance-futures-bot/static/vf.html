@@ -3,20 +3,27 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>전략: 200EMA + 켈트너 하단 복귀</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='13' font-size='14'%3E%F0%9F%93%88%3C/text%3E%3C/svg%3E" />
+<title>검증된 전략 (VF)</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='13' font-size='14'%3E%E2%9C%85%3C/text%3E%3C/svg%3E" />
 <link rel="stylesheet" href="/static/style.css" />
 <link rel="stylesheet" href="/static/strategy.css" />
 <script src="/static/vendor/lightweight-charts.js"></script>
+<script>
+  // 켈트너 전략 실험실을 거쳐 학습/검증 분리 백테스트로 검증된 전략들만
+  // 모아보는 페이지 - 기본 탭은 가장 최근에 최적화된 전략(볼린저 꼬리터치
+  // 되돌림+RSI 확인)으로 연다. 나머지 구현은 /strategy와 완전히 동일한
+  // strategy_page.js를 그대로 재사용한다(PROFILES에 3종 다 들어있음).
+  window.DEFAULT_STRATEGY_TAB = "wick";
+</script>
 </head>
 <body>
 <header class="topbar">
-  <h1 class="brand" id="brandTitle">전략: 200EMA + 켈트너 하단 눌림목 복귀</h1>
+  <h1 class="brand" id="brandTitle">검증된 전략 (VF)</h1>
   <div class="strategy-tabs" id="strategyTabs"></div>
   <div class="symbol-tabs" id="symbolTabs"></div>
   <div class="timeframe-tabs" id="timeframeTabs"></div>
   <a class="strategy-link" href="/" target="_blank" rel="noopener">차트 대시보드 ↗</a>
-  <a class="strategy-link" href="/vf" target="_blank" rel="noopener">검증된 전략 전체보기 ↗</a>
+  <a class="strategy-link" href="/strategy" target="_blank" rel="noopener">켈트너 전략 페이지 ↗</a>
   <a class="strategy-link" href="/lab" target="_blank" rel="noopener">전략 실험실 ↗</a>
 </header>
 

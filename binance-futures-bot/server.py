@@ -183,6 +183,14 @@ def lab_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "lab.html")
 
 
+@app.get("/vf")
+def validated_strategies_page() -> FileResponse:
+    """검증된 전략(Validated - 켈트너/콘플루언스/볼린저 꼬리터치+RSI) 전용 페이지.
+    /strategy와 완전히 같은 JS(static/strategy_page.js)를 재사용하고,
+    기본 탭만 최신 최적화 전략(wick)으로 연다(vf.html의 인라인 스크립트)."""
+    return FileResponse(STATIC_DIR / "vf.html")
+
+
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 

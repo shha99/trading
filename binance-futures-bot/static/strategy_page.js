@@ -1,9 +1,12 @@
-// 전략 페이지 - 검증된 전략 2종 전환 가능:
+// 전략 페이지 - 검증된 전략 3종 전환 가능 (/strategy, /vf 둘 다 이 스크립트를 씀):
 //   1) keltner: 200EMA + 켈트너 하단 눌림목 복귀 (자동매매 화이트리스트 대상 - BTCUSDT:1h)
-//   2) wick: 볼린저 꼬리터치 되돌림 (본전 이동 트레일링) - BTC/ETH 15분·5분봉에서 검증됨
-// 둘 다 data/*.json에 학습/검증/연도별로 저장된 백테스트를 보여준다는 점은
-// 같지만, 지표(R배수 vs %수익률)·차트 오버레이(켈트너/EMA vs 볼린저밴드)·
-// 실시간 조건판정 유무·자동매매 연결 여부가 달라서 PROFILES로 분리해둔다.
+//   2) confluence: 큰 양봉+볼린저 동시 돌파 (본전 이동 트레일링) - BTCUSDT 1시간봉 전용
+//   3) wick: 볼린저 꼬리터치 되돌림+RSI 확인 (본전 이동 트레일링) - BTC/ETH 15분·5분봉
+// 전부 data/*.json에 학습/검증/연도별로 저장된 백테스트를 보여준다는 점은
+// 같지만, 지표(R배수 vs %수익률)·차트 오버레이·실시간 조건판정 유무·자동매매
+// 연결 여부가 달라서 PROFILES로 분리해둔다. confluence/wick은 둘 다
+// lab_backtest.py의 %수익률 트레이드 스키마를 그대로 쓰므로 공통 로직은
+// PCT_PROFILE_DEFAULTS에 모아두고 각자 필요한 부분만 덮어쓴다.
 (function () {
   "use strict";
 
@@ -22,6 +25,41 @@
   function renderSignalsRows(trades, rowFn) {
     return trades.slice().reverse().map(rowFn).join("");
   }
+
+  // confluence/wick 둘 다 lab_backtest.py의 %수익률 트레이드 스키마
+  // (trades/win_rate/total_pct/avg_pct_per_trade/best_pct/worst_pct,
+  // direction/entry_price/exit_price/exit_reason/pct_return)를 그대로
+  // 쓰므로 표/마커/포맷 로직을 한 군데 모아 각 프로필에서 펼쳐(spread) 쓴다.
+  const PCT_PROFILE_DEFAULTS = {
+    metricCols: ["trades", "win_rate", "total_pct", "avg_pct_per_trade", "best_pct", "worst_pct"],
+    colLabels: {
+      trades: "건수", win_rate: "승률", total_pct: "총 수익률(%)",
+      avg_pct_per_trade: "평균%/거래", best_pct: "최고%", worst_pct: "최악%",
+    },
+    totalKey: "total_pct",
+    formatMetric(col, value) {
+      if (value === undefined) return "-";
+      if (col === "win_rate") return `${Math.round(value * 100)}%`;
+      if (col === "trades") return value;
+      return `${value}%`;
+    },
+    scoreFormat(v) {
+      const avg = (v.avg_pct_per_trade ?? 0).toFixed(2);
+      return `win ${(v.win_rate ?? 0) * 100 | 0}% / ${avg}%/거래 (${v.trades ?? 0}건)`;
+    },
+    buildMarkers(trades) {
+      return trades.map((t) => t.direction === "LONG"
+        ? { time: toUnixSeconds(t.entry_time), position: "belowBar", color: "#26a69a", shape: "arrowUp", text: "LONG" }
+        : { time: toUnixSeconds(t.entry_time), position: "aboveBar", color: "#ef5350", shape: "arrowDown", text: "SHORT" });
+    },
+    renderSignalsTable(trades) {
+      let html = "<tr><th>진입시각</th><th>방향</th><th>진입가</th><th>청산가</th><th>결과</th><th>수익률</th></tr>";
+      html += renderSignalsRows(trades, (t) =>
+        `<tr><td>${t.entry_time}</td><td>${t.direction}</td><td>${fmt(t.entry_price)}</td><td>${fmt(t.exit_price)}</td>` +
+        `<td>${t.exit_reason}</td><td class="${t.pct_return >= 0 ? "up" : "down"}">${t.pct_return}%</td></tr>`);
+      return html;
+    },
+  };
 
   const PROFILES = {
     keltner: {
@@ -70,6 +108,39 @@
       ],
     },
 
+    confluence: {
+      key: "confluence",
+      dataKey: "big_candle_bollinger_confluence",
+      title: "전략: 큰 양봉+볼린저 동시 돌파 (본전 이동 트레일링)",
+      switchLabel: "콘플루언스 (1h)",
+      timeframes: ["1h"],
+      defaultTimeframe: "1h",
+      statsUrl: "/api/lab/validated-stats",
+      hasLiveStatus: false,
+      hasLiveSignals: false,
+      overlay: "confluence",
+      entryDescription:
+        "같은 봉에서 ① 큰 양봉 돌파(종가>50EMA, 몸통이 최근 20봉 평균의 2배 이상) 와 ② 볼린저 상단 돌파가 " +
+        "동시에 나올 때만 롱 진입(이중 확인). 청산은 손절 -3×ATR → 가격이 +0.5×ATR 이익을 보면 본전(진입가)으로 " +
+        "손절선 이동 → 이후 고점 -0.3×ATR 트레일링(익절 상한 없음). BTCUSDT 1시간봉 학습·검증 구간 모두 견조하지만 " +
+        "ETHUSDT 1시간봉은 검증구간이 마이너스라 BTC 1시간봉 한정으로만 쓴다. 자동매매 엔진에는 아직 연결돼 있지 " +
+        "않다(문서/정책 수준 - 실제 주문 실행 없음).",
+      ...PCT_PROFILE_DEFAULTS,
+      metaText(meta) {
+        return `생성: ${meta.generated_at} · 학습 ${meta.train_start}~${meta.train_end} · 검증 ~${meta.validation_end} · ` +
+          `전략: big_candle_bollinger_confluence (본전 이동 트레일링)`;
+      },
+      limitations: [
+        "이 전략은 <strong>BTCUSDT 1시간봉</strong>에서 검증됐다(5년 이상 히스토리, 학습·검증 구간 모두 플러스).",
+        "<strong>ETHUSDT 1시간봉은 검증 구간이 마이너스</strong>라 BTC 1시간봉 한정으로만 쓴다.",
+        "백테스트는 <strong>슬리피지(체결 지연/갭)를 반영하지 않는다</strong> — 실제 최악 단일 거래 손실은 2022-05 " +
+          "LUNA 사태급 변동성에서 -38.56%까지 나온 적이 있다(이론상 손절폭보다 훨씬 큼).",
+        "<strong>아직 자동매매 엔진(app/signal_engine.py)에 연결돼 있지 않다</strong> — 화이트리스트는 여전히 켈트너 " +
+          "전략(BTCUSDT:1h) 기본값 그대로다.",
+        "여기 구현된 시그널은 참고용 스크리닝 도구이며, 매매 추천이나 투자 조언이 아니다.",
+      ],
+    },
+
     wick: {
       key: "wick",
       dataKey: "bollinger_wick_breakeven_trail",
@@ -82,48 +153,26 @@
       hasLiveSignals: false,
       overlay: "bollinger",
       entryDescription:
-        "볼린저 밴드(20봉, ±2σ)에 꼬리가 '신선하게'(직전 봉엔 안 닿았다가 이번 봉에 처음) 닿으면 반대 방향으로 진입 " +
-        "— 하단 터치 → 롱, 상단 터치 → 숏. 청산은 손절 -2×ATR → 가격이 +0.5×ATR 이익을 보면 본전(진입가)으로 손절선 " +
-        "이동 → 이후 고점/저점 ±0.5×ATR 트레일링(익절 상한 없음). BTC/ETH·15분/5분봉·5년 이상 학습·검증 구간 전부 " +
-        "견조하게 검증됐지만, 자동매매 엔진에는 아직 연결돼 있지 않다(문서/정책 수준 - 실제 주문 실행 없음).",
-      metricCols: ["trades", "win_rate", "total_pct", "avg_pct_per_trade", "best_pct", "worst_pct"],
-      colLabels: {
-        trades: "건수", win_rate: "승률", total_pct: "총 수익률(%)",
-        avg_pct_per_trade: "평균%/거래", best_pct: "최고%", worst_pct: "최악%",
-      },
-      totalKey: "total_pct",
-      formatMetric(col, value) {
-        if (value === undefined) return "-";
-        if (col === "win_rate") return `${Math.round(value * 100)}%`;
-        if (col === "trades") return value;
-        return `${value}%`;
-      },
-      scoreFormat(v) {
-        const avg = (v.avg_pct_per_trade ?? 0).toFixed(2);
-        return `win ${(v.win_rate ?? 0) * 100 | 0}% / ${avg}%/거래 (${v.trades ?? 0}건)`;
-      },
+        "볼린저 밴드(20봉, ±2σ)에 꼬리가 '신선하게'(직전 봉엔 안 닿았다가 이번 봉에 처음) 닿고, 같은 봉의 " +
+        "RSI(14)도 과매도(≤40)/과매수(≥60)일 때만 반대 방향으로 진입 — 하단 터치+과매도 → 롱, 상단 터치+과매수 " +
+        "→ 숏. 청산은 손절 -3×ATR → 가격이 +0.5×ATR 이익을 보면 본전(진입가)으로 손절선 이동 → 이후 고점/저점 " +
+        "±0.3×ATR 트레일링(익절 상한 없음). BTC/ETH·15분/5분봉·5년 이상 학습·검증 구간 전부 견조하게 검증됐지만, " +
+        "자동매매 엔진에는 아직 연결돼 있지 않다(문서/정책 수준 - 실제 주문 실행 없음).",
+      ...PCT_PROFILE_DEFAULTS,
       metaText(meta) {
         return `생성: ${meta.generated_at} · 학습 ${meta.train_start}~${meta.train_end} · 검증 ~${meta.validation_end} · ` +
-          `전략: bollinger_wick_breakeven_trail (본전 이동 트레일링)`;
-      },
-      buildMarkers(trades) {
-        return trades.map((t) => t.direction === "LONG"
-          ? { time: toUnixSeconds(t.entry_time), position: "belowBar", color: "#26a69a", shape: "arrowUp", text: "LONG" }
-          : { time: toUnixSeconds(t.entry_time), position: "aboveBar", color: "#ef5350", shape: "arrowDown", text: "SHORT" });
-      },
-      renderSignalsTable(trades) {
-        let html = "<tr><th>진입시각</th><th>방향</th><th>진입가</th><th>청산가</th><th>결과</th><th>수익률</th></tr>";
-        html += renderSignalsRows(trades, (t) =>
-          `<tr><td>${t.entry_time}</td><td>${t.direction}</td><td>${fmt(t.entry_price)}</td><td>${fmt(t.exit_price)}</td>` +
-          `<td>${t.exit_reason}</td><td class="${t.pct_return >= 0 ? "up" : "down"}">${t.pct_return}%</td></tr>`);
-        return html;
+          `전략: bollinger_wick_breakeven_trail (RSI 확인 + 본전 이동 트레일링)`;
       },
       limitations: [
         "이 전략은 <strong>BTCUSDT/ETHUSDT 15분·5분봉</strong>에서 검증됐다(5년 이상 히스토리, 학습·검증 구간 모두 플러스).",
+        "진입에 <strong>RSI(14) 과매도(≤40)/과매수(≥60) 확인</strong>이 추가돼(수수료가 고정값이라 시그널 품질을 " +
+          "높이는 쪽으로 개선) 거래 수는 줄었지만 승률·거래당 수익률이 네 조합 전부에서 개선됐다.",
         "백테스트는 <strong>슬리피지(체결 지연/갭)를 반영하지 않는다</strong> — 본전 이동 전에 갭으로 손절선이 뚫리면 " +
-          "이론상 손절폭(약 -2%대)보다 훨씬 큰 손실이 날 수 있다(스트레스 테스트 최악 사례 -18.6%~-43.8%).",
-        "거래 표본이 수만 건이라 '원금 100% 복리'로 계산하면 숫자가 비현실적으로 부푼다 — 실전에서는 거래당 계좌 " +
-          "자본의 일부(1~5%)만 리스크에 거는 자금관리가 필수다.",
+          "이론상 손절폭보다 훨씬 큰 손실이 날 수 있다(스트레스 테스트 최악 사례 -18.6%~-43.8%).",
+        "거래 표본이 수천~수만 건이라 '원금 100% 복리'로 계산하면 숫자가 비현실적으로 부푼다 — 실전에서는 거래당 " +
+          "계좌 자본의 일부(1~5%)만 리스크에 거는 자금관리가 필수다.",
+        "<strong>펀딩비(포지션을 8시간 정산 시점 너머로 들고 갈 때 붙는 비용)는 평균 보유시간이 짧아(중앙값 " +
+          "10~30분) 주된 위험 요인이 아님을 확인했다</strong> — 진짜 병목은 여전히 거래 1건당 수수료다.",
         "<strong>아직 자동매매 엔진(app/signal_engine.py)에 연결돼 있지 않다</strong> — 화이트리스트는 여전히 켈트너 " +
           "전략(BTCUSDT:1h) 기본값 그대로고, 이 전략의 '본전 이동 트레일링' 청산은 진입 후에도 손절 주문을 계속 " +
           "옮겨줘야 해서 별도의 포지션 감시 루프가 필요하다.",
@@ -132,12 +181,16 @@
     },
   };
 
+  // /vf 페이지처럼 기본 탭을 켈트너가 아닌 다른 전략으로 열고 싶으면, HTML에서
+  // 스크립트 로드 전에 window.DEFAULT_STRATEGY_TAB = "wick" 같은 값을 지정한다.
+  const INITIAL_STRATEGY = (window.DEFAULT_STRATEGY_TAB && PROFILES[window.DEFAULT_STRATEGY_TAB]) ? window.DEFAULT_STRATEGY_TAB : "keltner";
+  const INITIAL_TIMEFRAME = PROFILES[INITIAL_STRATEGY].defaultTimeframe;
   const state = {
-    activeStrategy: "keltner",
+    activeStrategy: INITIAL_STRATEGY,
     symbol: "BTCUSDT",
-    timeframe: "1h",
+    timeframe: INITIAL_TIMEFRAME,
     stats: null,
-    selected: { symbol: "BTCUSDT", timeframe: "1h" },
+    selected: { symbol: "BTCUSDT", timeframe: INITIAL_TIMEFRAME },
   };
 
   function currentProfile() {
@@ -296,6 +349,7 @@
     candleSeries.setData(candles.map((c) => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close })));
 
     if (profile.overlay === "keltner") {
+      emaSeries.applyOptions({ title: "200EMA" });
       bbUpperSeries.setData([]);
       bbLowerSeries.setData([]);
       const emaRes = await fetch(`/api/indicator-values?symbol=${state.symbol}&timeframe=${state.timeframe}&id=EMA&limit=${CANDLE_LIMIT}&params=${encodeURIComponent(JSON.stringify({ timeperiod: 200 }))}`);
@@ -305,6 +359,18 @@
       const keltnerRes = await fetch(`/api/indicator-values?symbol=${state.symbol}&timeframe=${state.timeframe}&id=KELTNER&limit=${CANDLE_LIMIT}`);
       const keltnerValues = await keltnerRes.json();
       if (keltnerValues.lower) keltnerSeries.setData(keltnerValues.lower.filter((p) => p.value !== null));
+    } else if (profile.overlay === "confluence") {
+      // 콘플루언스 전략의 두 진입 조건(50EMA 위 + 볼린저 상단 돌파)을 그대로 오버레이
+      emaSeries.applyOptions({ title: "50EMA" });
+      keltnerSeries.setData([]);
+      const emaRes = await fetch(`/api/indicator-values?symbol=${state.symbol}&timeframe=${state.timeframe}&id=EMA&limit=${CANDLE_LIMIT}&params=${encodeURIComponent(JSON.stringify({ timeperiod: 50 }))}`);
+      const emaValues = await emaRes.json();
+      if (emaValues.real) emaSeries.setData(emaValues.real.filter((p) => p.value !== null));
+
+      const bbRes = await fetch(`/api/indicator-values?symbol=${state.symbol}&timeframe=${state.timeframe}&id=BBANDS&limit=${CANDLE_LIMIT}&params=${encodeURIComponent(JSON.stringify({ timeperiod: 20, nbdevup: 2, nbdevdn: 2 }))}`);
+      const bbValues = await bbRes.json();
+      if (bbValues.upperband) bbUpperSeries.setData(bbValues.upperband.filter((p) => p.value !== null));
+      if (bbValues.lowerband) bbLowerSeries.setData(bbValues.lowerband.filter((p) => p.value !== null));
     } else {
       emaSeries.setData([]);
       keltnerSeries.setData([]);
@@ -439,6 +505,9 @@
   }
 
   async function init() {
+    const profile = currentProfile();
+    document.title = profile.title;
+    el.brandTitle.textContent = profile.title;
     renderTabs();
     renderLimitations();
     togglePanels();
