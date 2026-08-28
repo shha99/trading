@@ -226,6 +226,12 @@
     paperMeta: document.getElementById("paperMeta"),
     paperStats: document.getElementById("paperStats"),
     paperTradesTable: document.getElementById("paperTradesTable"),
+    multiScreenSection: document.getElementById("multiScreenSection"),
+    multiScreenFraction: document.getElementById("multiScreenFraction"),
+    multiScreenStart: document.getElementById("multiScreenStart"),
+    multiScreenCalcBtn: document.getElementById("multiScreenCalcBtn"),
+    multiScreenMeta: document.getElementById("multiScreenMeta"),
+    multiScreenStats: document.getElementById("multiScreenStats"),
   };
 
   // 실시간 모의투자 패널은 /vf에만 있고(strategy_page.js는 /strategy와 공유),
@@ -286,6 +292,7 @@
     if (profile.hasLiveSignals) await loadLiveSignals();
     else renderNoLiveSignals();
     await loadPaperTrading();
+    await loadMultiScreenBacktest();
   }
 
   function togglePanels() {
@@ -562,6 +569,59 @@
   }
 
   // ------------------------------------------------------------------
+  // 4종목 동시 스크리닝 백테스트 계산기 (/vf, wick 탭 전용) - 순수 계산기,
+  // 실시간 모의투자(loadPaperTrading)와 완전히 별개. 배팅비율/시작일을 바꿔가며
+  // 그 자리에서 재계산해본다.
+  // ------------------------------------------------------------------
+  function renderMultiScreenResult(result) {
+    if (!el.multiScreenSection) return;
+    const visible = currentProfile().key === PAPER_TRADING_STRATEGY_KEY;
+    el.multiScreenSection.style.display = visible ? "" : "none";
+    if (!visible) return;
+
+    if (!result.ready) {
+      el.multiScreenMeta.textContent = result.error ||
+        "계산용 거래 원장을 아직 준비하는 중입니다 (서버가 막 시작됐다면 4개 조합 데이터를 받아오는 데 몇 분 걸릴 수 있습니다).";
+      el.multiScreenStats.innerHTML = "";
+      return;
+    }
+
+    const cls = result.return_pct > 0 ? "up" : result.return_pct < 0 ? "down" : "";
+    const periodText = result.period
+      ? `${result.period.first_entry} ~ ${result.period.last_exit}`
+      : "해당 기간 거래 없음";
+    el.multiScreenMeta.textContent =
+      `배팅비율 ${result.bet_fraction_pct}% · 시작 ${result.start || "전체 히스토리"} · ${periodText} · ` +
+      `거래 ${result.trades}건 · 승률 ${result.win_rate != null ? result.win_rate + "%" : "-"}`;
+
+    const comboLines = Object.entries(result.combo_counts || {})
+      .map(([combo, n]) => `${combo} ${n}건`).join(" · ") || "-";
+
+    el.multiScreenStats.innerHTML =
+      `<div class="paper-stat"><div class="paper-stat-label">시작 잔고</div><div class="paper-stat-value">${Math.round(result.principal).toLocaleString()}원</div></div>` +
+      `<div class="paper-stat"><div class="paper-stat-label">최종 잔고</div><div class="paper-stat-value ${cls}">${Math.round(result.final_balance).toLocaleString()}원</div></div>` +
+      `<div class="paper-stat"><div class="paper-stat-label">누적 수익률</div><div class="paper-stat-value ${cls}">${result.return_pct}%</div></div>` +
+      `<div class="paper-stat"><div class="paper-stat-label">최대낙폭(MDD)</div><div class="paper-stat-value">${result.mdd_pct}%</div></div>` +
+      `<div class="paper-stat"><div class="paper-stat-label">최고/최악 단일거래</div><div class="paper-stat-value"><span class="up">${result.best_pct}%</span> / <span class="down">${result.worst_pct}%</span></div></div>` +
+      `<div class="paper-stat"><div class="paper-stat-label">조합별 체결 수</div><div class="paper-stat-value" style="font-size:12px">${comboLines}</div></div>` +
+      `<div class="paper-stat"><div class="paper-stat-label">⚠️ 최악 스트레스 시나리오(${result.worst_case_stress_test_pct}%) 발생 시 계좌 타격</div>` +
+      `<div class="paper-stat-value down">-${result.worst_case_account_impact_pct}%</div></div>`;
+  }
+
+  async function loadMultiScreenBacktest() {
+    if (!el.multiScreenSection) return;
+    const fraction = parseFloat(el.multiScreenFraction.value) || 20;
+    const start = el.multiScreenStart.value;
+    try {
+      const url = `/api/lab/multi-screen-backtest?bet_fraction_pct=${fraction}` + (start ? `&start=${start}` : "");
+      const res = await fetch(url);
+      renderMultiScreenResult(await res.json());
+    } catch (e) {
+      // 조용히 무시 - 버튼을 다시 누르면 재시도됨
+    }
+  }
+
+  // ------------------------------------------------------------------
   // 초기화
   // ------------------------------------------------------------------
   async function onContextChanged() {
@@ -583,9 +643,12 @@
     await loadLiveStatus();
     await loadLiveSignals();
     await loadPaperTrading();
+    await loadMultiScreenBacktest();
+    if (el.multiScreenCalcBtn) el.multiScreenCalcBtn.addEventListener("click", loadMultiScreenBacktest);
     setInterval(() => { if (currentProfile().hasLiveStatus) loadLiveStatus(); }, 15000);
     setInterval(loadPaperTrading, 15000);
     setInterval(loadChart, 15000); // 차트는 탭/심볼/시간대 전환 때만 갱신됐음 - 실시간 캔들 반영 위해 주기적 재조회 추가
+    // 계산기는 순수 백테스트 도구(실시간 데이터 아님)라 자동 폴링하지 않음 - 버튼으로만 재계산
   }
 
   init();

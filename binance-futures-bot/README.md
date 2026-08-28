@@ -245,6 +245,46 @@ stale-while-revalidate로 캐싱 — 시세/백테스트/모의투자 데이터�
 - 슬리피지/체결지연은 반영하지 않는다(위 "청산 로직 스트레스 테스트"
   섹션과 동일한 한계).
 
+## 케이스 3: 4종목 동시 스크리닝 백테스트 계산기 (배팅비율 직접 조절)
+
+`/vf` 페이지 맨 아래(모의투자 패널 다음)에 있는 계산기. 케이스 2의 BTCUSDT
+15분봉 단독 계좌와는 완전히 별개다 — **실시간으로 도는 게 아니라, 배팅비율
+(%)과 시작일을 바꿔가며 그 자리에서 과거 데이터로 재계산해보는 순수 백테스트
+도구**다.
+
+- 방식: 계좌 1개, 포지션 1개. BTC/ETH × 15분/5분봉 4개 조합을 동시에
+  감시하다가, 지금 포지션이 없으면 **먼저 신호가 뜨는 조합**에 "잔고 ×
+  배팅비율(%)"만큼 진입한다(다른 조합에서 동시에 신호가 떠도 이미 포지션이
+  있으면 무시). 자본을 4등분해서 미리 나눠 담는 게 아니라 "지금 감시 중인
+  4개 차트 중 어디든 먼저 신호가 뜨면 그쪽에" 진입하는 방식이라, 개별
+  조합(BTC 15분봉 단독) 대비 체결 빈도가 크게 늘어난다(8개월 기준 982건 →
+  4,106건, 약 4.2배).
+- 동작 원리(`app/multi_screen_backtest.py`): `build_merged_trades()`가
+  4개 조합을 각각 독립적으로 백테스트해 combo 태그를 붙여 진입시각순으로
+  합친 원장을 `data/multi_screen_trades.json`에 저장해두면(무거운 작업 -
+  다른 세 성적표와 같은 주기로 자동 재계산됨), `compute_return()`은 그
+  파일만 읽어서 사용자가 입력한 배팅비율/시작일로 즉석에서(네트워크 없이)
+  복리 계산한다 - `GET /api/lab/multi-screen-backtest?bet_fraction_pct=20&start=2026-01-01`.
+
+### 배팅비율은 왜 100%가 아니라 20%를 기본값으로 뒀나 — 켈리 공식의 함정
+
+실측 거래 데이터로 "장기 성장률을 최대화하는 배팅비율"(켈리 기준)을 직접
+구해보면, 최근 몇 개월처럼 큰 손실 거래가 우연히 안 낀 구간에서는 100%를
+훌쩍 넘어 레버리지(300%~500%)까지 계속 유리하다고 나온다. **이건 켈리
+공식이 틀린 게 아니라, 그 표본 구간에 "진짜 나쁜 손실"이 안 껴 있어서
+생기는 착시다** — 전체 히스토리 기준 실측 최악의 단일거래는 -21.9%,
+슬리피지까지 반영한 스트레스 테스트 기준으로는 -43.8%까지 나왔다(위
+"청산 로직 스트레스 테스트" 참고). 그래서 배팅비율은 켈리가 아니라 **이
+최악의 실측/스트레스 손실이 실제로 터져도 계좌가 감당할 수 있는 선**으로
+잡아야 한다 — 계산기에도 "최악 스트레스 시나리오 발생 시 계좌 타격"을
+같이 보여줘서 이 착시를 스스로 확인할 수 있게 했다. 기본값 20%는 그
+최악의 시나리오가 터져도 계좌의 약 9%만 깎이는 수준으로 잡은 것이다.
+
+⚠️ 이 계산기도 케이스 1/2와 같은 이유로 "100% 몰빵 복리"에 가까운
+배팅비율일수록(특히 3년 이상 장기간 + 100%+ 배팅) 수익률 숫자가
+천문학적으로 부풀 수 있다 — 그 자체가 착시를 보여주는 교육적 장치지,
+실제로 달성 가능한 숫자로 읽으면 안 된다.
+
 ## 실행 방법
 
 ```bash
@@ -393,6 +433,7 @@ backtest.py             켈트너 전략 단독 백테스트 (sanity check / sta
 build_stats.py          심볼×시간대 백테스트 성적표 재계산 CLI (app/stats_builder.py 실행)
 build_lab_stats.py      전략 실험실 12종 성적표 재계산 CLI (app/lab_stats_builder.py 실행)
 build_validated_lab_stats.py  검증된 2종의 학습/검증/연도별 성적 재계산 CLI (app/validated_lab_stats_builder.py 실행)
+build_multi_screen_trades.py  4종목 동시 스크리닝 거래 원장 재계산 CLI (app/multi_screen_backtest.py 실행)
 app/
   config.py              설정 (심볼/시간대/화이트리스트/리스크/키/백테스트 구간)
   binance_client.py       바이낸스 선물 클라이언트 (testnet 토글)
@@ -408,6 +449,7 @@ app/
   lab_stats_builder.py      켈트너+후보11 = 12종의 심볼×시간대 성적 계산
   validated_lab_stats_builder.py  켈트너급(학습/검증/연도별)으로 검증된 2종의 성적 계산
   paper_trading.py          실시간 모의투자(100% 가상 잔고) - BTCUSDT 15분봉, 실제 주문 없음
+  multi_screen_backtest.py  4종목 동시 스크리닝 백테스트 계산기 (배팅비율 직접 조절, 순수 계산 도구)
   signal_engine.py          시그널 감지 → 기록 → 알림 → (화이트리스트면) 자동매매
   notify.py                 텔레그램 알림
   broker.py                 주문 실행 (리스크 기반 수량 계산 + SL/TP 부착 + 상태 조회)
@@ -420,7 +462,7 @@ static/
   strategy.html, strategy_page.js, strategy.css   전략 페이지 (vf.html과 JS 공유, 기본 탭=keltner)
   lab.html, lab.js, lab.css                    전략 실험실
   vendor/lightweight-charts.js                TradingView lightweight-charts (vendored)
-data/                     strategy_stats.json, lab_stats.json, bot.db (전부 gitignore)
+data/                     strategy_stats.json, lab_stats.json, multi_screen_trades.json, bot.db (전부 gitignore)
 tests/                     pytest (전부 mock/합성 데이터, 실제 바이낸스 호출 없음)
 ```
 
@@ -449,6 +491,12 @@ tests/                     pytest (전부 mock/합성 데이터, 실제 바이�
   볼린저 꼬리터치+RSI) 현재 잔고/누적 수익률/청산된 거래/진행중 포지션
   ("케이스 2: 실시간 모의투자" 섹션 참고)
 
+**4종목 동시 스크리닝 백테스트 계산기**
+- `GET /api/lab/multi-screen-backtest?bet_fraction_pct=&start=` — 배팅비율(%,
+  0.1~300)과 시작일(생략 시 전체 히스토리)을 넣으면 BTC/ETH×15m/5m 4개
+  조합 동시 스크리닝 결과(거래수/승률/최종잔고/MDD/최악 스트레스 시나리오
+  발생 시 계좌 타격)를 즉석에서 계산해 반환 ("케이스 3" 섹션 참고)
+
 **시그널/매매 (기존 MVP)**
 - `GET /api/health`, `GET /api/signals`, `GET /api/positions/open`,
   `GET /api/trades`, `GET /api/risk/status`, `POST /api/refresh`
@@ -462,6 +510,7 @@ tests/                     pytest (전부 mock/합성 데이터, 실제 바이�
 - [x] 전략 페이지 (백테스트 성적표 + 실시간 조건 패널)
 - [x] 전략 실험실 (켈트너 + 비교용 후보 11종, 심볼×시간대별 성적 비교)
 - [x] 검증된 전략 페이지(`/vf`) + 실시간 모의투자(100만원, BTCUSDT 15분봉, 실제 주문 없음)
+- [x] 4종목 동시 스크리닝 백테스트 계산기 (배팅비율 직접 조절)
 - [x] PWA(설치 가능한 웹앱 - 홈 화면 추가, standalone 실행)
 - [ ] 네이티브 앱스토어 배포(iOS/Android) 또는 데스크톱 실행파일(Electron) - 필요해지면 별도 작업
 - [ ] 실계좌 자동매매 + 리스크 관리 강화 (일일 손실 한도 킬스위치와 SL/TP

@@ -112,6 +112,29 @@
     </div>
   </section>
 
+  <section class="paper-trading-section" id="multiScreenSection">
+    <h2>🧮 4종목 동시 스크리닝 백테스트 계산기</h2>
+    <p class="meta-line">위 실시간 모의투자(BTC 15분봉 단독)와는 완전히 별개의 도구다 — BTC/ETH×15분/5분봉
+      4개 조합을 동시에 감시하다가 계좌에 포지션이 없을 때 먼저 뜨는 신호에 <strong>잔고×배팅비율</strong>만큼
+      진입하는 방식을 과거 데이터로 다시 계산해본다(실제 주문 없음, 순수 계산기). 배팅비율/시작일을 바꿔가며
+      직접 확인할 수 있다.</p>
+    <div class="multi-screen-controls">
+      <label>배팅비율(%)
+        <input type="number" id="multiScreenFraction" value="20" min="0.1" max="300" step="1" />
+      </label>
+      <label>시작일
+        <select id="multiScreenStart">
+          <option value="">전체 히스토리</option>
+          <option value="2023-01-01">2023-01-01부터</option>
+          <option value="2026-01-01" selected>2026-01-01부터</option>
+        </select>
+      </label>
+      <button id="multiScreenCalcBtn">계산하기</button>
+    </div>
+    <p class="meta-line" id="multiScreenMeta">-</p>
+    <div class="paper-stats" id="multiScreenStats"></div>
+  </section>
+
   <section class="limitations-section">
     <h2>한계 (반드시 인지하고 사용할 것)</h2>
     <ul id="limitationsList">

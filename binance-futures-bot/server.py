@@ -29,6 +29,9 @@ from app.lab_stats_builder import LAB_STATS_FILE
 from app.lab_stats_builder import build_all as build_lab_stats
 from app.lab_stats_builder import catalog as lab_catalog
 from app.live_feed import get_live_feed
+from app.multi_screen_backtest import MULTI_SCREEN_TRADES_FILE
+from app.multi_screen_backtest import build_merged_trades as build_multi_screen_trades
+from app.multi_screen_backtest import compute_return as multi_screen_compute_return
 from app.paper_trading import get_status as paper_trading_status
 from app.paper_trading import run_once as run_paper_trading_once
 from app.position_manager import check_time_stops, reconcile_open_positions
@@ -85,10 +88,13 @@ def _build_missing_stats_in_background() -> None:
         # 15분/5분봉은 3년 이상 데이터를 받아와야 해서(특히 5분봉) 위 두 개보다
         # 오래 걸릴 수 있다 - 별도 스레드라 서버 기동 자체는 막지 않는다.
         threading.Thread(target=build_validated_lab_stats, daemon=True).start()
+    if not MULTI_SCREEN_TRADES_FILE.exists():
+        # 4개 조합을 각각 3년 이상 받아와야 해서 셋 중 가장 오래 걸릴 수 있다.
+        threading.Thread(target=build_multi_screen_trades, daemon=True).start()
 
 
 def _refresh_all_stats() -> None:
-    """세 백테스트 성적표(켈트너/실험실 11종/검증된 2종)를 전부 다시 계산한다.
+    """네 백테스트 성적표(켈트너/실험실 11종/검증된 2종/멀티스크리닝 원장)를 전부 다시 계산한다.
 
     브라우저를 열어두지 않아도 서버 프로세스가 켜져 있는 동안은 스케줄러가
     주기적으로(기본 24시간, `STATS_REFRESH_INTERVAL_HOURS`) 이 함수를 불러
@@ -104,6 +110,7 @@ def _refresh_all_stats() -> None:
         build_strategy_stats()
         build_lab_stats()
         build_validated_lab_stats()
+        build_multi_screen_trades()
         logger.info("백테스트 성적표 정기 갱신 완료")
     except Exception:
         logger.exception("백테스트 성적표 정기 갱신 실패 (다음 주기에 재시도)")
@@ -417,6 +424,23 @@ def validated_lab_stats() -> dict:
     if not VALIDATED_STATS_FILE.exists():
         return {}
     return json.loads(VALIDATED_STATS_FILE.read_text(encoding="utf-8"))
+
+
+@app.get("/api/lab/multi-screen-backtest")
+def multi_screen_backtest(
+    bet_fraction_pct: float = Query(default=20.0, ge=0.1, le=300.0),
+    start: str | None = Query(default=None, description='예: "2023-01-01", "2026-01-01" - 생략하면 전체 히스토리'),
+) -> dict:
+    """4종목(BTC/ETH×15m/5m) 동시 스크리닝 - 계좌 1개, 포지션 1개, "먼저 뜨는
+    신호"에 배팅비율(%)만큼 진입하는 방식을 배팅비율/시작일을 바꿔가며
+    즉석에서 재계산해 보여준다. `data/multi_screen_trades.json`(4개 조합을
+    각각 백테스트해 합친 원장)만 읽으므로 네트워크 호출 없이 빠르게 응답한다."""
+    if start is not None:
+        try:
+            pd.Timestamp(start)
+        except (ValueError, TypeError):
+            return {"ready": False, "error": f"잘못된 날짜 형식: {start}"}
+    return multi_screen_compute_return(bet_fraction_pct, start)
 
 
 # --------------------------------------------------------------------------
