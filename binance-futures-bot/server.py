@@ -37,6 +37,7 @@ from app.paper_trading import run_once as run_paper_trading_once
 from app.position_manager import check_time_stops, reconcile_open_positions
 from app.risk import is_kill_switch_active, todays_realized_pnl_usdt
 from app.signal_engine import run_once
+from app.signal_outcome_tracker import check_signal_outcomes
 from app.stats_builder import STATS_FILE
 from app.stats_builder import build_all as build_strategy_stats
 from app.strategy import KeltnerReclaimStrategy
@@ -142,9 +143,11 @@ async def on_shutdown() -> None:
 
 
 def _position_watch_tick() -> None:
-    """열린 포지션 관련 백그라운드 점검: 시간손절 청산 + SL/TP 체결 반영."""
+    """열린 포지션 관련 백그라운드 점검: 시간손절 청산 + SL/TP 체결 반영 +
+    (화이트리스트 밖이라 실제 주문이 안 나간) 시그널의 가상 체결 결과 갱신."""
     check_time_stops()
     reconcile_open_positions()
+    check_signal_outcomes()
 
 
 def _start_scheduler() -> BackgroundScheduler:

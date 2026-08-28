@@ -497,13 +497,22 @@
       el.liveSignalsTable.innerHTML = "<tr><td>아직 감지된 시그널이 없습니다 (봇을 켜두면 여기 쌓입니다)</td></tr>";
       return;
     }
-    let html = "<tr><th>시각</th><th>심볼</th><th>시간대</th><th>진입가</th><th>자동매매</th><th>상태</th></tr>";
+    let html = "<tr><th>시각</th><th>심볼</th><th>시간대</th><th>진입가</th><th>자동매매</th><th>실제 체결 상태</th><th>가상 체결 결과(모의)</th></tr>";
     signals.forEach((s) => {
       const status = s.trade ? `${s.trade.status}${s.trade.realized_pnl_usdt != null ? ` (${s.trade.realized_pnl_usdt} USDT)` : ""}` : "-";
       html += `<tr><td>${s.timestamp}</td><td>${s.symbol}</td><td>${s.timeframe}</td><td>${fmt(s.entry_price)}</td>` +
-        `<td>${s.auto_traded === "YES" ? "✅" : "-"}</td><td>${status}</td></tr>`;
+        `<td>${s.auto_traded === "YES" ? "✅" : "-"}</td><td>${status}</td><td>${renderVirtualOutcome(s)}</td></tr>`;
     });
     el.liveSignalsTable.innerHTML = html;
+  }
+
+  // 화이트리스트에 없어(auto_traded=NO) 실제 주문이 안 나간 시그널도, 그
+  // 로직대로 진짜 체결됐다면 어떻게 됐을지(app/signal_outcome_tracker.py가
+  // 백그라운드에서 계속 판정) 보여준다 - 실제 손익이 아니라 시뮬레이션.
+  function renderVirtualOutcome(s) {
+    if (!s.virtual_status || s.virtual_status === "OPEN") return "진행 중 (아직 손절/익절/시간손절 미도달)";
+    const cls = s.virtual_pct_return >= 0 ? "up" : "down";
+    return `${s.virtual_status} <span class="${cls}">${s.virtual_pct_return}%</span> (R${s.virtual_r_multiple})`;
   }
 
   function renderNoLiveSignals() {
@@ -648,6 +657,7 @@
     setInterval(() => { if (currentProfile().hasLiveStatus) loadLiveStatus(); }, 15000);
     setInterval(loadPaperTrading, 15000);
     setInterval(loadChart, 15000); // 차트는 탭/심볼/시간대 전환 때만 갱신됐음 - 실시간 캔들 반영 위해 주기적 재조회 추가
+    setInterval(() => { if (currentProfile().hasLiveSignals) loadLiveSignals(); }, 15000); // 가상 체결 결과가 시간이 지나며 확정되는 걸 보려면 주기적 재조회 필요
     // 계산기는 순수 백테스트 도구(실시간 데이터 아님)라 자동 폴링하지 않음 - 버튼으로만 재계산
   }
 

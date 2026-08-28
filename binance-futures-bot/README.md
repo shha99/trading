@@ -67,6 +67,21 @@ stale-while-revalidate로 캐싱 — 시세/백테스트/모의투자 데이터�
 - 이런 이유로 기본값은 `BTCUSDT:1h` 외에는 자동매매 화이트리스트에
   올려두지 않았다 — 다른 조합을 켜기 전에 백테스트 성적표로 직접 검증할 것.
 
+### 화이트리스트 밖 시그널의 "가상 체결 결과" 추적
+
+시그널 엔진은 설정된 심볼×시간대 전부(기본 BTC/ETH × 15m/1h/4h/1d)를 스캔해
+시그널을 감지·기록하지만, 화이트리스트가 비어있는 기본값에서는 실제 주문이
+전혀 나가지 않는다. 그래서 "만약 그 신호대로 진짜 체결했다면 어떻게
+됐을지"를 `app/signal_outcome_tracker.py`가 백그라운드에서 계속 판정한다 —
+그 시그널 자체의 손절/익절/시간손절 가격을 `backtest.py`와 완전히 같은
+walk-forward 로직으로 이후 캔들에 대입해, 셋 중 무엇에 먼저 닿는지 확인하는
+방식이다(실제 주문은 절대 내지 않음 — 순수 사후 판정).
+
+`/strategy` 페이지 "실시간 감지된 시그널" 표의 "가상 체결 결과(모의)" 열에서
+확인할 수 있다 — 아직 셋 다 안 닿았으면 "진행 중", 확정되면 `SL -1.2%
+(R-1)`처럼 결과가 뜬다. `position_watch_interval_seconds`(기본 300초) 주기로
+계속 재판정한다.
+
 ## 시간대별 운용 방침 (2026-08 결정, 문서 수준 — 자동매매 엔진 미연결)
 
 `/lab`에서 검증된 후보 중 아래 두 전략을 시간대별 "사용하기로 한 전략"으로
@@ -451,6 +466,7 @@ app/
   paper_trading.py          실시간 모의투자(100% 가상 잔고) - BTCUSDT 15분봉, 실제 주문 없음
   multi_screen_backtest.py  4종목 동시 스크리닝 백테스트 계산기 (배팅비율 직접 조절, 순수 계산 도구)
   signal_engine.py          시그널 감지 → 기록 → 알림 → (화이트리스트면) 자동매매
+  signal_outcome_tracker.py 화이트리스트 밖 시그널의 가상 체결 결과(SL/TP/TIME) 추적 - 실제 주문 없음
   notify.py                 텔레그램 알림
   broker.py                 주문 실행 (리스크 기반 수량 계산 + SL/TP 부착 + 상태 조회)
   position_manager.py       열린 포지션 조회 + 3일 시간손절 감시 + SL/TP 체결 반영
@@ -478,7 +494,9 @@ tests/                     pytest (전부 mock/합성 데이터, 실제 바이�
 **전략 페이지**
 - `GET /api/strategy/live-status?symbol=&timeframe=` — 진입조건 3개 실시간 충족 여부
 - `GET /api/strategy/stats` — 백테스트 성적표(`data/strategy_stats.json`)
-- `GET /api/strategy/signals/recent` — 실시간 감지된 시그널 + 매칭되는 매매 결과
+- `GET /api/strategy/signals/recent` — 실시간 감지된 시그널 + 매칭되는 매매 결과 +
+  가상 체결 결과(`virtual_status`/`virtual_pct_return`/`virtual_r_multiple` - 위
+  "화이트리스트 밖 시그널의 가상 체결 결과 추적" 참고)
 
 **전략 실험실**
 - `GET /api/lab/strategies` — 12종 카탈로그(이름/카테고리/설명/설계 시간대)

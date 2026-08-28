@@ -34,6 +34,16 @@ class SignalRecord(Base):
     auto_traded = Column(String, default="NO")  # "YES"/"NO" — 화이트리스트로 실제 주문까지 갔는지
     details_json = Column(Text, default="{}")
 
+    # 화이트리스트에 없어(auto_traded=NO) 실제 주문이 안 나간 시그널도, "이 로직대로
+    # 진짜 체결됐다면 어떻게 됐을지"를 그 신호 자체의 stop_price/target_price/
+    # time_stop_at 기준으로 계속 추적한다 (app/signal_outcome_tracker.py).
+    # OPEN(아직 진행 중) / SL / TP / TIME 중 하나.
+    virtual_status = Column(String, default="OPEN", index=True)
+    virtual_exit_price = Column(Float, nullable=True)
+    virtual_exit_at = Column(DateTime, nullable=True)
+    virtual_pct_return = Column(Float, nullable=True)
+    virtual_r_multiple = Column(Float, nullable=True)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
@@ -49,6 +59,11 @@ class SignalRecord(Base):
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "auto_traded": self.auto_traded,
             "details": json.loads(self.details_json or "{}"),
+            "virtual_status": self.virtual_status,
+            "virtual_exit_price": self.virtual_exit_price,
+            "virtual_exit_at": self.virtual_exit_at.isoformat() if self.virtual_exit_at else None,
+            "virtual_pct_return": self.virtual_pct_return,
+            "virtual_r_multiple": self.virtual_r_multiple,
         }
 
 
