@@ -1,0 +1,41 @@
+.trading-layout { gap: 16px; }
+
+.mode-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 16px;
+  font-size: 14px;
+}
+.mode-badge {
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+.mode-badge.testnet { background: rgba(64,152,255,0.18); color: #4098ff; }
+.mode-badge.live { background: rgba(239,83,80,0.2); color: #ef5350; }
+
+.engine-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.engine-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+.engine-card h3 { margin: 0 0 8px; font-size: 14px; }
+.engine-status-line { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-weight: 600; }
+.engine-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--text-dim); display: inline-block; }
+.engine-dot.on { background: var(--up); box-shadow: 0 0 6px var(--up); }
+.engine-dot.off { background: var(--text-dim); }
+
+@media (max-width: 900px) {
+  .engine-grid { grid-template-columns: 1fr; }
+}

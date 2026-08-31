@@ -6,7 +6,7 @@
 **실시간 차트 대시보드(165종 지표 + 61종 캔들패턴) + 독립 전략 페이지**를
 모두 구현했다.
 
-## 화면 넷
+## 화면 다섯
 
 - **`/` 차트 대시보드**: BTC/ETH 무기한 선물 실시간 캔들+거래량 차트
   (15m/1h/4h/1d), 165종 지표(TA-Lib 160 + 커스텀 5) 검색·토글·파라미터 수정,
@@ -30,8 +30,17 @@
   비교/탐색용이고 자동매매 화이트리스트에는 절대 안 올라간다** — 진입/청산
   숫자는 `app/lab_strategies.py`에 표준적인 방식으로 채운 가정값이니,
   실제로 써보려면 그 파일에서 직접 확인·조정할 것.
+- **`/trading` 실계좌 매매 현황판**: 두 자동매매 엔진(켈트너/볼린저
+  꼬리터치+RSI)의 켜짐 여부·화이트리스트, 오늘의 리스크 현황(실현손익/
+  일일 손실 한도/킬스위치), 열린 포지션·최근 매매 기록(실계좌), 실시간
+  모의투자 현황, 그리고 실제로 켜는 방법(env 변수 표)을 한 화면에 모아
+  보여준다. **순수 조회용 화면**이라 이미 있는 API(`/api/health`,
+  `/api/positions/open`, `/api/trades`, `/api/risk/status`,
+  `/api/paper-trading/status`)만 재사용하고, 새 백엔드 엔드포인트도 없고
+  API 키 입력란도 없다 — 실제로 켜려면 배포 중인 곳(Render 등)의
+  Environment 화면에서 직접 값을 넣어야 한다.
 
-넷 다 별도 빌드 단계 없는 순수 JS(`static/`) + TradingView
+다섯 다 별도 빌드 단계 없는 순수 JS(`static/`) + TradingView
 [lightweight-charts](https://github.com/tradingview/lightweight-charts)
 (vendored) + FastAPI다. `/vf`와 `/strategy`는 `static/strategy_page.js` 하나를
 그대로 공유한다(기본 탭만 HTML에서 `window.DEFAULT_STRATEGY_TAB`으로 지정).
@@ -559,6 +568,7 @@ static/
   vf.html                                    검증된 전략 3종 전환 페이지 (strategy_page.js 공유, 기본 탭=wick)
   strategy.html, strategy_page.js, strategy.css   전략 페이지 (vf.html과 JS 공유, 기본 탭=keltner)
   lab.html, lab.js, lab.css                    전략 실험실
+  trading.html, trading.js, trading.css        실계좌 매매 현황판 (순수 조회, 새 API 없음)
   vendor/lightweight-charts.js                TradingView lightweight-charts (vendored)
 data/                     strategy_stats.json, lab_stats.json, multi_screen_trades.json, bot.db (전부 gitignore)
 tests/                     pytest (전부 mock/합성 데이터, 실제 바이낸스 호출 없음)

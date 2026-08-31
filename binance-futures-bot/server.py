@@ -221,6 +221,16 @@ def validated_strategies_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "vf.html")
 
 
+@app.get("/trading")
+def trading_page() -> FileResponse:
+    """실제 투자 가능한 형태로 구성한 매매 현황판 - 두 자동매매 엔진(켈트너/wick)의
+    켜짐 여부·화이트리스트, 오늘의 리스크 현황, 열린 포지션·최근 매매 기록
+    (전부 기존 /api/positions/open, /api/trades, /api/risk/status, /api/health를
+    그대로 재사용 - 새 백엔드 엔드포인트 없음), 실시간 모의투자 현황까지 한
+    화면에 모아 보여준다."""
+    return FileResponse(STATIC_DIR / "trading.html")
+
+
 @app.get("/sw.js")
 def service_worker() -> FileResponse:
     """PWA 서비스워커 - 루트 경로("/sw.js")로 내려줘야 스코프가 사이트 전체가 된다

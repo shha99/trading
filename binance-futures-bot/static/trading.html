@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>실계좌 매매 현황 (Trading)</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='13' font-size='14'%3E%F0%9F%92%B9%3C/text%3E%3C/svg%3E" />
+<link rel="manifest" href="/static/manifest.webmanifest" />
+<meta name="theme-color" content="#1c2129" />
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="선물 시그널" />
+<link rel="stylesheet" href="/static/style.css" />
+<link rel="stylesheet" href="/static/strategy.css" />
+<link rel="stylesheet" href="/static/trading.css" />
+</head>
+<body>
+<header class="topbar">
+  <h1 class="brand">💹 실계좌 매매 현황 (Trading)</h1>
+  <a class="strategy-link" href="/" target="_blank" rel="noopener">차트 대시보드 ↗</a>
+  <a class="strategy-link" href="/vf" target="_blank" rel="noopener">검증된 전략 ↗</a>
+  <a class="strategy-link" href="/lab" target="_blank" rel="noopener">전략 실험실 ↗</a>
+</header>
+
+<main class="strategy-layout trading-layout">
+  <section class="mode-banner" id="modeBanner">
+    <span id="modeBadge" class="mode-badge">-</span>
+    <span id="modeText">상태 확인 중...</span>
+  </section>
+
+  <section class="engine-grid">
+    <div class="engine-card" id="engineKeltner">
+      <h3>켈트너 (200EMA + 하단 복귀)</h3>
+      <div class="engine-status-line">
+        <span class="engine-dot" id="keltnerDot"></span>
+        <span id="keltnerStatusText">-</span>
+      </div>
+      <div class="meta-line">화이트리스트: <span id="keltnerWhitelist">-</span></div>
+      <div class="meta-line">고정 손절/익절, 롱 전용, BTCUSDT:1h 기준으로 검증됨</div>
+    </div>
+    <div class="engine-card" id="engineWick">
+      <h3>볼린저 꼬리터치 + RSI</h3>
+      <div class="engine-status-line">
+        <span class="engine-dot" id="wickDot"></span>
+        <span id="wickStatusText">-</span>
+      </div>
+      <div class="meta-line">화이트리스트: <span id="wickWhitelist">-</span></div>
+      <div class="meta-line">본전 이동 트레일링(익절 상한 없음), 롱/숏 양방향, BTC·ETH 15m·5m</div>
+    </div>
+  </section>
+
+  <section class="scorecard-section">
+    <h2>오늘의 리스크 현황</h2>
+    <div class="paper-stats" id="riskStats"></div>
+  </section>
+
+  <section class="scorecard-section">
+    <h2>열린 포지션 (실계좌)</h2>
+    <p class="meta-line" id="openPositionsMeta">-</p>
+    <div class="table-scroll">
+      <table class="signals-table" id="openPositionsTable"></table>
+    </div>
+  </section>
+
+  <section class="scorecard-section">
+    <h2>최근 매매 기록 (실계좌)</h2>
+    <div class="table-scroll">
+      <table class="signals-table" id="recentTradesTable"></table>
+    </div>
+  </section>
+
+  <section class="paper-trading-section" id="paperSection">
+    <h2>🔴 실시간 모의투자 (100% 가상 잔고, 실제 주문 없음)</h2>
+    <p class="meta-line" id="paperMeta">-</p>
+    <div class="paper-stats" id="paperStats"></div>
+  </section>
+
+  <section class="limitations-section" id="setupGuide">
+    <h2>⚙️ 실계좌 자동매매를 직접 켜려면</h2>
+    <p class="info-text">
+      이 화면 자체는 어떤 값도 바꾸지 않는다 — 순수 조회용이다. 실제로 켜려면
+      Render(또는 배포 중인 곳) 대시보드의 Environment 화면에서 아래 값을
+      직접 설정해야 한다(API 키는 여기 어디에도 입력/저장하지 않는다).
+    </p>
+    <table class="detail-table">
+      <tr><th>키</th><th>값</th></tr>
+      <tr><td>BINANCE_API_KEY / BINANCE_API_SECRET</td><td>본인 바이낸스 선물 API 키 (출금 권한은 반드시 끌 것)</td></tr>
+      <tr><td>BINANCE_TESTNET</td><td>테스트넷 먼저 <code>true</code>, 검증 후 실계좌는 <code>false</code></td></tr>
+      <tr><td>WICK_AUTO_TRADE_ENABLED</td><td><code>true</code> (볼린저 꼬리터치+RSI 켜기)</td></tr>
+      <tr><td>WICK_AUTO_TRADE_WHITELIST</td><td>예: <code>BTCUSDT:15m</code> (쉼표로 여러 개)</td></tr>
+      <tr><td>AUTO_TRADE_ENABLED / AUTO_TRADE_WHITELIST</td><td>켈트너 전략 켜기(별개 스위치) - 예: <code>BTCUSDT:1h</code></td></tr>
+      <tr><td>RISK_PER_TRADE_USDT / LEVERAGE / MAX_OPEN_POSITIONS / DAILY_LOSS_LIMIT_USDT</td><td>계좌 규모에 맞게 조정</td></tr>
+    </table>
+    <ul>
+      <li>반드시 테스트넷으로 먼저 며칠 검증한 뒤에만 실계좌로 전환할 것.</li>
+      <li>처음엔 조합 1개, 작은 금액으로 시작할 것.</li>
+      <li>자세한 설명·위험 고지는 저장소 README "실계좌 자동매매" 섹션 참고.</li>
+    </ul>
+  </section>
+</main>
+
+<script src="/static/trading.js"></script>
+<script src="/static/pwa.js"></script>
+</body>
+</html>
