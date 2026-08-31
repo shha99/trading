@@ -89,6 +89,21 @@ class TradeRecord(Base):
     closed_at = Column(DateTime, nullable=True)
     time_stop_at = Column(DateTime, nullable=True)
 
+    # 어느 엔진이 연 포지션인지 - NULL/미지정이면 켈트너 엔진(signal_engine.py,
+    # 고정 SL/TP)이 관리한다. "bollinger_wick_breakeven_trail"이면 별도 엔진
+    # (wick_signal_engine.py/wick_position_manager.py)이 본전 이동 트레일링
+    # 스탑을 계속 갱신하며 관리한다 - 두 엔진이 서로의 포지션을 절대 건드리지
+    # 않도록 이 필드로 소유권을 명확히 구분한다.
+    strategy = Column(String, nullable=True, index=True)
+    # 아래 5개는 wick 엔진 전용 - 진입 시점에 고정해두고 이후 트레일링 스탑을
+    # 매번 진입 시점부터 다시 재현(stateless replay)하는 데 쓴다.
+    initial_stop_price = Column(Float, nullable=True)
+    current_stop_price = Column(Float, nullable=True)  # 지금 거래소에 걸려있는 손절가
+    breakeven_trigger_price = Column(Float, nullable=True)
+    trail_mult = Column(Float, nullable=True)
+    atr_period = Column(Integer, nullable=True)
+    moved_to_breakeven = Column(String, default="NO")  # "YES"/"NO"
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
@@ -108,6 +123,13 @@ class TradeRecord(Base):
             "opened_at": self.opened_at.isoformat() if self.opened_at else None,
             "closed_at": self.closed_at.isoformat() if self.closed_at else None,
             "time_stop_at": self.time_stop_at.isoformat() if self.time_stop_at else None,
+            "strategy": self.strategy,
+            "initial_stop_price": self.initial_stop_price,
+            "current_stop_price": self.current_stop_price,
+            "breakeven_trigger_price": self.breakeven_trigger_price,
+            "trail_mult": self.trail_mult,
+            "atr_period": self.atr_period,
+            "moved_to_breakeven": self.moved_to_breakeven,
         }
 
 
@@ -183,15 +205,29 @@ class PaperTrade(Base):
         }
 
 
+_DEFAULT_SCAN_STRATEGY = "keltner_reclaim_200ema"
+
+
 class ScanState(Base):
-    """(symbol, timeframe)별 마지막으로 처리한 완결 봉 시각 — 중복 시그널 방지."""
+    """(symbol, timeframe, strategy)별 마지막으로 처리한 완결 봉 시각 — 중복
+    시그널 방지.
+
+    `strategy`를 키에 포함하는 이유: 켈트너 엔진과 wick 엔진(둘 다 BTCUSDT:15m
+    같은 같은 심볼/시간대를 스캔할 수 있음)이 이 키를 공유하면, 한쪽이 어떤
+    봉을 "처리함"으로 찍으면 다른 쪽은 그 봉을 아예 평가해보지도 않고
+    건너뛰게 되는 실제 버그가 생긴다 — 두 엔진은 서로 독립된 전략이라 같은
+    봉이라도 각자 반드시 자기 로직으로 평가해야 한다.
+    """
 
     __tablename__ = "scan_state"
-    __table_args__ = (UniqueConstraint("symbol", "timeframe", name="uq_scan_state_symbol_tf"),)
+    __table_args__ = (
+        UniqueConstraint("symbol", "timeframe", "strategy", name="uq_scan_state_symbol_tf_strategy"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     symbol = Column(String, nullable=False)
     timeframe = Column(String, nullable=False)
+    strategy = Column(String, nullable=False, default=_DEFAULT_SCAN_STRATEGY)
     last_processed_at = Column(DateTime, nullable=False)
 
 
@@ -207,12 +243,14 @@ def init_db() -> None:
     Base.metadata.create_all(engine)
 
 
-def get_last_processed(symbol: str, timeframe: str) -> datetime | None:
+def get_last_processed(
+    symbol: str, timeframe: str, strategy: str = _DEFAULT_SCAN_STRATEGY
+) -> datetime | None:
     session = SessionLocal()
     try:
         row = (
             session.query(ScanState)
-            .filter(ScanState.symbol == symbol, ScanState.timeframe == timeframe)
+            .filter(ScanState.symbol == symbol, ScanState.timeframe == timeframe, ScanState.strategy == strategy)
             .first()
         )
         return row.last_processed_at if row else None
@@ -220,16 +258,18 @@ def get_last_processed(symbol: str, timeframe: str) -> datetime | None:
         session.close()
 
 
-def set_last_processed(symbol: str, timeframe: str, ts: datetime) -> None:
+def set_last_processed(
+    symbol: str, timeframe: str, ts: datetime, strategy: str = _DEFAULT_SCAN_STRATEGY
+) -> None:
     session = SessionLocal()
     try:
         row = (
             session.query(ScanState)
-            .filter(ScanState.symbol == symbol, ScanState.timeframe == timeframe)
+            .filter(ScanState.symbol == symbol, ScanState.timeframe == timeframe, ScanState.strategy == strategy)
             .first()
         )
         if row is None:
-            row = ScanState(symbol=symbol, timeframe=timeframe, last_processed_at=ts)
+            row = ScanState(symbol=symbol, timeframe=timeframe, strategy=strategy, last_processed_at=ts)
             session.add(row)
         else:
             row.last_processed_at = ts

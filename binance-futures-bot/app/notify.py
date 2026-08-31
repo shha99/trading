@@ -49,3 +49,13 @@ def notify_signal(signal: Signal, auto_traded: bool) -> None:
 def notify_trade_closed(symbol: str, timeframe: str, status: str, pnl_usdt: float | None) -> None:
     pnl_text = f"{pnl_usdt:+.2f} USDT" if pnl_usdt is not None else "미확인"
     send_message(f"[{symbol} {timeframe}] 포지션 종료 ({status})\n손익: {pnl_text}")
+
+
+def notify_wick_entry(symbol: str, timeframe: str, direction: str, entry_price: float, stop_price: float) -> None:
+    """볼린저 꼬리터치+RSI 엔진 전용 - 고정 익절이 없어 notify_signal(Signal
+    데이터클래스 의존)을 그대로 못 쓰기 때문에 별도 함수로 둔다."""
+    send_message(
+        f"[{symbol} {timeframe}] {direction} 진입 (볼린저 꼬리터치+RSI, 본전 이동 트레일링)\n"
+        f"진입가: {entry_price:.4f}\n"
+        f"손절: {stop_price:.4f} (익절 상한 없음 - 트레일링)"
+    )

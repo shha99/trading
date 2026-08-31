@@ -54,12 +54,12 @@ class SignalEngine:
             return None
 
         latest_closed_ts = df.index[-1].to_pydatetime()
-        last_processed = db.get_last_processed(symbol, timeframe)
+        last_processed = db.get_last_processed(symbol, timeframe, strategy=self.strategy.key)
         if last_processed is not None and latest_closed_ts <= last_processed:
             return None  # 이 봉은 이미 평가했음 (중복 시그널/중복 매매 방지)
 
         signal = self.strategy.evaluate(symbol, timeframe, df)
-        db.set_last_processed(symbol, timeframe, latest_closed_ts)  # 성공/실패와 무관하게 항상 전진
+        db.set_last_processed(symbol, timeframe, latest_closed_ts, strategy=self.strategy.key)  # 성공/실패와 무관하게 항상 전진
 
         if signal is None:
             return None

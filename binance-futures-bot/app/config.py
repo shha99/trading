@@ -70,6 +70,20 @@ class Settings:
     max_open_positions: int = field(default_factory=lambda: int(os.getenv("MAX_OPEN_POSITIONS", "3")))
     daily_loss_limit_usdt: float = field(default_factory=lambda: float(os.getenv("DAILY_LOSS_LIMIT_USDT", "50")))
 
+    # --- "볼린저 꼬리터치+RSI 되돌림" 전략(bollinger_wick_breakeven_trail) 전용
+    # 자동매매 게이트 - 켈트너 엔진과 완전히 독립된 별도 스위치/화이트리스트다.
+    # 하나를 켜도 다른 하나엔 영향이 없다. 기본값은 둘 다 안전 쪽(꺼짐/빈 값).
+    # 이 전략은 롱/숏 양방향 + 고정 익절 없는 "본전 이동 트레일링" 청산이라
+    # (app/wick_position_manager.py가 실제 거래소 손절 주문을 계속
+    # 취소·재등록하며 따라감), 켈트너 엔진(고정 SL/TP)과 완전히 다른 주문
+    # 생명주기를 쓰기 때문에 별도 엔진(app/wick_signal_engine.py)으로 뗐다.
+    wick_auto_trade_enabled: bool = field(default_factory=lambda: _bool("WICK_AUTO_TRADE_ENABLED", "false"))
+    wick_auto_trade_whitelist: set[tuple[str, str]] = field(
+        default_factory=lambda: _parse_whitelist(os.getenv("WICK_AUTO_TRADE_WHITELIST", ""))
+    )
+    # 이 전략이 검증된 시간대만 - 대시보드/켈트너용 timeframes(15m,1h,4h,1d)와는 별개.
+    wick_timeframes: list[str] = field(default_factory=lambda: _csv("WICK_TIMEFRAMES", "15m,5m"))
+
     # --- 알림 ---
     telegram_bot_token: str = field(default_factory=lambda: os.getenv("TELEGRAM_BOT_TOKEN", ""))
     telegram_chat_id: str = field(default_factory=lambda: os.getenv("TELEGRAM_CHAT_ID", ""))
@@ -124,6 +138,9 @@ class Settings:
 
     def is_whitelisted(self, symbol: str, timeframe: str) -> bool:
         return self.auto_trade_enabled and (symbol.upper(), timeframe) in self.auto_trade_whitelist
+
+    def is_wick_whitelisted(self, symbol: str, timeframe: str) -> bool:
+        return self.wick_auto_trade_enabled and (symbol.upper(), timeframe) in self.wick_auto_trade_whitelist
 
 
 settings = Settings()

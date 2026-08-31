@@ -43,6 +43,8 @@ from app.stats_builder import build_all as build_strategy_stats
 from app.strategy import KeltnerReclaimStrategy
 from app.validated_lab_stats_builder import VALIDATED_STATS_FILE
 from app.validated_lab_stats_builder import build_all as build_validated_lab_stats
+from app.wick_position_manager import manage_wick_positions
+from app.wick_signal_engine import run_once as run_wick_signal_once
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -128,6 +130,7 @@ async def on_startup() -> None:
     init_db()
     _start_scheduler()
     threading.Thread(target=run_once, daemon=True).start()
+    threading.Thread(target=run_wick_signal_once, daemon=True).start()
     threading.Thread(target=run_paper_trading_once, daemon=True).start()
     get_live_feed().start()
     _build_missing_stats_in_background()
@@ -144,10 +147,12 @@ async def on_shutdown() -> None:
 
 def _position_watch_tick() -> None:
     """열린 포지션 관련 백그라운드 점검: 시간손절 청산 + SL/TP 체결 반영 +
-    (화이트리스트 밖이라 실제 주문이 안 나간) 시그널의 가상 체결 결과 갱신."""
+    (화이트리스트 밖이라 실제 주문이 안 나간) 시그널의 가상 체결 결과 갱신 +
+    wick 엔진의 트레일링 스탑 갱신/청산 반영."""
     check_time_stops()
     reconcile_open_positions()
     check_signal_outcomes()
+    manage_wick_positions()
 
 
 def _start_scheduler() -> BackgroundScheduler:
@@ -159,6 +164,10 @@ def _start_scheduler() -> BackgroundScheduler:
     _scheduler.add_job(
         run_once, trigger="interval", seconds=settings.scan_interval_seconds,
         id="signal_scan", max_instances=1, coalesce=True,
+    )
+    _scheduler.add_job(
+        run_wick_signal_once, trigger="interval", seconds=settings.scan_interval_seconds,
+        id="wick_signal_scan", max_instances=1, coalesce=True,
     )
     _scheduler.add_job(
         _position_watch_tick, trigger="interval", seconds=settings.position_watch_interval_seconds,
@@ -174,9 +183,13 @@ def _start_scheduler() -> BackgroundScheduler:
     )
     _scheduler.start()
     logger.info(
-        "스케줄러 시작: 시그널 스캔 %d초, 포지션 점검 %d초, 백테스트 성적표 갱신 %.1f시간 간격, 모의투자 스캔 %d초",
+        "스케줄러 시작: 시그널 스캔 %d초(켈트너+wick), 포지션 점검 %d초, "
+        "백테스트 성적표 갱신 %.1f시간 간격, 모의투자 스캔 %d초 - "
+        "wick 자동매매 %s (화이트리스트 %s)",
         settings.scan_interval_seconds, settings.position_watch_interval_seconds,
         settings.stats_refresh_interval_hours, settings.scan_interval_seconds,
+        "ON" if settings.wick_auto_trade_enabled else "off",
+        sorted(f"{s}:{tf}" for s, tf in settings.wick_auto_trade_whitelist) or "없음",
     )
     return _scheduler
 
@@ -230,6 +243,8 @@ def health() -> dict:
         "testnet": settings.binance_testnet,
         "auto_trade_enabled": settings.auto_trade_enabled,
         "auto_trade_whitelist": sorted(f"{s}:{tf}" for s, tf in settings.auto_trade_whitelist),
+        "wick_auto_trade_enabled": settings.wick_auto_trade_enabled,
+        "wick_auto_trade_whitelist": sorted(f"{s}:{tf}" for s, tf in settings.wick_auto_trade_whitelist),
     }
 
 

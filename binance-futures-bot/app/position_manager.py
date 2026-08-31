@@ -37,7 +37,7 @@ def has_open_position(symbol: str, timeframe: str) -> bool:
         session.close()
 
 
-def _realized_pnl_usdt(trade: TradeRecord, exit_price: float) -> float | None:
+def realized_pnl_usdt(trade: TradeRecord, exit_price: float) -> float | None:
     if trade.entry_price is None or trade.quantity is None or exit_price is None:
         return None
     direction = 1 if trade.side == "BUY" else -1  # 이 전략은 롱만 진입하지만 일반화해둠
@@ -65,7 +65,7 @@ def check_time_stops(broker: BinanceFuturesBroker | None = None) -> int:
                 trade.status = "CLOSED_TIME"
                 trade.closed_at = now
                 trade.exit_price = result.get("price")
-                trade.realized_pnl_usdt = _realized_pnl_usdt(trade, trade.exit_price)
+                trade.realized_pnl_usdt = realized_pnl_usdt(trade, trade.exit_price)
                 session.commit()
                 notify_trade_closed(trade.symbol, trade.timeframe, "시간손절", trade.realized_pnl_usdt)
                 closed += 1
@@ -115,7 +115,7 @@ def reconcile_open_positions(broker: BinanceFuturesBroker | None = None) -> int:
                 trade.status = filled_as
                 trade.closed_at = now
                 trade.exit_price = filled_price
-                trade.realized_pnl_usdt = _realized_pnl_usdt(trade, filled_price)
+                trade.realized_pnl_usdt = realized_pnl_usdt(trade, filled_price)
                 session.commit()
                 notify_trade_closed(
                     trade.symbol, trade.timeframe,

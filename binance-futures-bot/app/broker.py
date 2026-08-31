@@ -127,6 +127,73 @@ class BinanceFuturesBroker:
             tp_order_id=tp_order_id,
         )
 
+    def enter_position(
+        self, direction: str, symbol: str, entry_price_hint: float, stop_price: float,
+        risk_usdt: float, leverage: int = 1,
+    ) -> EntryResult:
+        """롱/숏 포지션 진입 + 손절만 부착 (익절 주문 없음).
+
+        `enter_long()`과 달리 고정 익절이 없는 "본전 이동 트레일링" 전략용이다
+        (예: 볼린저 꼬리터치+RSI) - 청산은 손절 주문 하나를 계속 취소·재등록
+        하며 따라가는 방식으로 처리한다(app/wick_position_manager.py 참고).
+        """
+        step_size = self.get_step_size(symbol)
+        quantity = compute_quantity(entry_price_hint, stop_price, risk_usdt, step_size)
+        self.set_leverage(symbol, leverage)
+
+        entry_side = "BUY" if direction == "LONG" else "SELL"
+        exit_side = "SELL" if direction == "LONG" else "BUY"
+
+        try:
+            entry_order = self.client.futures_create_order(
+                symbol=symbol, side=entry_side, type="MARKET", quantity=quantity,
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise BrokerError(f"{symbol} 진입 주문 실패: {exc}") from exc
+
+        filled_price = float(entry_order.get("avgPrice") or entry_price_hint) or entry_price_hint
+
+        sl_order_id = None
+        try:
+            sl_order = self.client.futures_create_order(
+                symbol=symbol, side=exit_side, type="STOP_MARKET",
+                stopPrice=round(stop_price, 4), quantity=quantity, reduceOnly=True,
+            )
+            sl_order_id = str(sl_order.get("orderId"))
+        except Exception:
+            logger.exception("%s 손절 주문 부착 실패 (진입은 이미 체결됨 — 수동 확인 필요)", symbol)
+
+        return EntryResult(
+            quantity=quantity,
+            entry_order_id=str(entry_order.get("orderId")),
+            entry_price=filled_price,
+            sl_order_id=sl_order_id,
+            tp_order_id=None,
+        )
+
+    def replace_stop_order(
+        self, symbol: str, direction: str, quantity: float, new_stop_price: float, old_order_id: str | None,
+    ) -> str:
+        """트레일링 스탑 갱신 - 기존 손절 주문을 취소하고 새 가격으로 다시 건다.
+
+        먼저 취소 후 등록하는 순서라, 그 찰나에 손절 보호가 잠깐 비는 구간이
+        생긴다(거래소 특성상 "취소+새 주문"을 원자적으로 묶을 수 없음) - 대신
+        새 가격은 항상 기존보다 유리한 방향으로만 이동하므로(app/lab_backtest.py
+        의 본전 이동 트레일링 로직과 동일), 그 짧은 순간의 리스크는 감내할
+        만한 수준으로 설계돼 있다.
+        """
+        if old_order_id:
+            self.cancel_order(symbol, old_order_id)
+        exit_side = "SELL" if direction == "LONG" else "BUY"
+        try:
+            order = self.client.futures_create_order(
+                symbol=symbol, side=exit_side, type="STOP_MARKET",
+                stopPrice=round(new_stop_price, 4), quantity=quantity, reduceOnly=True,
+            )
+            return str(order.get("orderId"))
+        except Exception as exc:  # noqa: BLE001
+            raise BrokerError(f"{symbol} 트레일링 스탑 갱신 실패: {exc}") from exc
+
     def close_position_market(self, symbol: str, quantity: float, side: str = "SELL") -> dict:
         """잔여 SL/TP를 취소하고 시장가로 포지션을 정리한다 (시간손절용).
 
