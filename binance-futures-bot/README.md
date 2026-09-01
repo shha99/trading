@@ -409,6 +409,60 @@ RISK_PERCENT_MAX_USDT=100     # 상한 (0이면 상한 없음 - 권장하지 않
    등록을 원자적으로 묶어주지 않음) — 극히 드문 경우지만 그 사이에 급격한
    가격 변동이 있으면 보호가 안 될 수 있다.
 
+## 헤드리스로 24시간 돌리기 (웹서버 없이, 집 PC/서버용)
+
+지금까지의 `/`, `/vf`, `/strategy`, `/lab`, `/trading` 화면은 전부 차트를
+보여주거나 백테스트 성적표를 조회하는 용도지, **실제 매매 자체엔 필요
+없다.** 매매를 담당하는 코드(`app/signal_engine.py`,
+`app/wick_signal_engine.py`, `app/position_manager.py`,
+`app/wick_position_manager.py`)는 그냥 "주기적으로 캔들 확인 → 조건 맞으면
+주문 → 열린 포지션 감시"를 반복하는 로직일 뿐이라, FastAPI/웹서버 없이도
+그대로 돌아간다.
+
+`run_trading_bot.py`가 그 헤드리스 진입점이다 — `server.py`의 백그라운드
+스케줄러(`_start_scheduler()`)와 **완전히 같은 작업**만 그대로 재사용하고
+(새 로직 없음, 전부 이미 테스트된 엔진 코드), 웹서버·정적파일·차트용
+웹소켓·백테스트 성적표 재계산처럼 "화면을 보여주기 위한" 부분만 뺐다.
+
+```bash
+cd binance-futures-bot
+pip install -r requirements.txt
+cp .env.example .env   # 값 채우기 (아래 "보안 규칙" 필독)
+python run_trading_bot.py
+```
+
+Ctrl+C(또는 SIGTERM)로 깨끗하게 종료된다 — 진행 중인 스캔이 끝나는 대로
+멈추고, 거래소에 이미 나가있는 주문에는 영향이 없다(취소되지 않음).
+
+### ⚠️ 이 프로세스가 켜져 있는 동안만 매매가 돌아간다
+
+Render 무료 플랜의 "재배포마다 DB 초기화"·"무접속 15분 뒤 슬립" 같은
+문제는 이 스크립트 자체가 해결해주는 게 아니라, "웹서버가 아니라서 애초에
+그런 정책이 걸릴 대상이 아니다"는 것뿐이다 — 결국 **어딘가에는 항상 켜져
+있는 컴퓨터가 필요하다는 사실은 그대로**다. 집 PC에서 돌린다면:
+
+- **전원 관리를 반드시 확인할 것.** 노트북이면 "덮개를 닫아도 절전모드 안
+  들어가기"·화면보호기/자동 절전 비활성화. 정전·와이파이 단절·PC 재부팅
+  (OS 자동 업데이트 포함)이 생기면 그 순간부터 신규 진입/트레일링 스탑
+  갱신이 멈춘다 — 단, 거래소에 이미 걸려있는 손절 주문 자체는 거래소가
+  계속 지켜주므로 파국적 손실까지 막지 못하게 되는 건 아니다.
+- 껐다 켰다 하지 않고 계속 띄워두려면 (Linux/macOS) `nohup python
+  run_trading_bot.py > bot.log 2>&1 &` 또는 `tmux`/`screen` 세션 안에서
+  실행, (Windows) 작업 스케줄러에 "로그온 시 시작"으로 등록하는 걸
+  권장한다. 재부팅 후 자동 재시작까지 원하면 Linux는 systemd user
+  service(`systemctl --user`)로 등록하는 게 가장 안정적이다.
+- 이 방식은 **실계좌 매매 기록(SQLite)도 이 컴퓨터 로컬에만 쌓인다** —
+  Render처럼 재배포로 초기화되는 문제는 없지만, 대신 이 컴퓨터가 고장/
+  포맷되면 그 기록도 함께 사라진다는 걸 감안할 것(주기적 백업 권장).
+- 대시보드가 필요하면 `run_trading_bot.py`와 `uvicorn server:app`을 같은
+  머신에서 **동시에** 띄워도 된다 — 둘 다 같은 SQLite 파일(`data/bot.db`)을
+  보므로 `/trading` 페이지에서 그대로 조회 가능하다. 다만 두 프로세스가
+  똑같은 시그널 스캔/포지션 감시 작업을 **중복으로** 돌리게 되므로(각자
+  스케줄러가 따로 있음), 이 경우엔 `server.py` 쪽 자동매매는 반드시 끈
+  채로(`AUTO_TRADE_ENABLED=false`, `WICK_AUTO_TRADE_ENABLED=false`) 대시보드
+  전용으로만 쓸 것 — 실제 매매는 `run_trading_bot.py` 하나에서만 나가야
+  중복 주문을 막을 수 있다.
+
 ## 실행 방법
 
 ```bash
@@ -561,6 +615,7 @@ uvicorn server:app --reload --port 8300
 
 ```
 server.py              FastAPI + 스케줄러(시그널 스캔/포지션 점검) + 세 페이지 API + WS
+run_trading_bot.py      헤드리스 매매 루프 진입점 (웹서버 없음 - server.py와 같은 스케줄러 작업만 재사용, "헤드리스로 24시간 돌리기" 섹션 참고)
 backtest.py             켈트너 전략 단독 백테스트 (sanity check / stats_builder·lab_stats_builder가 재사용)
 build_stats.py          심볼×시간대 백테스트 성적표 재계산 CLI (app/stats_builder.py 실행)
 build_lab_stats.py      전략 실험실 12종 성적표 재계산 CLI (app/lab_stats_builder.py 실행)
