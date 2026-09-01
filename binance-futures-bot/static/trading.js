@@ -22,6 +22,7 @@
     wickDot: document.getElementById("wickDot"),
     wickStatusText: document.getElementById("wickStatusText"),
     wickWhitelist: document.getElementById("wickWhitelist"),
+    riskModeMeta: document.getElementById("riskModeMeta"),
     riskStats: document.getElementById("riskStats"),
     openPositionsMeta: document.getElementById("openPositionsMeta"),
     openPositionsTable: document.getElementById("openPositionsTable"),
@@ -42,6 +43,12 @@
 
     setEngine(el.keltnerDot, el.keltnerStatusText, el.keltnerWhitelist, h.auto_trade_enabled, h.auto_trade_whitelist);
     setEngine(el.wickDot, el.wickStatusText, el.wickWhitelist, h.wick_auto_trade_enabled, h.wick_auto_trade_whitelist);
+
+    el.riskModeMeta.textContent =
+      h.risk_mode === "percent_balance"
+        ? `잔고 비례(복리형) - 매 거래 가용잔고의 ${h.risk_percent_of_balance}%` +
+          (h.risk_percent_max_usdt > 0 ? ` (상한 ${fmt(h.risk_percent_max_usdt)} USDT)` : " (상한 없음)")
+        : `고정 금액 - 매 거래 ${fmt(h.risk_per_trade_usdt)} USDT`;
   }
 
   function setEngine(dotEl, textEl, listEl, enabled, whitelist) {

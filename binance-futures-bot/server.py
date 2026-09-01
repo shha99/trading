@@ -255,6 +255,10 @@ def health() -> dict:
         "auto_trade_whitelist": sorted(f"{s}:{tf}" for s, tf in settings.auto_trade_whitelist),
         "wick_auto_trade_enabled": settings.wick_auto_trade_enabled,
         "wick_auto_trade_whitelist": sorted(f"{s}:{tf}" for s, tf in settings.wick_auto_trade_whitelist),
+        "risk_mode": settings.risk_mode,
+        "risk_per_trade_usdt": settings.risk_per_trade_usdt,
+        "risk_percent_of_balance": settings.risk_percent_of_balance,
+        "risk_percent_max_usdt": settings.risk_percent_max_usdt,
     }
 
 

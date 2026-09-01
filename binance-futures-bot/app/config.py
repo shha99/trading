@@ -66,6 +66,24 @@ class Settings:
         default_factory=lambda: _parse_whitelist(os.getenv("AUTO_TRADE_WHITELIST", ""))
     )
     risk_per_trade_usdt: float = field(default_factory=lambda: float(os.getenv("RISK_PER_TRADE_USDT", "10")))
+    # --- 리스크 사이징 모드 ---
+    # "fixed"(기본값): 매 거래 RISK_PER_TRADE_USDT 고정 금액만 건다 - 잔고가
+    #   늘어도 다음 거래 리스크는 그대로라 계좌 성장에 따라 자동으로 커지지
+    #   않는다(대신 예측 가능하고 안전함).
+    # "percent_balance": 매 거래 직전 선물 지갑의 가용 잔고를 다시 조회해
+    #   RISK_PERCENT_OF_BALANCE(%)만큼 건다 - 잔고가 늘면 리스크도 같이
+    #   커지는 복리형 사이징(모의투자 계좌의 "잔고 전액 배팅"과 같은 원리를
+    #   실계좌에 안전한 비율로 옮긴 것). 잔고 조회 실패/0 이하일 때는
+    #   RISK_PER_TRADE_USDT로 자동 폴백한다 (app/risk.py:compute_risk_usdt).
+    risk_mode: str = field(default_factory=lambda: os.getenv("RISK_MODE", "fixed").strip().lower())
+    risk_percent_of_balance: float = field(
+        default_factory=lambda: float(os.getenv("RISK_PERCENT_OF_BALANCE", "1.0"))
+    )
+    # 계산된 리스크 금액의 상한(USDT) - 잔고 조회 이상값/API 버그로 한 거래에
+    # 과도한 리스크가 걸리는 걸 막는 안전장치. 0 이하면 상한 없음.
+    risk_percent_max_usdt: float = field(
+        default_factory=lambda: float(os.getenv("RISK_PERCENT_MAX_USDT", "0"))
+    )
     leverage: int = field(default_factory=lambda: int(os.getenv("LEVERAGE", "1")))
     max_open_positions: int = field(default_factory=lambda: int(os.getenv("MAX_OPEN_POSITIONS", "3")))
     daily_loss_limit_usdt: float = field(default_factory=lambda: float(os.getenv("DAILY_LOSS_LIMIT_USDT", "50")))

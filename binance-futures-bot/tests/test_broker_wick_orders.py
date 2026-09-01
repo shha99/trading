@@ -111,3 +111,32 @@ def test_replace_stop_order_raises_broker_error_on_failure():
     broker = BinanceFuturesBroker(client=FailingClient())
     with pytest.raises(BrokerError):
         broker.replace_stop_order("BTCUSDT", "LONG", quantity=0.1, new_stop_price=30000, old_order_id=None)
+
+
+# ---------------------------------------------------------------------------
+# get_available_balance_usdt - RISK_MODE=percent_balance의 기준값 조회
+# ---------------------------------------------------------------------------
+
+class FakeBinanceClientWithBalance(FakeBinanceClient):
+    def __init__(self, balances):
+        super().__init__()
+        self._balances = balances
+
+    def futures_account_balance(self):
+        return self._balances
+
+
+def test_get_available_balance_usdt_finds_usdt_entry():
+    client = FakeBinanceClientWithBalance([
+        {"asset": "BNB", "availableBalance": "1.5"},
+        {"asset": "USDT", "availableBalance": "1234.56"},
+    ])
+    broker = BinanceFuturesBroker(client=client)
+    assert broker.get_available_balance_usdt() == pytest.approx(1234.56)
+
+
+def test_get_available_balance_usdt_raises_when_usdt_missing():
+    client = FakeBinanceClientWithBalance([{"asset": "BNB", "availableBalance": "1.5"}])
+    broker = BinanceFuturesBroker(client=client)
+    with pytest.raises(BrokerError):
+        broker.get_available_balance_usdt()

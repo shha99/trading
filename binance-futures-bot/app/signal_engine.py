@@ -93,7 +93,7 @@ class SignalEngine:
                     entry_price_hint=signal.entry_price,
                     stop_price=signal.stop_price,
                     target_price=signal.target_price,
-                    risk_usdt=settings.risk_per_trade_usdt,
+                    risk_usdt=risk.compute_risk_usdt(broker),
                     leverage=settings.leverage,
                 )
             except BrokerError as exc:

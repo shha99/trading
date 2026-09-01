@@ -92,7 +92,7 @@ class WickSignalEngine:
                 result = broker.enter_position(
                     direction=direction, symbol=symbol,
                     entry_price_hint=entry["entry_price"], stop_price=entry["stop_price"],
-                    risk_usdt=settings.risk_per_trade_usdt, leverage=settings.leverage,
+                    risk_usdt=risk.compute_risk_usdt(broker), leverage=settings.leverage,
                 )
             except BrokerError as exc:
                 logger.error("wick 자동매매 진입 실패: %s %s - %s", symbol, timeframe, exc)

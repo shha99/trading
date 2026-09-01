@@ -76,6 +76,20 @@ class BinanceFuturesBroker:
                         return step
         raise BrokerError(f"{symbol}의 LOT_SIZE stepSize를 찾을 수 없습니다")
 
+    def get_available_balance_usdt(self) -> float:
+        """선물 지갑의 가용 USDT 잔고(availableBalance - 이미 열린 포지션의
+        증거금은 제외된, 신규 진입에 실제로 쓸 수 있는 금액)를 조회한다.
+
+        RISK_MODE=percent_balance(잔고 비례 리스크 사이징)의 기준값으로 쓴다
+        (app/risk.py:compute_risk_usdt). 실패 시 예외를 그대로 던진다 -
+        호출부가 고정 리스크로 폴백할지 판단한다.
+        """
+        balances = self.client.futures_account_balance()
+        for b in balances:
+            if b.get("asset") == "USDT":
+                return float(b.get("availableBalance", 0.0))
+        raise BrokerError("선물 계좌에서 USDT 잔고를 찾을 수 없습니다")
+
     def set_leverage(self, symbol: str, leverage: int) -> None:
         try:
             self.client.futures_change_leverage(symbol=symbol, leverage=leverage)

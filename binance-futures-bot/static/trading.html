@@ -52,6 +52,7 @@
 
   <section class="scorecard-section">
     <h2>오늘의 리스크 현황</h2>
+    <p class="meta-line" id="riskModeMeta">-</p>
     <div class="paper-stats" id="riskStats"></div>
   </section>
 
@@ -91,10 +92,16 @@
       <tr><td>WICK_AUTO_TRADE_WHITELIST</td><td>예: <code>BTCUSDT:15m</code> (쉼표로 여러 개)</td></tr>
       <tr><td>AUTO_TRADE_ENABLED / AUTO_TRADE_WHITELIST</td><td>켈트너 전략 켜기(별개 스위치) - 예: <code>BTCUSDT:1h</code></td></tr>
       <tr><td>RISK_PER_TRADE_USDT / LEVERAGE / MAX_OPEN_POSITIONS / DAILY_LOSS_LIMIT_USDT</td><td>계좌 규모에 맞게 조정</td></tr>
+      <tr><td>RISK_MODE</td><td><code>fixed</code>(기본, 매 거래 고정 금액) 또는 <code>percent_balance</code>(잔고 비례 복리형)</td></tr>
+      <tr><td>RISK_PERCENT_OF_BALANCE</td><td>RISK_MODE=percent_balance일 때 매 거래마다 걸 가용잔고 비율(%), 기본 1.0</td></tr>
+      <tr><td>RISK_PERCENT_MAX_USDT</td><td>잔고 비례 리스크의 상한(USDT). 0이면 상한 없음 - 잔고 조회 이상값 방지용 안전장치</td></tr>
     </table>
     <ul>
       <li>반드시 테스트넷으로 먼저 며칠 검증한 뒤에만 실계좌로 전환할 것.</li>
       <li>처음엔 조합 1개, 작은 금액으로 시작할 것.</li>
+      <li><code>RISK_MODE=percent_balance</code>는 잔고가 늘수록 다음 거래 리스크도 커지는
+        복리형이라 성장이 빠른 만큼 손실도 빠르게 커진다 — 처음엔 반드시
+        <code>fixed</code>로 충분히 검증한 뒤에 전환할 것.</li>
       <li>자세한 설명·위험 고지는 저장소 README "실계좌 자동매매" 섹션 참고.</li>
     </ul>
   </section>
