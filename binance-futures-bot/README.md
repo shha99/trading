@@ -449,8 +449,9 @@ Render 무료 플랜의 "재배포마다 DB 초기화"·"무접속 15분 뒤 슬
 - 껐다 켰다 하지 않고 계속 띄워두려면 (Linux/macOS) `nohup python
   run_trading_bot.py > bot.log 2>&1 &` 또는 `tmux`/`screen` 세션 안에서
   실행, (Windows) 작업 스케줄러에 "로그온 시 시작"으로 등록하는 걸
-  권장한다. 재부팅 후 자동 재시작까지 원하면 Linux는 systemd user
-  service(`systemctl --user`)로 등록하는 게 가장 안정적이다.
+  권장한다(아래 "Windows에서 로그온 시 자동 실행" 참고). 재부팅 후 자동
+  재시작까지 원하면 Linux는 systemd user service(`systemctl --user`)로
+  등록하는 게 가장 안정적이다.
 - 이 방식은 **실계좌 매매 기록(SQLite)도 이 컴퓨터 로컬에만 쌓인다** —
   Render처럼 재배포로 초기화되는 문제는 없지만, 대신 이 컴퓨터가 고장/
   포맷되면 그 기록도 함께 사라진다는 걸 감안할 것(주기적 백업 권장).
@@ -462,6 +463,38 @@ Render 무료 플랜의 "재배포마다 DB 초기화"·"무접속 15분 뒤 슬
   채로(`AUTO_TRADE_ENABLED=false`, `WICK_AUTO_TRADE_ENABLED=false`) 대시보드
   전용으로만 쓸 것 — 실제 매매는 `run_trading_bot.py` 하나에서만 나가야
   중복 주문을 막을 수 있다.
+
+### Windows에서 로그온 시 자동 실행
+
+`run_trading_bot.bat`이 이미 저장소에 있다 - 같은 폴더에 `venv`라는 이름의
+가상환경이 있다고 가정하고(위 2단계 그대로 `python -m venv venv`로 만들면
+맞음) 그 안에서 `run_trading_bot.py`를 실행하고 출력을 `bot.log`에 남긴다.
+둘 중 하나를 고르면 된다:
+
+**간단하게 (재부팅 시 딱 한 번 실행, 크래시나도 재시작 안 됨)**
+1. `Win+R` → `shell:startup` 입력 → Enter (시작프로그램 폴더가 열림)
+2. `run_trading_bot.bat`의 **바로가기**를 만들어 그 폴더에 넣기
+3. 로그온할 때마다 자동으로 창이 뜨며 실행됨 (창을 최소화만 하고 닫지 말 것)
+
+**더 안정적으로 (작업 스케줄러 - 크래시 나도 자동 재시작)**
+1. `Win+R` → `taskschd.msc` → Enter
+2. 오른쪽 "작업 만들기(Create Task)" 클릭(기본 작업 아님 - 세부 설정 필요)
+3. **일반** 탭: 이름 입력(예: BinanceTradingBot), "사용자가 로그온한 경우에만
+   실행" 선택(비밀번호 저장 안 해도 돼서 간단함 - 로그아웃만 안 하면 됨,
+   화면 잠금은 상관없음)
+4. **트리거** 탭: 새로 만들기 → "로그온할 때" 선택 → 확인
+5. **동작** 탭: 새로 만들기 → "프로그램 시작" → `run_trading_bot.bat`
+   파일을 찾아보기로 지정
+6. **조건** 탭: "컴퓨터의 AC 전원이 켜져 있는 경우에만 작업 시작"
+   **체크 해제** (노트북이면 배터리로 돌 때도 꺼지면 안 되니까)
+7. **설정** 탭: "작업이 실패하면 다시 시작 간격" 체크 → 1분마다, 최대
+   999회로 설정. "다음 시간보다 오래 실행되면 작업 중지"는 반드시
+   **체크 해제**(기본값이 켜져 있으면 3일 뒤 강제 종료됨 - 24시간 봇에
+   치명적이니 꼭 확인)
+8. 확인 → 저장
+
+두 방법 다 로그는 `bot.log`(같은 폴더)에 쌓이니, 메모장이나
+`Get-Content bot.log -Wait -Tail 20`(PowerShell)으로 실시간 확인 가능하다.
 
 ## 실행 방법
 
@@ -616,6 +649,7 @@ uvicorn server:app --reload --port 8300
 ```
 server.py              FastAPI + 스케줄러(시그널 스캔/포지션 점검) + 세 페이지 API + WS
 run_trading_bot.py      헤드리스 매매 루프 진입점 (웹서버 없음 - server.py와 같은 스케줄러 작업만 재사용, "헤드리스로 24시간 돌리기" 섹션 참고)
+run_trading_bot.bat     Windows 로그온 시 자동 실행용 배치 파일 (venv 활성화 후 run_trading_bot.py 실행, bot.log에 로그 기록)
 backtest.py             켈트너 전략 단독 백테스트 (sanity check / stats_builder·lab_stats_builder가 재사용)
 build_stats.py          심볼×시간대 백테스트 성적표 재계산 CLI (app/stats_builder.py 실행)
 build_lab_stats.py      전략 실험실 12종 성적표 재계산 CLI (app/lab_stats_builder.py 실행)
