@@ -129,6 +129,14 @@ class Settings:
     )
     cors_origins: list[str] = field(default_factory=lambda: _csv("CORS_ORIGINS", "*"))
 
+    # --- 대시보드 접근 제한 (선택, 기본 꺼짐 - 기존 동작 그대로 유지) ---
+    # 실계좌 매매 현황(/trading 등)이 공개 도메인에 떠 있으면 누구나 볼 수
+    # 있으므로, 둘 다 채우면 전체 사이트에 HTTP Basic Auth가 걸린다. 하나라도
+    # 비어있으면(기본값) 지금까지와 완전히 동일하게 인증 없이 열린다 -
+    # 기존 배포에 영향 없는 순수 opt-in 기능.
+    dashboard_username: str = field(default_factory=lambda: os.getenv("DASHBOARD_USERNAME", ""))
+    dashboard_password: str = field(default_factory=lambda: os.getenv("DASHBOARD_PASSWORD", ""))
+
     # --- 실시간 차트 대시보드 ---
     # 캔들(15m/1h/4h/1d)은 REST 폴링만으로 충분하다(바이낸스 klines 응답
     # 자체가 진행 중인 마지막 봉을 실시간으로 갱신해줌). bookTicker
@@ -153,6 +161,10 @@ class Settings:
     @property
     def futures_ws_base_url(self) -> str:
         return "wss://stream.binancefuture.com" if self.binance_testnet else "wss://fstream.binance.com"
+
+    @property
+    def dashboard_auth_enabled(self) -> bool:
+        return bool(self.dashboard_username and self.dashboard_password)
 
     def is_whitelisted(self, symbol: str, timeframe: str) -> bool:
         return self.auto_trade_enabled and (symbol.upper(), timeframe) in self.auto_trade_whitelist

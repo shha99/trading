@@ -7,8 +7,11 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
 import logging
+import secrets
 import threading
 from datetime import timedelta
 from pathlib import Path
@@ -17,9 +20,10 @@ import pandas as pd
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import desc
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.config import settings
 from app.db import SessionLocal, SignalRecord, TradeRecord, init_db
@@ -66,6 +70,49 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _basic_auth_ok(authorization_header: str | None) -> bool:
+    """HTTP Basic Auth의 Authorization 헤더 값을 DASHBOARD_USERNAME/PASSWORD와
+    비교한다. `settings.dashboard_auth_enabled`가 False면(둘 중 하나라도
+    비어있으면 - 기본값) 이 함수 자체를 호출하지 않고 그냥 통과시켜야 한다 -
+    이 함수는 "설정돼 있을 때"의 검증 로직만 담당한다."""
+    if not authorization_header or not authorization_header.startswith("Basic "):
+        return False
+    try:
+        decoded = base64.b64decode(authorization_header[6:]).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError):
+        return False
+    username, _, password = decoded.partition(":")
+    # secrets.compare_digest로 타이밍 공격 방지
+    return secrets.compare_digest(username, settings.dashboard_username) and secrets.compare_digest(
+        password, settings.dashboard_password
+    )
+
+
+class DashboardAuthMiddleware(BaseHTTPMiddleware):
+    """실계좌 매매 현황이 뜨는 공개 도메인을 아무나 못 보게 하는 선택적 게이트.
+
+    `DASHBOARD_USERNAME`/`DASHBOARD_PASSWORD`를 둘 다 설정했을 때만 켜진다
+    (`settings.dashboard_auth_enabled`) - 기본값(둘 중 하나라도 비어있음)에서는
+    이 미들웨어가 그냥 다음 핸들러로 넘기기만 해서 기존 배포 동작과 100%
+    동일하다. 켜지면 페이지·정적파일·API 전부(WebSocket 제외 - Starlette의
+    BaseHTTPMiddleware는 HTTP 스코프만 감싸고 websocket 스코프는 건드리지
+    않는다 - `/ws/live`는 그 핸들러 안에서 별도로 같은 방식으로 검증한다)에
+    걸린다."""
+
+    async def dispatch(self, request, call_next):
+        if not settings.dashboard_auth_enabled:
+            return await call_next(request)
+        if _basic_auth_ok(request.headers.get("authorization")):
+            return await call_next(request)
+        return Response(
+            status_code=401,
+            headers={"WWW-Authenticate": 'Basic realm="trading-dashboard"'},
+        )
+
+
+app.add_middleware(DashboardAuthMiddleware)
 
 _scheduler: BackgroundScheduler | None = None
 _stats_refresh_lock = threading.Lock()
@@ -494,6 +541,11 @@ def paper_trading_status_endpoint() -> dict:
 
 @app.websocket("/ws/live")
 async def ws_live(websocket: WebSocket) -> None:
+    if settings.dashboard_auth_enabled and not _basic_auth_ok(websocket.headers.get("authorization")):
+        # DashboardAuthMiddleware는 HTTP 스코프만 감싸므로(Starlette
+        # BaseHTTPMiddleware 한계) 웹소켓은 여기서 직접 같은 방식으로 검증한다.
+        await websocket.close(code=4401)
+        return
     await websocket.accept()
     feed = get_live_feed()
     symbols = settings.symbols
