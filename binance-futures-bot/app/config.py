@@ -11,6 +11,16 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+# 로컬(`.env` 파일)/헤드리스 실행 시 실제 환경변수로 로드되도록 여기서 한 번
+# 불러온다 - 이 모듈이 모든 os.getenv() 호출보다 먼저 임포트되므로 여기가
+# 유일하게 맞는 자리다. `.env` 파일이 없으면(Render처럼 Environment 탭에서
+# 이미 진짜 환경변수로 주입하는 배포 환경) 조용히 아무 일도 안 하고 넘어간다
+# - 즉 기존 배포 방식에는 영향이 없다. 이미 설정된 실제 OS 환경변수는
+# 덮어쓰지 않는다(override=False가 기본값).
+load_dotenv()
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.getenv("DATA_DIR", str(BASE_DIR / "data")))
 
