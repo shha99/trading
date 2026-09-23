@@ -26,6 +26,7 @@ from sqlalchemy import desc
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.config import settings
+from app.binance_account import get_live_status as get_binance_live_status
 from app.db import SessionLocal, SignalRecord, TradeRecord, init_db
 from app.history import is_candle_closed
 from app.indicator_catalog import build_catalog, compute_indicator
@@ -358,6 +359,17 @@ def risk_status() -> dict:
         "todays_realized_pnl_usdt": todays_realized_pnl_usdt(),
         "kill_switch_active": is_kill_switch_active(),
     }
+
+
+@app.get("/api/binance/status")
+def binance_live_status() -> dict:
+    """실계좌(또는 테스트넷) 바이낸스 계좌의 실시간 상태 - 로컬 DB가 아니라
+    거래소에 직접 물어본 결과다(app/binance_account.py). 어느 컴퓨터에서
+    실제로 매매하고 있든(집 PC, 다른 서버 등) 상관없이, 이 서버에 같은
+    계좌의 API 키만 설정돼 있으면 실제 열린 포지션/체결/잔고를 그대로
+    보여준다. 읽기 전용 API만 호출하며, 이 엔드포인트 자체는 주문을 내지
+    않는다. `BINANCE_API_KEY`/`SECRET`이 설정 안 돼 있으면 `ready: false`."""
+    return get_binance_live_status()
 
 
 @app.post("/api/refresh")

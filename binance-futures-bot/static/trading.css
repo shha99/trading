@@ -39,3 +39,17 @@
 @media (max-width: 900px) {
   .engine-grid { grid-template-columns: 1fr; }
 }
+
+#binanceLiveSection {
+  background: var(--bg-card);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 12px 18px;
+}
+#binanceLiveSection h2 { color: var(--accent); }
+.sub-heading {
+  margin: 16px 0 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-dim);
+}

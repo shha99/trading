@@ -56,8 +56,29 @@
     <div class="paper-stats" id="riskStats"></div>
   </section>
 
+  <section class="scorecard-section" id="binanceLiveSection">
+    <h2>🔗 실계좌 실시간 (바이낸스 직접 조회)</h2>
+    <p class="meta-line">
+      아래 두 섹션(로컬 기록)과 달리, 이 섹션은 로컬 DB가 아니라
+      <strong>바이낸스 API에 직접 물어본 결과</strong>다 — 어느 컴퓨터에서
+      실제로 매매하고 있든(집 PC 등) 상관없이, 같은 계좌라면 항상 정확한
+      실시간 상태를 보여준다. 읽기 전용 조회만 하며, 이 화면에서 아무 값도
+      바꾸지 않는다.
+    </p>
+    <p class="meta-line" id="binanceLiveMeta">상태 확인 중...</p>
+    <div class="paper-stats" id="binanceAccountStats"></div>
+    <h3 class="sub-heading">열린 포지션 (실시간)</h3>
+    <div class="table-scroll">
+      <table class="signals-table" id="binancePositionsTable"></table>
+    </div>
+    <h3 class="sub-heading">최근 체결 (실시간)</h3>
+    <div class="table-scroll">
+      <table class="signals-table" id="binanceTradesTable"></table>
+    </div>
+  </section>
+
   <section class="scorecard-section">
-    <h2>열린 포지션 (실계좌)</h2>
+    <h2>열린 포지션 (로컬 기록 - 이 서버가 직접 실행한 것만)</h2>
     <p class="meta-line" id="openPositionsMeta">-</p>
     <div class="table-scroll">
       <table class="signals-table" id="openPositionsTable"></table>
@@ -65,7 +86,7 @@
   </section>
 
   <section class="scorecard-section">
-    <h2>최근 매매 기록 (실계좌)</h2>
+    <h2>최근 매매 기록 (로컬 기록 - 이 서버가 직접 실행한 것만)</h2>
     <div class="table-scroll">
       <table class="signals-table" id="recentTradesTable"></table>
     </div>
@@ -86,7 +107,7 @@
     </p>
     <table class="detail-table">
       <tr><th>키</th><th>값</th></tr>
-      <tr><td>BINANCE_API_KEY / BINANCE_API_SECRET</td><td>본인 바이낸스 선물 API 키 (출금 권한은 반드시 끌 것)</td></tr>
+      <tr><td>BINANCE_API_KEY / BINANCE_API_SECRET</td><td>본인 바이낸스 선물 API 키 (출금 권한은 반드시 끌 것) - 이 값만 넣고 아래 자동매매 스위치는 꺼둔 채로 두면, 이 서버는 주문은 안 내면서 위 "실계좌 실시간" 섹션만 동작한다</td></tr>
       <tr><td>BINANCE_TESTNET</td><td>테스트넷 먼저 <code>true</code>, 검증 후 실계좌는 <code>false</code></td></tr>
       <tr><td>WICK_AUTO_TRADE_ENABLED</td><td><code>true</code> (볼린저 꼬리터치+RSI 켜기)</td></tr>
       <tr><td>WICK_AUTO_TRADE_WHITELIST</td><td>예: <code>BTCUSDT:15m</code> (쉼표로 여러 개)</td></tr>

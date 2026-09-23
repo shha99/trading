@@ -32,13 +32,20 @@
   실제로 써보려면 그 파일에서 직접 확인·조정할 것.
 - **`/trading` 실계좌 매매 현황판**: 두 자동매매 엔진(켈트너/볼린저
   꼬리터치+RSI)의 켜짐 여부·화이트리스트, 오늘의 리스크 현황(실현손익/
-  일일 손실 한도/킬스위치), 열린 포지션·최근 매매 기록(실계좌), 실시간
-  모의투자 현황, 그리고 실제로 켜는 방법(env 변수 표)을 한 화면에 모아
-  보여준다. **순수 조회용 화면**이라 이미 있는 API(`/api/health`,
-  `/api/positions/open`, `/api/trades`, `/api/risk/status`,
-  `/api/paper-trading/status`)만 재사용하고, 새 백엔드 엔드포인트도 없고
-  API 키 입력란도 없다 — 실제로 켜려면 배포 중인 곳(Render 등)의
-  Environment 화면에서 직접 값을 넣어야 한다.
+  일일 손실 한도/킬스위치), 실시간 모의투자 현황, 그리고 실제로 켜는 방법
+  (env 변수 표)을 한 화면에 모아 보여준다. **순수 조회용 화면**이라 API 키
+  입력란은 없다 — 실제로 켜려면 배포 중인 곳(Render 등)의 Environment
+  화면에서 직접 값을 넣어야 한다. 두 종류의 매매 기록을 같이 보여준다:
+  - **"로컬 기록"** (`/api/positions/open`, `/api/trades`): 이 서버
+    프로세스 자신이 직접 실행한 매매만 로컬 DB에서 조회. 다른 컴퓨터
+    (예: 집 PC의 `run_trading_bot.py`)에서 실행한 매매는 안 보인다 -
+    서로 다른 DB 파일이기 때문.
+  - **"실계좌 실시간(바이낸스 직접 조회)"** (`/api/binance/status`): 로컬
+    DB를 거치지 않고 **바이낸스 API에 직접** 물어본 결과라, 어느 컴퓨터
+    에서 실제로 매매하고 있든 상관없이 항상 정확한 실제 계좌 상태(잔고/
+    미실현손익/열린 포지션/최근 체결)를 보여준다. 이 서버에
+    `BINANCE_API_KEY`/`SECRET`만 설정하면 켜지고(자동매매 스위치는 꺼둔
+    채로 둬도 됨 - 조회 전용), 미설정 시 "설정 안 됨" 안내만 표시한다.
 
 다섯 다 별도 빌드 단계 없는 순수 JS(`static/`) + TradingView
 [lightweight-charts](https://github.com/tradingview/lightweight-charts)
@@ -683,6 +690,7 @@ app/
   wick_position_manager.py  wick 엔진 포지션의 본전 이동 트레일링 스탑 갱신 + 체결 반영
   notify.py                 텔레그램 알림
   broker.py                 주문 실행 (리스크 기반 수량 계산 + SL/TP 부착 + 상태 조회 + wick용 손절 전용 진입/갱신)
+  binance_account.py        실계좌 실시간 조회 (로컬 DB 아님 - 바이낸스 API 직접 호출, 읽기 전용, /trading "실계좌 실시간" 섹션용)
   position_manager.py       열린 포지션 조회 + 3일 시간손절 감시 + SL/TP 체결 반영 (켈트너 전용)
   risk.py                   일일 손실 한도 킬스위치 (두 엔진 공유)
   db.py                     SQLite: 시그널/매매 이력(전략별 구분), 중복실행 방지 상태(전략별 구분), 모의투자 계좌/거래
@@ -691,7 +699,7 @@ static/
   vf.html                                    검증된 전략 3종 전환 페이지 (strategy_page.js 공유, 기본 탭=wick)
   strategy.html, strategy_page.js, strategy.css   전략 페이지 (vf.html과 JS 공유, 기본 탭=keltner)
   lab.html, lab.js, lab.css                    전략 실험실
-  trading.html, trading.js, trading.css        실계좌 매매 현황판 (순수 조회, 새 API 없음)
+  trading.html, trading.js, trading.css        실계좌 매매 현황판 (로컬 기록 + 바이낸스 직접조회 병행)
   vendor/lightweight-charts.js                TradingView lightweight-charts (vendored)
 data/                     strategy_stats.json, lab_stats.json, multi_screen_trades.json, bot.db (전부 gitignore)
 tests/                     pytest (전부 mock/합성 데이터, 실제 바이낸스 호출 없음)
@@ -733,6 +741,14 @@ tests/                     pytest (전부 mock/합성 데이터, 실제 바이�
 **시그널/매매 (기존 MVP)**
 - `GET /api/health`, `GET /api/signals`, `GET /api/positions/open`,
   `GET /api/trades`, `GET /api/risk/status`, `POST /api/refresh`
+
+**실계좌 실시간 조회 (로컬 DB 아님)**
+- `GET /api/binance/status` — 로컬 DB를 거치지 않고 바이낸스 API에 직접
+  물어본 계좌 스냅샷(지갑 잔고/미실현손익/가용잔고/열린 포지션/최근 체결
+  30건). 읽기 전용이며 이 엔드포인트 자체는 주문을 내지 않는다.
+  `BINANCE_API_KEY`/`SECRET`이 설정 안 돼 있으면 `{"ready": false}`만 반환
+  (에러 아님) — `/trading` 페이지 "실계좌 실시간(바이낸스 직접 조회)"
+  섹션이 이걸 쓴다.
 
 ## 다음 단계
 

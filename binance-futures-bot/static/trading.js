@@ -1,7 +1,9 @@
 // /trading - 실제 투자 가능한 형태로 구성한 매매 현황판. 순수 조회 전용 -
-// 이 페이지 자체는 어떤 설정도 바꾸지 않는다(API 키 입력란도 없음). 전부
-// 기존 API(/api/health, /api/positions/open, /api/trades, /api/risk/status,
-// /api/paper-trading/status)를 재사용한다 - 새 백엔드 엔드포인트 없음.
+// 이 페이지 자체는 어떤 설정도 바꾸지 않는다(API 키 입력란도 없음). 기존
+// API(/api/health, /api/positions/open, /api/trades, /api/risk/status,
+// /api/paper-trading/status)에 더해, 바이낸스 계좌를 직접 실시간 조회하는
+// /api/binance/status도 쓴다(로컬 DB가 아니라 거래소에 직접 물어본 결과 -
+// 어느 컴퓨터에서 실제로 매매하든 항상 정확한 실계좌 상태를 보여준다).
 (function () {
   "use strict";
 
@@ -29,6 +31,10 @@
     recentTradesTable: document.getElementById("recentTradesTable"),
     paperMeta: document.getElementById("paperMeta"),
     paperStats: document.getElementById("paperStats"),
+    binanceLiveMeta: document.getElementById("binanceLiveMeta"),
+    binanceAccountStats: document.getElementById("binanceAccountStats"),
+    binancePositionsTable: document.getElementById("binancePositionsTable"),
+    binanceTradesTable: document.getElementById("binanceTradesTable"),
   };
 
   async function loadHealth() {
@@ -120,8 +126,63 @@
     }
   }
 
+  async function loadBinanceLive() {
+    try {
+      const res = await fetch("/api/binance/status");
+      const s = await res.json();
+      if (!s.ready) {
+        el.binanceLiveMeta.textContent =
+          "설정 안 됨 - 이 서버 환경변수에 BINANCE_API_KEY/SECRET을 넣으면 켜집니다" +
+          (s.reason ? ` (${s.reason})` : "");
+        el.binanceAccountStats.innerHTML = "";
+        el.binancePositionsTable.innerHTML = "";
+        el.binanceTradesTable.innerHTML = "";
+        return;
+      }
+
+      el.binanceLiveMeta.textContent = s.testnet
+        ? "테스트넷 계좌 기준 (가상 자금)"
+        : "⚠️ 실계좌 기준 (실제 자금)";
+
+      const a = s.account;
+      const upnlCls = a.total_unrealized_profit >= 0 ? "up" : "down";
+      el.binanceAccountStats.innerHTML =
+        `<div class="paper-stat"><div class="paper-stat-label">총 지갑 잔고</div><div class="paper-stat-value">${fmt(a.total_wallet_balance)} USDT</div></div>` +
+        `<div class="paper-stat"><div class="paper-stat-label">미실현 손익</div><div class="paper-stat-value ${upnlCls}">${fmt(a.total_unrealized_profit)} USDT</div></div>` +
+        `<div class="paper-stat"><div class="paper-stat-label">가용 잔고</div><div class="paper-stat-value">${fmt(a.available_balance)} USDT</div></div>`;
+
+      if (!s.open_positions.length) {
+        el.binancePositionsTable.innerHTML = "<tr><td>열린 포지션이 없습니다.</td></tr>";
+      } else {
+        let html = "<tr><th>심볼</th><th>방향</th><th>수량</th><th>진입가</th><th>현재가</th><th>미실현손익</th><th>레버리지</th></tr>";
+        s.open_positions.forEach((p) => {
+          const cls = p.unrealized_pnl >= 0 ? "up" : "down";
+          html += `<tr><td>${p.symbol}</td><td>${p.side}</td><td>${fmt(p.quantity)}</td>` +
+            `<td>${fmt(p.entry_price)}</td><td>${fmt(p.mark_price)}</td>` +
+            `<td class="${cls}">${fmt(p.unrealized_pnl)}</td><td>${p.leverage}x</td></tr>`;
+        });
+        el.binancePositionsTable.innerHTML = html;
+      }
+
+      if (!s.recent_trades.length) {
+        el.binanceTradesTable.innerHTML = "<tr><td>아직 체결 기록이 없습니다.</td></tr>";
+      } else {
+        let html = "<tr><th>심볼</th><th>방향</th><th>체결가</th><th>수량</th><th>실현손익</th><th>체결시각</th></tr>";
+        s.recent_trades.forEach((t) => {
+          const cls = t.realized_pnl >= 0 ? "up" : "down";
+          html += `<tr><td>${t.symbol}</td><td>${t.side}</td><td>${fmt(t.price)}</td>` +
+            `<td>${fmt(t.quantity)}</td><td class="${cls}">${fmt(t.realized_pnl)}</td>` +
+            `<td>${t.time ? new Date(t.time).toLocaleString() : "-"}</td></tr>`;
+        });
+        el.binanceTradesTable.innerHTML = html;
+      }
+    } catch (e) {
+      // 조용히 무시 - 다음 폴링에서 재시도
+    }
+  }
+
   async function loadAll() {
-    await Promise.all([loadHealth(), loadRisk(), loadOpenPositions(), loadRecentTrades(), loadPaperStatus()]);
+    await Promise.all([loadHealth(), loadRisk(), loadOpenPositions(), loadRecentTrades(), loadPaperStatus(), loadBinanceLive()]);
   }
 
   loadAll();
