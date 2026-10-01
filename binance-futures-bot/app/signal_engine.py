@@ -18,6 +18,7 @@ from .db import SessionLocal, SignalRecord, TradeRecord
 from .history import fetch_klines, is_candle_closed
 from .notify import notify_signal
 from .position_manager import count_open_positions, has_open_position
+from .remote_control import is_remotely_enabled
 from .strategy import KeltnerReclaimStrategy, Signal
 
 logger = logging.getLogger(__name__)
@@ -73,6 +74,9 @@ class SignalEngine:
         symbol, timeframe = signal.symbol, signal.timeframe
 
         if not settings.is_whitelisted(symbol, timeframe):
+            return False
+        if not is_remotely_enabled("keltner"):
+            logger.info("원격 제어로 꺼짐 - 신규 진입 스킵: %s %s", symbol, timeframe)
             return False
         if risk.is_kill_switch_active():
             logger.warning("일일 손실 한도 도달 - 신규 진입 스킵: %s %s", symbol, timeframe)

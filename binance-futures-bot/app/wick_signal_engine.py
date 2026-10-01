@@ -23,6 +23,7 @@ from .history import fetch_klines, is_candle_closed
 from .lab_strategies import BollingerWickBreakevenTrailStrategy
 from .notify import notify_wick_entry
 from .position_manager import count_open_positions
+from .remote_control import is_remotely_enabled
 from .wick_position_manager import WICK_STRATEGY_KEY, has_open_wick_position
 
 logger = logging.getLogger(__name__)
@@ -72,6 +73,9 @@ class WickSignalEngine:
 
     def _maybe_execute(self, symbol: str, timeframe: str, entry: dict, entry_time) -> bool:
         if not settings.is_wick_whitelisted(symbol, timeframe):
+            return False
+        if not is_remotely_enabled("wick"):
+            logger.info("원격 제어로 꺼짐 - wick 신규 진입 스킵: %s %s", symbol, timeframe)
             return False
         if risk.is_kill_switch_active():
             logger.warning("일일 손실 한도 도달 - wick 신규 진입 스킵: %s %s", symbol, timeframe)

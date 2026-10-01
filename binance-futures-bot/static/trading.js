@@ -33,6 +33,10 @@
     paperStats: document.getElementById("paperStats"),
     binanceLiveMeta: document.getElementById("binanceLiveMeta"),
     binanceAccountStats: document.getElementById("binanceAccountStats"),
+    keltnerRemoteText: document.getElementById("keltnerRemoteText"),
+    keltnerRemoteBtn: document.getElementById("keltnerRemoteBtn"),
+    wickRemoteText: document.getElementById("wickRemoteText"),
+    wickRemoteBtn: document.getElementById("wickRemoteBtn"),
     binancePositionsTable: document.getElementById("binancePositionsTable"),
     binanceTradesTable: document.getElementById("binanceTradesTable"),
   };
@@ -181,8 +185,49 @@
     }
   }
 
+  function setRemoteButton(textEl, btnEl, enabled) {
+    textEl.textContent = enabled ? "🟢 켜짐" : "🔴 꺼짐";
+    btnEl.textContent = enabled ? "끄기" : "켜기";
+    btnEl.className = "remote-btn " + (enabled ? "is-on" : "is-off");
+    btnEl.disabled = false;
+    btnEl.dataset.enabled = enabled ? "1" : "0";
+  }
+
+  async function loadRemoteControl() {
+    try {
+      const res = await fetch("/api/control/status");
+      const s = await res.json();
+      setRemoteButton(el.keltnerRemoteText, el.keltnerRemoteBtn, s.keltner_enabled);
+      setRemoteButton(el.wickRemoteText, el.wickRemoteBtn, s.wick_enabled);
+    } catch (e) {
+      // 조용히 무시 - 다음 폴링에서 재시도
+    }
+  }
+
+  async function toggleEngine(engine, btnEl) {
+    const currentlyEnabled = btnEl.dataset.enabled === "1";
+    btnEl.disabled = true;
+    try {
+      const res = await fetch("/api/control/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ engine, enabled: !currentlyEnabled }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        alert(body.detail || "변경에 실패했습니다 (대시보드 로그인이 필요할 수 있습니다).");
+      }
+    } catch (e) {
+      alert("변경 요청에 실패했습니다 - 네트워크를 확인하세요.");
+    }
+    await loadRemoteControl();
+  }
+
+  el.keltnerRemoteBtn.addEventListener("click", () => toggleEngine("keltner", el.keltnerRemoteBtn));
+  el.wickRemoteBtn.addEventListener("click", () => toggleEngine("wick", el.wickRemoteBtn));
+
   async function loadAll() {
-    await Promise.all([loadHealth(), loadRisk(), loadOpenPositions(), loadRecentTrades(), loadPaperStatus(), loadBinanceLive()]);
+    await Promise.all([loadHealth(), loadRisk(), loadOpenPositions(), loadRecentTrades(), loadPaperStatus(), loadBinanceLive(), loadRemoteControl()]);
   }
 
   loadAll();

@@ -18,10 +18,11 @@ from pathlib import Path
 
 import pandas as pd
 from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 from sqlalchemy import desc
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -370,6 +371,66 @@ def binance_live_status() -> dict:
     보여준다. 읽기 전용 API만 호출하며, 이 엔드포인트 자체는 주문을 내지
     않는다. `BINANCE_API_KEY`/`SECRET`이 설정 안 돼 있으면 `ready: false`."""
     return get_binance_live_status()
+
+
+CONTROL_STATE_FILE = DATA_DIR / "control_state.json"
+
+
+def _read_control_state() -> dict:
+    try:
+        return json.loads(CONTROL_STATE_FILE.read_text())
+    except Exception:
+        return {}
+
+
+def _write_control_state(state: dict) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    CONTROL_STATE_FILE.write_text(json.dumps(state))
+
+
+class ControlStateUpdate(BaseModel):
+    engine: str
+    enabled: bool
+
+
+@app.get("/api/control/status")
+def control_status() -> dict:
+    """원격 킬스위치 현재 상태 - 실제 매매가 도는 서버(예: Oracle VM)의
+    app/remote_control.py가 주기적으로 이걸 폴링해서 신규 진입 여부를
+    결정한다(app/remote_control.py 독스트링 참고). 값을 아직 한 번도 안
+    바꿨으면(기본값) 둘 다 켜짐으로 응답한다 - 이 기능 자체를 안 쓰는
+    배포에도 영향 없음."""
+    state = _read_control_state()
+    return {
+        "wick_enabled": state.get("wick_enabled", True),
+        "keltner_enabled": state.get("keltner_enabled", True),
+    }
+
+
+@app.post("/api/control/status")
+def set_control_status(body: ControlStateUpdate) -> dict:
+    """원격 킬스위치를 켜고 끈다 - `/trading` 페이지의 버튼이 이걸 호출한다.
+
+    ⚠️ 실제 매매를 끄고 켤 수 있는 기능이라, `DASHBOARD_USERNAME`/`PASSWORD`를
+    설정해 대시보드 인증을 켜두지 않은 상태에서는 **이 엔드포인트 자체를
+    거부한다**(URL만 알면 아무나 봇을 끄거나 켤 수 있게 두지 않기 위함) -
+    조회용 `/api/binance/status` 등과 달리 이 엔드포인트만 추가로 요구하는
+    조건이다."""
+    if not settings.dashboard_auth_enabled:
+        raise HTTPException(
+            status_code=403,
+            detail="원격 킬스위치를 쓰려면 먼저 DASHBOARD_USERNAME/DASHBOARD_PASSWORD를 설정해 대시보드 인증을 켜야 합니다.",
+        )
+    if body.engine not in ("wick", "keltner"):
+        raise HTTPException(status_code=400, detail="engine은 'wick' 또는 'keltner'여야 합니다")
+
+    state = _read_control_state()
+    state[f"{body.engine}_enabled"] = body.enabled
+    _write_control_state(state)
+    return {
+        "wick_enabled": state.get("wick_enabled", True),
+        "keltner_enabled": state.get("keltner_enabled", True),
+    }
 
 
 @app.post("/api/refresh")

@@ -98,6 +98,16 @@ class Settings:
     max_open_positions: int = field(default_factory=lambda: int(os.getenv("MAX_OPEN_POSITIONS", "3")))
     daily_loss_limit_usdt: float = field(default_factory=lambda: float(os.getenv("DAILY_LOSS_LIMIT_USDT", "50")))
 
+    # --- 원격 킬스위치 (선택, 기본 꺼짐) ---
+    # 실제 매매가 도는 서버(예: Oracle VM)에서, 대시보드가 떠 있는 주소를
+    # 가리키게 설정하면 그 대시보드의 버튼으로 신규 진입만 원격으로 끄고
+    # 켤 수 있다(app/remote_control.py). 비어있으면(기본값) 이 기능 자체가
+    # 없는 것처럼 동작 - 기존 배포에 영향 없는 opt-in 기능.
+    remote_control_url: str = field(
+        default_factory=lambda: os.getenv("REMOTE_CONTROL_URL", "").rstrip("/")
+    )
+
+
     # --- "볼린저 꼬리터치+RSI 되돌림" 전략(bollinger_wick_breakeven_trail) 전용
     # 자동매매 게이트 - 켈트너 엔진과 완전히 독립된 별도 스위치/화이트리스트다.
     # 하나를 켜도 다른 하나엔 영향이 없다. 기본값은 둘 다 안전 쪽(꺼짐/빈 값).

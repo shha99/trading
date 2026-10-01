@@ -169,3 +169,16 @@ def test_same_closed_candle_is_not_processed_twice(patch_data):
         assert session.query(SignalRecord).count() == 1
     finally:
         session.close()
+
+
+def test_remotely_disabled_skips_entry(patch_data, monkeypatch):
+    """원격 킬스위치(app/remote_control.py)가 False를 주면 화이트리스트가
+    맞아도 신규 진입을 건너뛰어야 한다 - 일일 손실 한도 킬스위치와 같은 범위."""
+    settings.auto_trade_enabled = True
+    settings.auto_trade_whitelist = {("BTCUSDT", "1h")}
+    monkeypatch.setattr(signal_engine_module, "is_remotely_enabled", lambda engine: False)
+    engine = SignalEngine(broker=FakeBroker())
+
+    engine.run_once()
+
+    assert engine.broker.calls == []

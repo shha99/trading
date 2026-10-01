@@ -503,6 +503,82 @@ Render 무료 플랜의 "재배포마다 DB 초기화"·"무접속 15분 뒤 슬
 두 방법 다 로그는 `bot.log`(같은 폴더)에 쌓이니, 메모장이나
 `Get-Content bot.log -Wait -Tail 20`(PowerShell)으로 실시간 확인 가능하다.
 
+### 리눅스 VPS(Oracle Cloud 무료 티어 등)에서 systemd로 돌리기
+
+집 PC 대신 상시 켜진 리눅스 서버(Oracle Cloud "Always Free" 인스턴스,
+저가형 VPS 등)에서 돌리면 전원/네트워크를 본인이 신경 쓸 필요가 없다.
+설치는 동일하다(`git clone` → `python3 -m venv venv` → `pip install -r
+requirements.txt` → `.env` 채우기), 다른 건 "로그온 시 자동 실행" 대신
+systemd 서비스로 등록하는 것뿐이다:
+
+```ini
+# /etc/systemd/system/trading-bot.service
+[Unit]
+Description=Binance Trading Bot
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/trading/binance-futures-bot
+ExecStart=/home/ubuntu/trading/binance-futures-bot/venv/bin/python run_trading_bot.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable trading-bot   # 재부팅해도 자동 시작
+sudo systemctl start trading-bot
+sudo systemctl status trading-bot   # active (running) 확인
+sudo journalctl -u trading-bot -f   # 실시간 로그
+```
+
+`Restart=always`라 프로세스가 죽어도 10초 뒤 자동 재시작된다 - Windows
+작업 스케줄러의 "실패 시 재시작" 설정과 같은 역할.
+
+## 원격 킬스위치 (휴대폰 등 어디서든 매매 엔진 켜고 끄기)
+
+실제 매매가 도는 서버(집 PC, VPS 등)와 모니터링용 대시보드(예: Render)가
+서로 다른 곳에 떠 있을 때, **대시보드의 버튼으로 매매 서버의 신규 진입만
+원격으로 끄고 켤 수 있다** — `/trading` 페이지의 두 엔진 카드에 있는
+"원격 신규진입" 버튼이 그것이다. 이미 열린 포지션의 손절/트레일링 관리에는
+전혀 영향 없다(기존 일일 손실 한도 킬스위치와 똑같은 범위).
+
+### 켜는 방법
+
+**매매 서버**(`run_trading_bot.py`가 도는 곳)의 `.env`에:
+```bash
+REMOTE_CONTROL_URL=https://binance-futures-bot-w5ei.onrender.com
+```
+
+**대시보드**(위 URL이 가리키는 곳, 보통 Render)에는 반드시 **먼저**:
+```bash
+DASHBOARD_USERNAME=...
+DASHBOARD_PASSWORD=...
+```
+를 설정해야 한다 — 설정 안 돼 있으면 끄고 켜는 `POST` 엔드포인트
+자체가 403으로 거부된다(URL만 알면 아무나 실제 매매 봇을 끄거나 켤 수
+있게 두지 않기 위한 안전장치. 조회만 하는 `/api/binance/status` 등과
+달리 이 기능은 상태를 "바꾸는" 기능이라 기준이 다르다).
+
+### 동작 방식 (`app/remote_control.py`)
+
+매매 서버는 매 진입 시도 직전마다 대시보드의 `GET /api/control/status`에
+물어본다. 네트워크 문제로 못 물어보면 **마지막으로 성공했을 때의 값을
+그대로 유지**한다(한 번도 성공한 적 없으면 기본 켜짐) — 정전으로 한동안
+못 물어봤다고 꺼둔 게 조용히 다시 켜지는 일도, 반대로 네트워크 문제만으로
+계속 멈춰있게 되는 일도 없게 하기 위함이다. 마지막 값은 로컬 파일
+(`data/remote_control_cache.json`)에도 저장돼서 매매 서버 프로세스가
+재시작돼도 직전 상태를 그대로 이어간다.
+
+`REMOTE_CONTROL_URL`을 설정하지 않으면(기본값) 이 기능 자체가 없는 것처럼
+동작한다 - 순수 opt-in 기능이라 기존 배포에는 전혀 영향이 없다.
+
+
 ## 실행 방법
 
 ```bash
@@ -691,6 +767,7 @@ app/
   notify.py                 텔레그램 알림
   broker.py                 주문 실행 (리스크 기반 수량 계산 + SL/TP 부착 + 상태 조회 + wick용 손절 전용 진입/갱신)
   binance_account.py        실계좌 실시간 조회 (로컬 DB 아님 - 바이낸스 API 직접 호출, 읽기 전용, /trading "실계좌 실시간" 섹션용)
+  remote_control.py          원격 킬스위치 클라이언트 (매매 서버가 대시보드에 신규 진입 허용 여부를 물어봄, 네트워크 실패 시 마지막 값 유지)
   position_manager.py       열린 포지션 조회 + 3일 시간손절 감시 + SL/TP 체결 반영 (켈트너 전용)
   risk.py                   일일 손실 한도 킬스위치 (두 엔진 공유)
   db.py                     SQLite: 시그널/매매 이력(전략별 구분), 중복실행 방지 상태(전략별 구분), 모의투자 계좌/거래
@@ -749,6 +826,15 @@ tests/                     pytest (전부 mock/합성 데이터, 실제 바이�
   `BINANCE_API_KEY`/`SECRET`이 설정 안 돼 있으면 `{"ready": false}`만 반환
   (에러 아님) — `/trading` 페이지 "실계좌 실시간(바이낸스 직접 조회)"
   섹션이 이걸 쓴다.
+
+**원격 킬스위치**
+- `GET /api/control/status` — 두 엔진의 신규 진입 허용 여부(`wick_enabled`/
+  `keltner_enabled`, 기본 둘 다 true). 매매 서버(`REMOTE_CONTROL_URL` 설정 시)가
+  주기적으로 이걸 폴링한다.
+- `POST /api/control/status` — `{"engine": "wick"|"keltner", "enabled":
+  true|false}`로 원격으로 끄고 켠다. **`DASHBOARD_USERNAME`/`PASSWORD`를
+  설정해 대시보드 인증을 켜두지 않으면 403으로 거부된다** — 상태를
+  "바꾸는" 기능이라 조회 전용 엔드포인트들과 기준이 다름.
 
 ## 다음 단계
 

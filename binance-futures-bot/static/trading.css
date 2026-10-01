@@ -53,3 +53,27 @@
   font-weight: 700;
   color: var(--text-dim);
 }
+
+.remote-switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.remote-btn {
+  font-size: 12px;
+  font-weight: 700;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--text);
+  cursor: pointer;
+}
+.remote-btn:hover { border-color: var(--accent); }
+.remote-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.remote-btn.is-on { border-color: var(--up); color: var(--up); }
+.remote-btn.is-off { border-color: var(--down); color: var(--down); }

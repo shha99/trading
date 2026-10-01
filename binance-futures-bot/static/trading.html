@@ -38,6 +38,10 @@
       </div>
       <div class="meta-line">화이트리스트: <span id="keltnerWhitelist">-</span></div>
       <div class="meta-line">고정 손절/익절, 롱 전용, BTCUSDT:1h 기준으로 검증됨</div>
+      <div class="remote-switch-row">
+        <span class="meta-line">원격 신규진입: <span id="keltnerRemoteText">-</span></span>
+        <button type="button" id="keltnerRemoteBtn" class="remote-btn">...</button>
+      </div>
     </div>
     <div class="engine-card" id="engineWick">
       <h3>볼린저 꼬리터치 + RSI</h3>
@@ -47,8 +51,20 @@
       </div>
       <div class="meta-line">화이트리스트: <span id="wickWhitelist">-</span></div>
       <div class="meta-line">본전 이동 트레일링(익절 상한 없음), 롱/숏 양방향, BTC·ETH 15m·5m</div>
+      <div class="remote-switch-row">
+        <span class="meta-line">원격 신규진입: <span id="wickRemoteText">-</span></span>
+        <button type="button" id="wickRemoteBtn" class="remote-btn">...</button>
+      </div>
     </div>
   </section>
+  <p class="meta-line" id="remoteControlHint">
+    "원격 신규진입" 버튼은 이미 열린 포지션의 손절/트레일링 관리에는 영향을
+    주지 않고, <strong>새로 진입하는 것만</strong> 켜고 끈다(일일 손실 한도
+    킬스위치와 같은 범위). 실제 매매가 도는 서버가 이 대시보드 주소를 보도록
+    <code>REMOTE_CONTROL_URL</code>을 설정해둬야 동작하며, 이 대시보드에
+    <code>DASHBOARD_USERNAME</code>/<code>DASHBOARD_PASSWORD</code>를 먼저
+    설정해야 버튼이 활성화된다(URL만 알면 아무나 끄고 켜는 걸 막기 위함).
+  </p>
 
   <section class="scorecard-section">
     <h2>오늘의 리스크 현황</h2>
