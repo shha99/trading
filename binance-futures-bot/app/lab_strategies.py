@@ -733,6 +733,75 @@ class BollingerWickBreakevenTrailStrategy(LabStrategy):
         }
 
 
+class BollingerWickExtremeMoveRelaxedStrategy(BollingerWickBreakevenTrailStrategy):
+    """`BollingerWickBreakevenTrailStrategy`(검증된 전략) + "그 봉이 평소보다
+    훨씬 큰 캔들(과대낙폭/과대상승)이면 RSI 확인 문턱을 살짝 완화"하는 실험용
+    변형. **아직 검증 안 됨** — `docstring`에 이미 적힌 BollingerWickBreakevenTrailStrategy
+    자체는 손대지 않고(그 클래스를 상속만 해서 재사용), `check_entry()`만
+    오버라이드해 "큰 캔들일 때만" 조건을 완화하는 추가 분기를 얹었다.
+
+    완화 방식: 신호가 난 봉의 (고가-저가) 폭이 ATR의 `extreme_atr_mult`배
+    이상이면 "과대낙폭/과대상승"으로 보고, RSI 문턱을
+    `rsi_relax_amount`만큼 완화한다(롱은 oversold+amount, 숏은
+    overbought-amount) — 평소엔 원래 전략과 완전히 동일하게 동작하고,
+    드물게 캔들이 유난히 크게 튄 순간에만 조건이 느슨해져서 신호를 더
+    잡는다는 아이디어.
+
+    ⚠️ 이 변형은 백테스트로 비교 검증하기 전까지는 **실계좌 자동매매에
+    연결하면 안 된다** — 다른 모든 검증된/후보 전략과 같은 원칙."""
+
+    key = "bollinger_wick_extreme_move_relaxed"
+    label = "볼린저 꼬리터치 (과대변동 시 RSI 완화) - 실험용"
+    category = "데이트레이딩 (평균회귀 + 본전 이동 트레일링, 변형)"
+    description = (
+        "검증된 bollinger_wick_breakeven_trail과 완전히 동일 + 신호 캔들이 "
+        "ATR의 N배 이상 큰 '과대낙폭/과대상승'일 때만 RSI 문턱을 완화 - 아직 미검증"
+    )
+
+    def __init__(self, *args, extreme_atr_mult: float = 2.0, rsi_relax_amount: float = 5.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.extreme_atr_mult = extreme_atr_mult
+        self.rsi_relax_amount = rsi_relax_amount
+
+    def check_entry(self, k: int, ctx: dict) -> dict | None:
+        e = self._touch.check_entry(k, ctx["touch_ctx"])
+        if e is None:
+            return None
+        atr_now = ctx["atr"][k]
+        if np.isnan(atr_now) or atr_now <= 0:
+            return None
+        direction, entry_price = e["direction"], e["entry_price"]
+
+        rsi_now = ctx["rsi"][k]
+        if np.isnan(rsi_now):
+            return None
+
+        high_k, low_k = ctx["touch_ctx"]["high"][k], ctx["touch_ctx"]["low"][k]
+        is_extreme_move = (high_k - low_k) >= self.extreme_atr_mult * atr_now
+        oversold = self.rsi_oversold + self.rsi_relax_amount if is_extreme_move else self.rsi_oversold
+        overbought = self.rsi_overbought - self.rsi_relax_amount if is_extreme_move else self.rsi_overbought
+
+        if direction == "LONG" and rsi_now > oversold:
+            return None
+        if direction == "SHORT" and rsi_now < overbought:
+            return None
+
+        if direction == "LONG":
+            stop = entry_price - self.stop_mult * atr_now
+            trigger = entry_price + self.breakeven_at_mult * atr_now
+        else:
+            stop = entry_price + self.stop_mult * atr_now
+            trigger = entry_price - self.breakeven_at_mult * atr_now
+        return {
+            "direction": direction,
+            "entry_price": entry_price,
+            "stop_price": stop,
+            "breakeven_trigger_price": trigger,
+            "trail_mult": self.trail_mult,
+            "breakeven_trail": True,
+        }
+
+
 def lab_strategies() -> list[LabStrategy]:
     """실험실에 올라가는 후보 11종 (검증된 켈트너 전략은 별도로 다룸)."""
     return [
