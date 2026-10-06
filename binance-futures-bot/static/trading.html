@@ -74,13 +74,20 @@
   </section>
 
   <section class="scorecard-section" id="binanceLiveSection">
-    <h2>🔗 실계좌 실시간 (바이낸스 직접 조회)</h2>
+    <div class="binance-live-header">
+      <h2>🔗 실계좌 실시간 (바이낸스 직접 조회)</h2>
+      <div class="live-algo-toggle">
+        <span class="live-algo-label">볼린저 꼬리터치+RSI 신규진입</span>
+        <button type="button" id="liveAlgoToggleBtn" class="live-algo-btn">...</button>
+      </div>
+    </div>
     <p class="meta-line">
       아래 두 섹션(로컬 기록)과 달리, 이 섹션은 로컬 DB가 아니라
       <strong>바이낸스 API에 직접 물어본 결과</strong>다 — 어느 컴퓨터에서
       실제로 매매하고 있든(집 PC 등) 상관없이, 같은 계좌라면 항상 정확한
-      실시간 상태를 보여준다. 읽기 전용 조회만 하며, 이 화면에서 아무 값도
-      바꾸지 않는다.
+      실시간 상태를 보여준다. 대부분 읽기 전용 조회지만, 우측 상단의
+      ON/OFF 버튼만은 예외로 신규 진입을 즉시 켜고 끈다(이미 열린 포지션의
+      손절/트레일링에는 영향 없음 - 아래 "원격 신규진입" 설명과 동일한 기능).
     </p>
     <p class="meta-line" id="binanceLiveMeta">상태 확인 중...</p>
     <div class="paper-stats" id="binanceAccountStats"></div>

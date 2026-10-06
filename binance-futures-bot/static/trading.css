@@ -47,6 +47,49 @@
   padding: 12px 18px;
 }
 #binanceLiveSection h2 { color: var(--accent); }
+
+.binance-live-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.live-algo-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.live-algo-label {
+  font-size: 12px;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+.live-algo-btn {
+  font-size: 13px;
+  font-weight: 800;
+  padding: 6px 18px;
+  border-radius: 999px;
+  border: 2px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--text);
+  cursor: pointer;
+  letter-spacing: 0.05em;
+}
+.live-algo-btn:hover { filter: brightness(1.15); }
+.live-algo-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.live-algo-btn.is-on {
+  border-color: var(--up);
+  color: var(--up);
+  background: rgba(38, 166, 154, 0.15);
+  box-shadow: 0 0 8px rgba(38, 166, 154, 0.35);
+}
+.live-algo-btn.is-off {
+  border-color: var(--down);
+  color: var(--down);
+  background: rgba(239, 83, 80, 0.15);
+}
+
 .sub-heading {
   margin: 16px 0 6px;
   font-size: 13px;

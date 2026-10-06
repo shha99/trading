@@ -37,6 +37,7 @@
     keltnerRemoteBtn: document.getElementById("keltnerRemoteBtn"),
     wickRemoteText: document.getElementById("wickRemoteText"),
     wickRemoteBtn: document.getElementById("wickRemoteBtn"),
+    liveAlgoToggleBtn: document.getElementById("liveAlgoToggleBtn"),
     binancePositionsTable: document.getElementById("binancePositionsTable"),
     binanceTradesTable: document.getElementById("binanceTradesTable"),
     binanceChartsContainer: document.getElementById("binanceChartsContainer"),
@@ -293,12 +294,20 @@
     btnEl.dataset.enabled = enabled ? "1" : "0";
   }
 
+  function setLiveAlgoToggle(btnEl, enabled) {
+    btnEl.textContent = enabled ? "ON" : "OFF";
+    btnEl.className = "live-algo-btn " + (enabled ? "is-on" : "is-off");
+    btnEl.disabled = false;
+    btnEl.dataset.enabled = enabled ? "1" : "0";
+  }
+
   async function loadRemoteControl() {
     try {
       const res = await fetch("/api/control/status");
       const s = await res.json();
       setRemoteButton(el.keltnerRemoteText, el.keltnerRemoteBtn, s.keltner_enabled);
       setRemoteButton(el.wickRemoteText, el.wickRemoteBtn, s.wick_enabled);
+      setLiveAlgoToggle(el.liveAlgoToggleBtn, s.wick_enabled);
     } catch (e) {
       // 조용히 무시 - 다음 폴링에서 재시도
     }
@@ -325,6 +334,7 @@
 
   el.keltnerRemoteBtn.addEventListener("click", () => toggleEngine("keltner", el.keltnerRemoteBtn));
   el.wickRemoteBtn.addEventListener("click", () => toggleEngine("wick", el.wickRemoteBtn));
+  el.liveAlgoToggleBtn.addEventListener("click", () => toggleEngine("wick", el.liveAlgoToggleBtn));
 
   async function loadAll() {
     await Promise.all([loadHealth(), loadRisk(), loadOpenPositions(), loadRecentTrades(), loadPaperStatus(), loadBinanceLive(), loadRemoteControl()]);
