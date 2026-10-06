@@ -56,6 +56,13 @@ button.active { background: var(--accent); border-color: var(--accent); color: #
   padding: 5px 10px;
 }
 .strategy-link:hover { border-color: var(--accent); }
+.strategy-link.live-link {
+  color: #ffb74d;
+  border-color: #ffb74d;
+  background: rgba(255, 183, 77, 0.12);
+  font-weight: 600;
+}
+.strategy-link.live-link:hover { background: rgba(255, 183, 77, 0.22); }
 .ws-status { font-size: 12px; color: var(--text-dim); white-space: nowrap; }
 .ws-status.connected::before { content: "● "; color: var(--up); }
 .ws-status.disconnected::before { content: "● "; color: var(--down); }

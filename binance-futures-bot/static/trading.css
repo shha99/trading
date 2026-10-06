@@ -77,3 +77,27 @@
 .remote-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .remote-btn.is-on { border-color: var(--up); color: var(--up); }
 .remote-btn.is-off { border-color: var(--down); color: var(--down); }
+
+#binanceChartsContainer {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+  margin: 10px 0;
+}
+.position-chart-box {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.position-chart-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+}
+.position-chart { width: 100%; height: 220px; }
+
+@media (max-width: 600px) {
+  #binanceChartsContainer { grid-template-columns: 1fr; }
+}

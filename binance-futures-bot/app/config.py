@@ -107,6 +107,15 @@ class Settings:
         default_factory=lambda: os.getenv("REMOTE_CONTROL_URL", "").rstrip("/")
     )
 
+    # --- 실계좌 누적 수익률 기준점 (선택, 기본 꺼짐) ---
+    # 실계좌 자동매매를 시작한 시점의 지갑 잔고(USDT)를 한 번 적어두면,
+    # /api/binance/status가 "지금 잔고 대비 몇 % 벌었는지"를 계산해서 보여준다
+    # (app/binance_account.py:get_account_snapshot). 0이면(기본값) 계산 자체를
+    # 하지 않고 null로 응답 - 기존 배포에 영향 없는 opt-in 기능.
+    real_account_starting_balance_usdt: float = field(
+        default_factory=lambda: float(os.getenv("REAL_ACCOUNT_STARTING_BALANCE_USDT", "0"))
+    )
+
 
     # --- "볼린저 꼬리터치+RSI 되돌림" 전략(bollinger_wick_breakeven_trail) 전용
     # 자동매매 게이트 - 켈트너 엔진과 완전히 독립된 별도 스위치/화이트리스트다.

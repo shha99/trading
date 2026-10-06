@@ -14,6 +14,7 @@
 <link rel="stylesheet" href="/static/style.css" />
 <link rel="stylesheet" href="/static/strategy.css" />
 <link rel="stylesheet" href="/static/trading.css" />
+<script src="/static/vendor/lightweight-charts.js"></script>
 </head>
 <body>
 <header class="topbar">
@@ -87,7 +88,8 @@
     <div class="table-scroll">
       <table class="signals-table" id="binancePositionsTable"></table>
     </div>
-    <h3 class="sub-heading">최근 체결 (실시간)</h3>
+    <div id="binanceChartsContainer"></div>
+    <h3 class="sub-heading">최근 매매 기록 (진입→청산, 실시간)</h3>
     <div class="table-scroll">
       <table class="signals-table" id="binanceTradesTable"></table>
     </div>

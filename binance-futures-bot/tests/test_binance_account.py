@@ -5,7 +5,13 @@ from __future__ import annotations
 
 import pytest
 
-from app.binance_account import get_account_snapshot, get_live_status, get_open_positions, get_recent_trades
+from app.binance_account import (
+    get_account_snapshot,
+    get_live_status,
+    get_open_positions,
+    get_recent_round_trips,
+    get_recent_trades,
+)
 from app.broker import BinanceFuturesBroker, BrokerError
 from app.config import settings
 
@@ -33,7 +39,8 @@ class FakeBinanceClient:
         return self._trades_by_symbol.get(symbol, [])
 
 
-def test_get_account_snapshot_extracts_expected_fields():
+def test_get_account_snapshot_extracts_expected_fields(monkeypatch):
+    monkeypatch.setattr(settings, "real_account_starting_balance_usdt", 0.0)
     client = FakeBinanceClient(account={
         "totalWalletBalance": "1000.5", "totalUnrealizedProfit": "-12.3",
         "totalMarginBalance": "988.2", "availableBalance": "900.0",
@@ -47,7 +54,20 @@ def test_get_account_snapshot_extracts_expected_fields():
         "total_unrealized_profit": pytest.approx(-12.3),
         "total_margin_balance": pytest.approx(988.2),
         "available_balance": pytest.approx(900.0),
+        "starting_balance_usdt": None,
+        "cumulative_return_pct": None,
     }
+
+
+def test_get_account_snapshot_computes_cumulative_return_when_starting_balance_set(monkeypatch):
+    monkeypatch.setattr(settings, "real_account_starting_balance_usdt", 1000.0)
+    client = FakeBinanceClient(account={"totalWalletBalance": "1100.0"})
+    broker = BinanceFuturesBroker(client=client)
+
+    snapshot = get_account_snapshot(broker)
+
+    assert snapshot["starting_balance_usdt"] == pytest.approx(1000.0)
+    assert snapshot["cumulative_return_pct"] == pytest.approx(10.0)  # (1100-1000)/1000*100
 
 
 def test_get_account_snapshot_wraps_exception_as_broker_error():
@@ -109,6 +129,114 @@ def test_get_recent_trades_skips_symbol_on_failure_but_keeps_others():
     trades = get_recent_trades(symbols=["BTCUSDT", "ETHUSDT"], broker=broker)
 
     assert len(trades) == 1 and trades[0]["symbol"] == "ETHUSDT"
+
+
+def test_get_recent_round_trips_pairs_long_entry_with_exit():
+    client = FakeBinanceClient(trades_by_symbol={
+        "BTCUSDT": [
+            {"symbol": "BTCUSDT", "side": "BUY", "price": "60000", "qty": "0.01",
+             "realizedPnl": "0", "time": 100},  # 진입
+            {"symbol": "BTCUSDT", "side": "SELL", "price": "60600", "qty": "0.01",
+             "realizedPnl": "6", "time": 200},  # 청산(트레일링 스탑 체결)
+        ],
+    })
+    broker = BinanceFuturesBroker(client=client)
+
+    trips = get_recent_round_trips(symbols=["BTCUSDT"], broker=broker)
+
+    assert len(trips) == 1
+    t = trips[0]
+    assert t["symbol"] == "BTCUSDT" and t["side"] == "LONG"
+    assert t["quantity"] == pytest.approx(0.01)
+    assert t["entry_price"] == pytest.approx(60000)
+    assert t["exit_price"] == pytest.approx(60600)
+    assert t["realized_pnl"] == pytest.approx(6.0)
+    assert t["opened_at"] == 100 and t["closed_at"] == 200
+
+
+def test_get_recent_round_trips_pairs_short_entry_with_exit():
+    client = FakeBinanceClient(trades_by_symbol={
+        "BTCUSDT": [
+            {"symbol": "BTCUSDT", "side": "SELL", "price": "60000", "qty": "0.01",
+             "realizedPnl": "0", "time": 100},
+            {"symbol": "BTCUSDT", "side": "BUY", "price": "59400", "qty": "0.01",
+             "realizedPnl": "6", "time": 200},
+        ],
+    })
+    broker = BinanceFuturesBroker(client=client)
+
+    trips = get_recent_round_trips(symbols=["BTCUSDT"], broker=broker)
+
+    assert len(trips) == 1 and trips[0]["side"] == "SHORT"
+
+
+def test_get_recent_round_trips_merges_partial_fills_on_both_legs():
+    """진입이 체결 2개로 쪼개지고, 청산도 체결 2개로 쪼개진 경우도
+    수량 가중평균으로 올바르게 묶여야 한다."""
+    client = FakeBinanceClient(trades_by_symbol={
+        "BTCUSDT": [
+            {"symbol": "BTCUSDT", "side": "BUY", "price": "60000", "qty": "0.005", "realizedPnl": "0", "time": 100},
+            {"symbol": "BTCUSDT", "side": "BUY", "price": "60100", "qty": "0.005", "realizedPnl": "0", "time": 101},
+            {"symbol": "BTCUSDT", "side": "SELL", "price": "60500", "qty": "0.006", "realizedPnl": "3", "time": 200},
+            {"symbol": "BTCUSDT", "side": "SELL", "price": "60600", "qty": "0.004", "realizedPnl": "2", "time": 201},
+        ],
+    })
+    broker = BinanceFuturesBroker(client=client)
+
+    trips = get_recent_round_trips(symbols=["BTCUSDT"], broker=broker)
+
+    assert len(trips) == 1
+    t = trips[0]
+    assert t["quantity"] == pytest.approx(0.01)
+    assert t["entry_price"] == pytest.approx(60050)  # (60000*0.005+60100*0.005)/0.01
+    assert t["realized_pnl"] == pytest.approx(5.0)
+
+
+def test_get_recent_round_trips_handles_multiple_sequential_trades():
+    client = FakeBinanceClient(trades_by_symbol={
+        "BTCUSDT": [
+            {"symbol": "BTCUSDT", "side": "BUY", "price": "60000", "qty": "0.01", "realizedPnl": "0", "time": 100},
+            {"symbol": "BTCUSDT", "side": "SELL", "price": "60600", "qty": "0.01", "realizedPnl": "6", "time": 200},
+            {"symbol": "BTCUSDT", "side": "SELL", "price": "60000", "qty": "0.01", "realizedPnl": "0", "time": 300},
+            {"symbol": "BTCUSDT", "side": "BUY", "price": "59700", "qty": "0.01", "realizedPnl": "3", "time": 400},
+        ],
+    })
+    broker = BinanceFuturesBroker(client=client)
+
+    trips = get_recent_round_trips(symbols=["BTCUSDT"], broker=broker)
+
+    assert len(trips) == 2
+    assert trips[0]["closed_at"] == 400  # 최신순 정렬
+    assert trips[1]["closed_at"] == 200
+
+
+def test_get_recent_round_trips_discards_exit_with_no_matching_entry():
+    """조회 구간 시작 전에 이미 열려 있던 포지션의 청산(짝 없음)은 버려야 한다."""
+    client = FakeBinanceClient(trades_by_symbol={
+        "BTCUSDT": [
+            {"symbol": "BTCUSDT", "side": "SELL", "price": "60600", "qty": "0.01", "realizedPnl": "6", "time": 100},
+        ],
+    })
+    broker = BinanceFuturesBroker(client=client)
+
+    trips = get_recent_round_trips(symbols=["BTCUSDT"], broker=broker)
+
+    assert trips == []
+
+
+def test_get_recent_round_trips_ignores_still_open_entry():
+    """아직 청산 안 된 진입은 미완결 상태라 결과에 포함하면 안 된다
+    (get_open_positions()가 따로 보여주는 영역)."""
+    client = FakeBinanceClient(trades_by_symbol={
+        "BTCUSDT": [
+            {"symbol": "BTCUSDT", "side": "BUY", "price": "60000", "qty": "0.01", "realizedPnl": "0", "time": 100},
+        ],
+    })
+    broker = BinanceFuturesBroker(client=client)
+
+    trips = get_recent_round_trips(symbols=["BTCUSDT"], broker=broker)
+
+    assert trips == []
 
 
 def test_get_live_status_reports_not_ready_when_no_api_key(monkeypatch):

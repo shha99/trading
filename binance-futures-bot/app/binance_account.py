@@ -24,17 +24,26 @@ logger = logging.getLogger(__name__)
 
 
 def get_account_snapshot(broker: BinanceFuturesBroker | None = None) -> dict:
-    """지갑 잔고/미실현손익 스냅샷 (futures_account() 중 필요한 필드만)."""
+    """지갑 잔고/미실현손익 스냅샷 (futures_account() 중 필요한 필드만) +
+    (설정했다면) 시작 잔고 대비 누적 수익률."""
     broker = broker or BinanceFuturesBroker()
     try:
         account = broker.client.futures_account()
     except Exception as exc:  # noqa: BLE001
         raise BrokerError(f"계좌 조회 실패: {exc}") from exc
+
+    total_wallet_balance = float(account.get("totalWalletBalance", 0.0))
+    starting = settings.real_account_starting_balance_usdt
+    cumulative_return_pct = (
+        round((total_wallet_balance - starting) / starting * 100, 4) if starting > 0 else None
+    )
     return {
-        "total_wallet_balance": float(account.get("totalWalletBalance", 0.0)),
+        "total_wallet_balance": total_wallet_balance,
         "total_unrealized_profit": float(account.get("totalUnrealizedProfit", 0.0)),
         "total_margin_balance": float(account.get("totalMarginBalance", 0.0)),
         "available_balance": float(account.get("availableBalance", 0.0)),
+        "starting_balance_usdt": starting if starting > 0 else None,
+        "cumulative_return_pct": cumulative_return_pct,
     }
 
 
@@ -100,6 +109,78 @@ def get_recent_trades(
     return trades
 
 
+def get_recent_round_trips(
+    symbols: list[str] | None = None, limit_per_symbol: int = 50,
+    broker: BinanceFuturesBroker | None = None,
+) -> list[dict]:
+    """최근 체결 내역을 "진입→청산" 한 쌍짜리 거래 기록으로 묶어서 반환한다
+    (로컬 DB의 TradeRecord와 같은 모양 - 심볼/방향/진입가/청산가/수량/
+    실현손익/진입·청산시각). `get_recent_trades()`가 주는 낱개 체결 목록은
+    사람이 읽기엔 불편해서("어느 체결이 어느 체결의 청산인지" 알 수 없음)
+    이 함수가 그걸 묶어준다.
+
+    묶는 규칙: 이 봇의 주문 생명주기 특성상(한 번에 전량 진입, 트레일링
+    스탑이 전량 청산) `realizedPnl == 0`인 체결은 "진입"(또는 같은 방향
+    추가 진입), `!= 0`인 체결은 "청산"으로 본다. 진입 수량만큼 청산
+    수량이 채워지면 그 묶음을 하나의 완결된 거래로 확정한다. 조회
+    구간 시작 전에 이미 열려 있던 포지션의 청산(짝 없는 청산 체결)은
+    버린다 - 진입가를 알 수 없어 잘못된 숫자를 보여주는 것보다 안전함.
+    조회 구간 끝에 아직 안 닫힌 진입은(미확정 상태) 결과에 포함하지 않는다
+    - 그건 `get_open_positions()`가 이미 보여준다."""
+    broker = broker or BinanceFuturesBroker()
+    symbols = symbols or settings.symbols
+    round_trips: list[dict] = []
+
+    for symbol in symbols:
+        try:
+            raw = broker.client.futures_account_trades(symbol=symbol, limit=limit_per_symbol)
+        except Exception:
+            logger.exception("%s 체결 내역 조회 실패 - 건너뜀", symbol)
+            continue
+
+        raw = sorted(raw, key=lambda t: int(t.get("time", 0)))
+        open_group: dict | None = None
+        for t in raw:
+            realized = float(t.get("realizedPnl", 0.0))
+            qty = float(t.get("qty", 0.0))
+            price = float(t.get("price", 0.0))
+            time_ms = int(t.get("time", 0))
+
+            if realized == 0.0:
+                if open_group is None:
+                    open_group = {
+                        "symbol": symbol,
+                        "side": "LONG" if t.get("side") == "BUY" else "SHORT",
+                        "entry_notional": 0.0, "entry_qty": 0.0,
+                        "exit_notional": 0.0, "exit_qty": 0.0,
+                        "realized_pnl": 0.0, "opened_at": time_ms, "closed_at": None,
+                    }
+                open_group["entry_notional"] += price * qty
+                open_group["entry_qty"] += qty
+            else:
+                if open_group is None:
+                    continue  # 조회 구간 밖에서 열린 포지션의 청산 - 짝이 없어 버림
+                open_group["exit_notional"] += price * qty
+                open_group["exit_qty"] += qty
+                open_group["realized_pnl"] += realized
+                open_group["closed_at"] = time_ms
+                if open_group["exit_qty"] >= open_group["entry_qty"] - 1e-9:
+                    round_trips.append({
+                        "symbol": open_group["symbol"],
+                        "side": open_group["side"],
+                        "quantity": open_group["entry_qty"],
+                        "entry_price": open_group["entry_notional"] / open_group["entry_qty"],
+                        "exit_price": open_group["exit_notional"] / open_group["exit_qty"],
+                        "realized_pnl": open_group["realized_pnl"],
+                        "opened_at": open_group["opened_at"],
+                        "closed_at": open_group["closed_at"],
+                    })
+                    open_group = None
+
+    round_trips.sort(key=lambda r: r["closed_at"], reverse=True)
+    return round_trips
+
+
 def get_live_status(broker: BinanceFuturesBroker | None = None) -> dict:
     """`/api/binance/status`가 그대로 반환하는 통합 스냅샷.
 
@@ -113,7 +194,7 @@ def get_live_status(broker: BinanceFuturesBroker | None = None) -> dict:
     try:
         snapshot = get_account_snapshot(broker)
         positions = get_open_positions(broker)
-        trades = get_recent_trades(broker=broker)[:30]
+        round_trips = get_recent_round_trips(broker=broker)[:30]
     except BrokerError as exc:
         return {"ready": False, "reason": str(exc)}
 
@@ -122,5 +203,5 @@ def get_live_status(broker: BinanceFuturesBroker | None = None) -> dict:
         "testnet": settings.binance_testnet,
         "account": snapshot,
         "open_positions": positions,
-        "recent_trades": trades,
+        "recent_trades": round_trips,
     }
