@@ -49,7 +49,10 @@ KIND(kind.krx.co.kr)는 공개 API가 없고 해외 서버의 접속을 막습�
    - Project name: `disclosure-portal` (아래 `wrangler.jsonc`의 `name`과 같아야 함)
    - Production branch: 이 코드가 있는 브랜치
    - **Root directory: `disclosure-portal`**
-   - Build/Deploy command는 기본값 그대로 (`npx wrangler deploy`)
+   - Build command: **비워두기** (빌드 단계 없음)
+   - Deploy command: 기본값 그대로 (`npx wrangler deploy`)
+   - 만든 뒤 Settings → Builds에서 **Production branch**가 이 코드가 있는 브랜치인지 확인
+     (다른 브랜치면 "root directory not found"로 실패함)
 4. **Save and Deploy** → 몇 분 뒤 `https://disclosure-portal.<계정이름>.workers.dev` 주소가 나옴
 5. 그 Worker → **Settings → Variables and Secrets** → **Add** → 타입 **Secret**으로
    - `DART_API_KEY` = 발급받은 인증키
