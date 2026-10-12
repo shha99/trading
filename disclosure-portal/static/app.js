@@ -183,7 +183,7 @@
       if (q && !(it.corp_name.toLowerCase().includes(q) || it.report_nm.toLowerCase().includes(q) || it.stock_code.includes(q))) continue;
       out.push(it);
     }
-    return out.sort((a, b) => (a.rcept_no < b.rcept_no ? 1 : -1));
+    return out.sort((a, b) => b.seq - a.seq); // seq = DART 게시 순서(접수번호는 시간순이 아님)
   }
 
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));

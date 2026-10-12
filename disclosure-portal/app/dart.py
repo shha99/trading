@@ -64,7 +64,7 @@ def tags_for(report_nm: str) -> list[str]:
 def normalize(raw: dict[str, Any]) -> dict[str, Any]:
     rm = (raw.get("rm") or "").strip()
     flags = [c for c in rm if c in RM_FLAGS]
-    report_nm = (raw.get("report_nm") or "").strip()
+    report_nm = " ".join((raw.get("report_nm") or "").split())  # DART 제목엔 공백이 길게 끼어 있다
     tags = tags_for(report_nm)
     rcept_no = raw["rcept_no"]
     return {

@@ -65,6 +65,7 @@ class DisclosureStore:
             while page <= min(total, MAX_PAGES):
                 items, total = self.client.fetch_page(date, page)
                 new = [it for it in items if it["rcept_no"] not in known]
+                known.update(it["rcept_no"] for it in new)
                 fresh.extend(new)
                 if not initial and len(new) < len(items):
                     break  # 아는 공시가 섞이기 시작 — 그 뒤 페이지는 전부 아는 것
@@ -74,8 +75,10 @@ class DisclosureStore:
             with self._lock:
                 if self._date != date:
                     return 0
-                # 오래된 것부터 seq를 매겨 클라이언트가 after_seq로 증분 조회할 수 있게 한다
-                for it in sorted(fresh, key=lambda x: x["rcept_no"]):
+                # DART는 최신순으로 준다 — 뒤집어서 오래된 것부터 seq를 매긴다. seq가 곧 시간
+                # 순서다(접수번호는 거래소 공시가 800/900번대라 시간순이 아니다). 클라이언트는
+                # after_seq로 증분 조회한다.
+                for it in reversed(fresh):
                     if it["rcept_no"] in self._items:
                         continue
                     self._seq += 1
@@ -104,7 +107,7 @@ class DisclosureStore:
                 "is_today": True,
                 "boot": self.boot_id,
                 "seq": self._seq,
-                "items": sorted(items, key=lambda x: x["rcept_no"], reverse=True),
+                "items": sorted(items, key=lambda x: x["seq"], reverse=True),
                 "status": self.status_locked(),
             }
 
@@ -115,12 +118,16 @@ class DisclosureStore:
             items = cached[1]
         else:
             items: list[dict[str, Any]] = []
+            seen: set[str] = set()
             page, total = 1, 1
             while page <= min(total, MAX_PAGES):
                 got, total = self.client.fetch_page(date, page)
-                items.extend(got)
+                for it in got:
+                    if it["rcept_no"] not in seen:
+                        seen.add(it["rcept_no"])
+                        items.append(it)
                 page += 1
-            for i, it in enumerate(sorted(items, key=lambda x: x["rcept_no"]), 1):
+            for i, it in enumerate(reversed(items), 1):
                 it["seq"] = i
                 it["first_seen"] = None
             with self._lock:
@@ -135,7 +142,7 @@ class DisclosureStore:
             "is_today": False,
             "boot": self.boot_id,
             "seq": len(items),
-            "items": sorted(items, key=lambda x: x["rcept_no"], reverse=True),
+            "items": sorted(items, key=lambda x: x["seq"], reverse=True),
             "status": status,
         }
 

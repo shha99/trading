@@ -140,3 +140,34 @@ def test_api_today_and_past(api):
     assert api.get("/api/disclosures", params={"date": "20991231"}).status_code == 400
     assert api.get("/api/status").json()["api_key_set"] is True
     assert "공시 포털" in api.get("/").text
+
+
+class OrderedClient(DartClient):
+    """rows를 주어진 순서(=DART 최신순) 그대로 한 페이지로 돌려준다."""
+
+    def __init__(self, rows):
+        super().__init__("test-key")
+        self.rows = rows
+
+    def fetch_page(self, date, page_no):
+        return [normalize(r) for r in self.rows], 1
+
+
+def test_order_follows_dart_not_rcept_no(monkeypatch):
+    # 거래소 공시는 접수번호가 800/900번대라 번호순으로 정렬하면 순서가 틀어진다
+    monkeypatch.setattr(store_mod, "today_kst", lambda: "20261012")
+    client = OrderedClient([raw(800155, rm="유"), raw(24), raw(900154, rm="코"), raw(1)])
+    s = store_mod.DisclosureStore(client)
+    s.poll_today()
+    assert [it["rcept_no"][-6:] for it in s.today()["items"]] == ["800155", "000024", "900154", "000001"]
+
+    client.rows = [raw(30)] + client.rows  # 새 일반 공시가 맨 위로
+    assert s.poll_today() == 1
+    assert s.today()["items"][0]["rcept_no"].endswith("000030")
+
+    past = s.for_date("20261008")["items"]
+    assert [it["rcept_no"][-6:] for it in past] == ["000030", "800155", "000024", "900154", "000001"]
+
+
+def test_title_whitespace_collapsed():
+    assert normalize(raw(1, title="주주총회소집결의              (임시주주총회)"))["report_nm"] == "주주총회소집결의 (임시주주총회)"
