@@ -170,3 +170,84 @@ test("/api/market: 네이버 목록을 코스피·코스닥 주식만 남기고 
   const broken = await handle(req("/api/market?kind=warning"), env(), ctx, async () => new Response("<html>", { status: 200 }));
   assert.equal(broken.status, 502);
 });
+
+// ---- 캘린더 ----
+import { deflateRawSync } from "node:zlib";
+import { cleanName, fetchCandidates, fetchDeal, parseKoDate, parseTenderText, unzipFirst } from "../src/events.js";
+
+test("상대회사 이름 정리", () => {
+  assert.equal(cleanName("(주)진에어 (JIN AIR CO., LTD.) (에어서울(주)에 대한 사항은 '18. 기타 투자판단과 관련한 중요사항'을 참고하시기 바랍니다.)"), "(주)진에어");
+  assert.equal(cleanName("주식회사 우성유통(Woosung Distribution Co., Ltd.)"), "주식회사 우성유통");
+  assert.equal(cleanName("에어부산(주)"), "에어부산(주)");
+});
+
+test("날짜 파싱", () => {
+  assert.equal(parseKoDate("2026년 10월 29일"), "20261029");
+  assert.equal(parseKoDate("2026.1.5"), "20260105");
+  assert.equal(parseKoDate("-"), null);
+});
+
+test("공개매수신고서 본문에서 기간·가격", () => {
+  const t = parseTenderText("<P>공개매수기간</P><TD>2026.10.12. - 2026.11.02.(결제일: 2026.11.04)</TD> ... 매수가격 매수예정수량 지급방법 기명식 보통주식 주당 8,000원 최대 16,060,000주");
+  assert.deepEqual(t, { start: "20261012", end: "20261102", price: 8000 });
+});
+
+function makeZip(name, content) {
+  const data = deflateRawSync(Buffer.from(content, "utf8"));
+  const nameBuf = Buffer.from(name);
+  const local = Buffer.alloc(30); local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(8, 8);
+  local.writeUInt32LE(data.length, 18); local.writeUInt16LE(nameBuf.length, 26);
+  const cd = Buffer.alloc(46); cd.writeUInt32LE(0x02014b50, 0); cd.writeUInt16LE(8, 10);
+  cd.writeUInt32LE(data.length, 20); cd.writeUInt16LE(nameBuf.length, 28); cd.writeUInt32LE(0, 42);
+  const cdOffset = 30 + nameBuf.length + data.length;
+  const eocd = Buffer.alloc(22); eocd.writeUInt32LE(0x06054b50, 0); eocd.writeUInt32LE(cdOffset, 16);
+  const all = Buffer.concat([local, nameBuf, data, cd, nameBuf, eocd]);
+  return all.buffer.slice(all.byteOffset, all.byteOffset + all.length);
+}
+
+test("DART 원문 zip 풀기", async () => {
+  const out = await unzipFirst(makeZip("1.xml", "<X>공개매수기간 2026.10.08. - 2026.10.27.</X>"));
+  assert.match(new TextDecoder().decode(out), /2026\.10\.27/);
+});
+
+const listResp = (list) => async () => new Response(JSON.stringify({ status: "000", total_page: 1, total_count: list.length, list }));
+
+test("캘린더 후보: 공개매수 정정·결과보고서 묶기, 매수청구 후보, 코넥스 제외", async () => {
+  const row = (rcept_no, corp_name, report_nm, extra = {}) => ({ rcept_no, corp_code: corp_name === "가비아" ? "00000001" : corp_name === "한화" ? "00000002" : "00000003", corp_name, stock_code: "079940", corp_cls: "K", report_nm, flr_nm: "누군가", rcept_dt: rcept_no.slice(0, 8), ...extra });
+  const rows = [
+    row("20260720000002", "가비아", "공개매수신고서"),
+    row("20260824000263", "가비아", "[기재정정]공개매수신고서"),
+    row("20260918000001", "가비아", "공개매수결과보고서"),
+    row("20261012000001", "한화", "공개매수신고서", { corp_cls: "Y" }),
+    row("20260904000355", "우성", "주요사항보고서(회사합병결정)"),
+    row("20260909000530", "우성", "[첨부정정]주요사항보고서(회사합병결정)"),
+    row("20260828000004", "SK시그넷", "공개매수신고서", { corp_cls: "N" }),
+  ];
+  const fetchImpl = async (url) => {
+    const ty = url.searchParams.get("pblntf_ty") || url.searchParams.get("pblntf_detail_ty");
+    const end = url.searchParams.get("end_de");
+    if (end !== "20261012") return listResp([])(); // 두 번째(옛날) 창은 비어 있게
+    const want = rows.filter((r) => (ty === "B" ? r.report_nm.includes("주요사항") : r.report_nm.includes("공개매수")) && (!url.searchParams.get("corp_cls") || r.corp_cls === url.searchParams.get("corp_cls")));
+    return listResp(want)();
+  };
+  const c = await fetchCandidates("k", "20261012", fetchImpl);
+  assert.equal(c.tenders.length, 2);
+  const gabia = c.tenders.find((t) => t.corp_name === "가비아");
+  assert.equal(gabia.rcept_no, "20260824000263"); // 정정 반영
+  assert.equal(gabia.done, true);
+  assert.equal(c.tenders.find((t) => t.corp_name === "한화").done, false);
+  assert.deepEqual(c.deals.map((d) => [d.corp_name, d.api, d.rcept_no]), [["우성", "cmpMgDecsn", "20260909000530"]]);
+});
+
+test("매수청구 일정: 합병은 행사기간 칸, 영업양수는 주총일+20일 추정", async () => {
+  const merger = { rcept_no: "20260904000355", aprskh_plnprc: "18,313", mgsc_gmtsck_prd: "2026년 10월 29일", mgsc_aprskh_expd_bgd: "2026년 10월 29일", mgsc_aprskh_expd_edd: "2026년 11월 18일", mgptncmp_cmpnm: "우성유통" };
+  const e = await fetchDeal("k", "cmpMgDecsn", "00142661", "20261012", listResp([merger]));
+  assert.deepEqual([e.start, e.end, e.price, e.estimated, e.partner], ["20261029", "20261118", 18313, false, "우성유통"]);
+
+  const inh = { rcept_no: "20260929000583", aprskh_plnprc: "7,332", gmtsck_prd: "2026년 11월 06일" };
+  const b = await fetchDeal("k", "bsnInhDecsn", "00176835", "20261012", listResp([inh]));
+  assert.deepEqual([b.start, b.end, b.estimated, b.kind], ["20261106", "20261126", true, "영업양수"]);
+
+  const small = { rcept_no: "20260101000001", aprskh_plnprc: "-", mgsc_aprskh_expd_bgd: "-", mgsc_aprskh_expd_edd: "-" };
+  assert.equal((await fetchDeal("k", "cmpMgDecsn", "00000001", "20261012", listResp([small]))).none, true);
+});

@@ -73,3 +73,21 @@ export async function fetchMarketList(kind, fetchImpl = fetch) {
     .filter((it) => kind !== "management" || it.managed);
   return { kind, label: spec.label, items };
 }
+
+// 현재가: 네이버 실시간 시세(공개 API 아님). codes는 6자리 종목코드 배열.
+export async function fetchQuotes(codes, fetchImpl = fetch) {
+  const url = `https://polling.finance.naver.com/api/realtime/domestic/stock/${codes.map(encodeURIComponent).join(",")}`;
+  let data;
+  try {
+    const resp = await fetchImpl(url, { headers: { Accept: "application/json", "User-Agent": USER_AGENT } });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    data = await resp.json();
+  } catch (e) {
+    throw new MarketError(`현재가를 불러오지 못했습니다: ${String(e.message).slice(0, 200)}`);
+  }
+  const out = {};
+  for (const d of (data && data.datas) || []) {
+    out[d.itemCode] = { price: num(String(d.closePrice || "").replace(/,/g, "")), change_rate: num(d.fluctuationsRatio) };
+  }
+  return out;
+}

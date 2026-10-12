@@ -18,6 +18,10 @@
       kind: "all", market: "", lists: {}, errors: {}, flags: new Map(), loadedAt: null,
       seen: null, added: {}, released: {}, notified: new Set(),
     },
+    cal: {
+      month: null, events: [], quotes: {}, loadedAt: null, loading: false, selected: null, error: null,
+      manual: [],
+    },
     mode: "day",      // "day"(하루, 실시간) | "range"(기간 조회)
     date: null,       // 하루 모드에서 보고 있는 날짜
     range: null,      // 기간 모드의 { from, to } (YYYYMMDD)
@@ -780,7 +784,8 @@
     for (const b of document.querySelectorAll("#viewNav button")) b.classList.toggle("on", b.dataset.view === view);
     const disc = view === "disc";
     $("discView").hidden = !disc;
-    $("marketView").hidden = disc;
+    $("marketView").hidden = view !== "market";
+    $("calView").hidden = view !== "cal";
     for (const id of ["live", "refreshBtn", "modeSeg"]) $(id).hidden = !disc;
     if (disc) {
       $("dayNav").hidden = state.mode !== "day";
@@ -790,9 +795,270 @@
       $("dayNav").hidden = true;
       $("rangeBar").hidden = true;
       $("recon").hidden = true;
-      renderMarket();
-      if (!state.mk.loadedAt) loadMarketLists(false);
+      if (view === "market") {
+        renderMarket();
+        if (!state.mk.loadedAt) loadMarketLists(false);
+      } else {
+        renderCal();
+        if (!state.cal.loadedAt && !state.cal.loading) loadCalendar(false);
+      }
     }
+  }
+
+  // ---------- 캘린더 (공개매수·매수청구) ----------
+  const MANUAL_KEY = "disclosure-portal.calendar-manual.v1";
+  const fmtMD = (d) => `${d.slice(4, 6)}.${d.slice(6, 8)}`;
+  const daysDiff = (a, b) => Math.round((Date.UTC(+b.slice(0, 4), +b.slice(4, 6) - 1, +b.slice(6, 8)) - Date.UTC(+a.slice(0, 4), +a.slice(4, 6) - 1, +a.slice(6, 8))) / 86400000);
+
+  function loadManual() {
+    try { const v = JSON.parse(localStorage.getItem(MANUAL_KEY) || "[]"); return Array.isArray(v) ? v : []; } catch { return []; }
+  }
+  function saveManual() {
+    try { localStorage.setItem(MANUAL_KEY, JSON.stringify(state.cal.manual)); } catch { /* 저장 불가 */ }
+  }
+
+  // 서버에서 후보를 받고, 회사마다 일정(매수청구)·신고서(공개매수)를 동시에 몇 개씩 불러온다
+  async function loadCalendar(fresh) {
+    const cal = state.cal;
+    cal.loading = true;
+    cal.error = null;
+    $("calMeta").textContent = "불러오는 중…";
+    renderCal();
+    const q = fresh ? "&fresh=1" : "";
+    try {
+      const c = await fetchJSON(`/api/events/candidates?x=1${q}`);
+      const jobs = [
+        ...c.deals.map((d) => async () => {
+          const r = await fetchJSON(`/api/events/deal?api=${d.api}&corp_code=${d.corp_code}${q}`);
+          const e = r.event;
+          if (!e || e.none) return null;
+          return { ...e, id: `deal:${d.corp_code}:${d.api}`, name: d.corp_name, code: d.stock_code, market: d.market };
+        }),
+        ...c.tenders.map((t) => async () => {
+          const r = await fetchJSON(`/api/events/tender?rcept_no=${t.rcept_no}${q}`);
+          return { ...r.event, id: `tender:${t.first_rcept_no}`, kind: "공개매수", name: t.corp_name, code: t.stock_code, market: t.market, offeror: t.offeror, done: t.done };
+        }),
+      ];
+      const out = [];
+      let failed = 0;
+      let next = 0;
+      let done = 0;
+      const run = async () => {
+        while (next < jobs.length) {
+          const job = jobs[next++];
+          try { const e = await job(); if (e) out.push(e); } catch { failed++; }
+          $("calMeta").textContent = `불러오는 중 ${++done}/${jobs.length}`;
+        }
+      };
+      await Promise.all(Array.from({ length: 6 }, run));
+      cal.events = out;
+      cal.failed = failed;
+      cal.loadedAt = nowKst();
+      await loadQuotes();
+    } catch (e) {
+      cal.error = e.message;
+    } finally {
+      cal.loading = false;
+      renderCal();
+    }
+  }
+
+  async function loadQuotes() {
+    const codes = [...new Set(allEvents().map((e) => e.code).filter((c) => /^[0-9A-Z]{6}$/.test(c || "")))];
+    for (let i = 0; i < codes.length; i += 100) {
+      try {
+        const r = await fetchJSON(`/api/quotes?codes=${codes.slice(i, i + 100).join(",")}`);
+        Object.assign(state.cal.quotes, r.quotes);
+      } catch { /* 현재가는 없어도 된다 */ }
+    }
+  }
+
+  function allEvents() {
+    return [...state.cal.events, ...state.cal.manual.map((m) => ({ ...m, manual: true }))];
+  }
+
+  function status(e) {
+    const t = state.today;
+    if (!e.start && !e.end) return { key: "tbd", label: "미정", order: 3 };
+    if (e.end && t > e.end) return { key: "done", label: "종료", order: 4 };
+    if (e.start && t < e.start) return { key: "soon", label: `D-${daysDiff(t, e.start)}`, order: 2, sort: e.start };
+    return { key: "on", label: e.end ? (t === e.end ? "오늘 마감" : `진행 D-${daysDiff(t, e.end)}`) : "진행중", order: 1, sort: e.end || "99999999" };
+  }
+
+  function visibleEvents() {
+    const tender = $("calTender").checked;
+    const buyback = $("calBuyback").checked;
+    const hidePast = $("calHidePast").checked;
+    const watchOnly = $("calWatchOnly").checked;
+    return allEvents().filter((e) =>
+      (e.type === "tender" ? tender : buyback) &&
+      (!hidePast || status(e).key !== "done") &&
+      (!watchOnly || state.watch.some((w) => w.code === e.code)));
+  }
+
+  const isWatchedCode = (code) => Boolean(code) && state.watch.some((w) => w.code === code);
+  const activeOn = (e, d) => e.start && e.end && e.start <= d && d <= e.end;
+
+  function renderCalGrid(events) {
+    const m = state.cal.month; // YYYYMM
+    const y = +m.slice(0, 4);
+    const mo = +m.slice(4, 6);
+    $("calTitle").textContent = `${y}년 ${mo}월`;
+    const first = new Date(Date.UTC(y, mo - 1, 1));
+    const startDate = ymdUTC(new Date(Date.UTC(y, mo - 1, 1 - first.getUTCDay())));
+    const cells = ["일", "월", "화", "수", "목", "금", "토"].map((d, i) => `<div class="dow ${i === 0 ? "sun" : i === 6 ? "sat" : ""}">${d}</div>`);
+    for (let i = 0; i < 42; i++) {
+      const d = shiftDate(startDate, i);
+      if (i === 35 && d.slice(0, 6) !== m) break; // 6주째가 통째로 다음 달이면 생략
+      const dow = i % 7;
+      const chips = [];
+      let active = 0;
+      for (const e of events) {
+        if (activeOn(e, d)) active++;
+        const w = isWatchedCode(e.code) ? "watched" : "";
+        if (e.start === d) chips.push(`<span class="ev ${e.type} ${w}" title="${esc(e.name)} ${esc(e.kind)} 시작">▶ ${esc(e.name)}</span>`);
+        if (e.end === d) chips.push(`<span class="ev ${e.type} end ${w}" title="${esc(e.name)} ${esc(e.kind)} 마감">■ ${esc(e.name)} 마감</span>`);
+      }
+      const cls = ["day", d.slice(0, 6) !== m ? "other" : "", d === state.today ? "today" : "", d === state.cal.selected ? "sel" : "", dow === 0 ? "sun" : dow === 6 ? "sat" : ""].join(" ");
+      cells.push(`<div class="${cls}" data-day="${d}">
+        <div class="top"><span class="n">${+d.slice(6, 8)}</span>${active ? `<span class="act">진행 ${active}</span>` : ""}</div>
+        ${chips.slice(0, 4).join("")}${chips.length > 4 ? `<span class="more">+${chips.length - 4}</span>` : ""}
+      </div>`);
+    }
+    $("calGrid").innerHTML = cells.join("");
+  }
+
+  function ymdUTC(dt) {
+    return dt.toISOString().slice(0, 10).replaceAll("-", "");
+  }
+
+  function calRowHTML(e) {
+    const st = status(e);
+    const watched = isWatchedCode(e.code);
+    const q = e.code ? state.cal.quotes[e.code] : null;
+    const cur = q && q.price;
+    const gap = e.price && cur ? ((e.price - cur) / cur) * 100 : null;
+    const gapCls = gap === null ? "" : gap > 0 ? "up" : gap < 0 ? "down" : "";
+    const period = e.start || e.end ? `${e.start ? fmtMD(e.start) : "?"} ~ ${e.end ? fmtMD(e.end) : "?"}${e.estimated ? ' <span class="est">(추정)</span>' : ""}` : "미정";
+    const notes = [
+      e.type === "tender" && e.offeror ? `공개매수자 ${esc(e.offeror)}` : "",
+      e.partner ? `상대 ${esc(e.partner)}` : "",
+      e.gm_date ? `주총 ${fmtMD(e.gm_date)}` : "",
+      e.done ? "결과보고서 제출" : "",
+      e.memo ? esc(e.memo) : "",
+      e.manual ? "직접 추가" : "",
+    ].filter(Boolean).join(" · ");
+    const kindLabel = e.type === "tender" ? "공개매수" : `매수청구·${e.kind || ""}`.replace(/·$/, "");
+    return `<tr class="${watched ? "watched" : ""} ${st.key === "done" ? "past" : ""}">
+      <td><span class="st ${st.key}">${st.label}</span></td>
+      <td class="kind-cell"><span class="kind ev ${e.type}">${esc(kindLabel)}</span></td>
+      <td><div class="corp">
+        ${e.code ? `<button class="star ${watched ? "on" : ""}" data-calstar="${esc(e.code)}" data-name="${esc(e.name)}">${watched ? "★" : "☆"}</button>` : ""}
+        <span class="nm" title="${esc(e.name)}">${esc(e.name)}</span>${e.code ? `<span class="cd">${esc(e.code)}</span>` : ""}${flagBadges(e.code)}
+      </div></td>
+      <td class="period">${period}</td>
+      <td class="num">${e.price ? e.price.toLocaleString() : "–"}</td>
+      <td class="num">${cur ? cur.toLocaleString() : "–"}</td>
+      <td class="num ${gapCls}">${gap === null ? "–" : `${gap > 0 ? "+" : ""}${gap.toFixed(2)}%`}</td>
+      <td class="note">${notes}</td>
+      <td>${e.manual
+        ? `<button class="linkbtn del" data-caldel="${esc(e.id)}">삭제</button>`
+        : `<a class="linkbtn" href="https://dart.fss.or.kr/dsaf001/main.do?rcpNo=${esc(e.rcept_no)}" target="_blank" rel="noopener">원문</a>`}</td>
+    </tr>`;
+  }
+
+  function renderCal() {
+    const cal = state.cal;
+    if (!cal.month) cal.month = state.today.slice(0, 6);
+    const events = visibleEvents();
+    renderCalGrid(events);
+    let rows = events;
+    if (cal.selected) rows = rows.filter((e) => activeOn(e, cal.selected) || e.start === cal.selected || e.end === cal.selected);
+    rows = [...rows].sort((a, b) => {
+      const sa = status(a);
+      const sb = status(b);
+      if (sa.order !== sb.order) return sa.order - sb.order;
+      if (sa.key === "done") return (b.end || "").localeCompare(a.end || "");
+      return (sa.sort || "").localeCompare(sb.sort || "") || a.name.localeCompare(b.name);
+    });
+    $("calListTitle").textContent = cal.selected ? `${+cal.selected.slice(4, 6)}월 ${+cal.selected.slice(6, 8)}일 진행 중인 일정 ${rows.length}건` : `일정 ${rows.length}건`;
+    $("calClearDay").hidden = !cal.selected;
+    $("calRows").innerHTML = rows.map(calRowHTML).join("");
+    const empty = $("calEmpty");
+    if (cal.error) { empty.hidden = false; empty.textContent = `불러오지 못했습니다: ${cal.error}`; }
+    else if (cal.loading && !cal.events.length) { empty.hidden = false; empty.textContent = "DART에서 일정을 모으는 중… (처음엔 30초 정도 걸릴 수 있어요)"; }
+    else if (!rows.length) { empty.hidden = false; empty.textContent = "해당하는 일정이 없습니다."; }
+    else empty.hidden = true;
+    if (!cal.loading) {
+      $("calMeta").textContent = cal.loadedAt
+        ? `공개매수 ${allEvents().filter((e) => e.type === "tender").length} · 매수청구 ${allEvents().filter((e) => e.type === "buyback").length}건 · ${cal.loadedAt} 업데이트${cal.failed ? ` · ${cal.failed}건 실패` : ""}`
+        : "";
+    }
+  }
+
+  function bindCalendar() {
+    $("calPrev").addEventListener("click", () => { state.cal.month = shiftMonth(state.cal.month, -1); renderCal(); });
+    $("calNext").addEventListener("click", () => { state.cal.month = shiftMonth(state.cal.month, 1); renderCal(); });
+    $("calThisMonth").addEventListener("click", () => { state.cal.month = state.today.slice(0, 6); renderCal(); });
+    for (const id of ["calTender", "calBuyback", "calHidePast", "calWatchOnly"]) $(id).addEventListener("change", renderCal);
+    $("calRefresh").addEventListener("click", () => loadCalendar(true));
+    $("calGrid").addEventListener("click", (e) => {
+      const day = e.target.closest("[data-day]");
+      if (!day) return;
+      state.cal.selected = state.cal.selected === day.dataset.day ? null : day.dataset.day;
+      renderCal();
+    });
+    $("calClearDay").addEventListener("click", () => { state.cal.selected = null; renderCal(); });
+    $("calRows").addEventListener("click", (e) => {
+      const star = e.target.closest("[data-calstar]");
+      if (star) {
+        const code = star.dataset.calstar;
+        const w = state.watch.find((x) => x.code === code);
+        if (w) removeWatch(watchKey(w));
+        else addWatch({ code, name: star.dataset.name });
+        renderCal();
+        renderWatch();
+        return;
+      }
+      const del = e.target.closest("[data-caldel]");
+      if (del && confirm("이 일정을 삭제할까요?")) {
+        state.cal.manual = state.cal.manual.filter((m) => m.id !== del.dataset.caldel);
+        saveManual();
+        renderCal();
+      }
+    });
+    $("calAddBtn").addEventListener("click", () => { $("calAddForm").hidden = !$("calAddForm").hidden; });
+    $("caCancel").addEventListener("click", () => { $("calAddForm").hidden = true; });
+    $("calAddForm").addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const start = fromInput($("caStart").value) || null;
+      const end = fromInput($("caEnd").value) || null;
+      if (start && end && start > end) { toast("시작일이 종료일보다 늦습니다."); return; }
+      const type = $("caType").value;
+      const code = $("caCode").value.trim().toUpperCase();
+      state.cal.manual.push({
+        id: `manual:${Date.now()}`,
+        type,
+        kind: type === "tender" ? "공개매수" : "",
+        name: $("caName").value.trim(),
+        code,
+        start,
+        end,
+        price: Number($("caPrice").value.replace(/[^\d]/g, "")) || null,
+        memo: $("caMemo").value.trim(),
+      });
+      saveManual();
+      $("calAddForm").reset();
+      $("calAddForm").hidden = true;
+      if (code && !state.cal.quotes[code]) await loadQuotes();
+      if (start) state.cal.month = start.slice(0, 6);
+      renderCal();
+    });
+  }
+
+  function shiftMonth(m, n) {
+    const d = new Date(Date.UTC(+m.slice(0, 4), +m.slice(4, 6) - 1 + n, 1));
+    return d.toISOString().slice(0, 7).replace("-", "");
   }
 
   // ---------- 링크 가져오기/내보내기 ----------
@@ -906,6 +1172,7 @@
     $("nextDay").addEventListener("click", () => { if (state.date < state.today) loadDate(shiftDate(state.date, 1)); });
     $("todayBtn").addEventListener("click", () => loadDate(state.today));
 
+    bindCalendar();
     $("viewNav").addEventListener("click", (e) => {
       const b = e.target.closest("button[data-view]");
       if (b && b.dataset.view !== state.view) setView(b.dataset.view);
@@ -1079,6 +1346,7 @@
     fillWatchNames();
     render();
     state.mk.seen = loadSeen();
+    state.cal.manual = loadManual();
     loadMarketLists(false); // 공시 목록의 경고·관리 표시와 신규 지정 알림용(5분마다 다시 확인)
     setInterval(() => loadMarketLists(false), MK_REFRESH_MS);
     state.timer = setInterval(poll, REFRESH_MS);

@@ -8,11 +8,15 @@
 //   DART_API_KEY     OpenDART 인증키 (필수)
 //   PORTAL_PASSWORD  설정하면 접속할 때 비밀번호를 묻는다(아이디는 아무거나) — "나만 보기"
 import { DartError, TRADE_CATEGORIES, fetchDay, fetchPage } from "./dart.js";
-import { MARKET_KINDS, MarketError, fetchMarketList } from "./market.js";
+import { MARKET_KINDS, MarketError, fetchMarketList, fetchQuotes } from "./market.js";
+import { DEAL_APIS, fetchCandidates, fetchDeal, fetchTender } from "./events.js";
 
 const TODAY_TTL = 15; // 오늘 목록 캐시(초) — 탭 여러 개를 열어도 DART 호출이 늘지 않게
 const PAST_TTL = 600; // 지난 날짜는 거의 안 바뀐다
 const MARKET_TTL = 300; // 시장조치 종목 목록은 5분 캐시
+const EVENTS_TTL = 3 * 3600; // 캘린더 후보 목록
+const DEAL_TTL = 6 * 3600; // 회사별 매수청구 일정·공개매수 신고서
+const QUOTE_TTL = 60;
 const DAY_PAST_TTL = 12 * 3600; // 기간 조회(/api/day)용 지난 날짜 — 한번 받으면 반나절 재사용
 
 export function todayKst(now = new Date()) {
@@ -104,6 +108,35 @@ async function handleMarket(url, env, ctx, fetchImpl) {
     async () => ({ ...(await fetchMarketList(kind, fetchImpl)), fetched_at: new Date().toISOString() }));
 }
 
+// 캘린더(공개매수·매수청구)
+async function handleEvents(url, env, ctx, fetchImpl) {
+  const fresh = url.searchParams.get("fresh") === "1";
+  const part = url.pathname.slice("/api/events/".length);
+  if (part === "candidates") {
+    const today = todayKst();
+    return cached(`events/candidates?d=${today}`, EVENTS_TTL, fresh, ctx, async () => ({ today, ...(await fetchCandidates(env.DART_API_KEY, today, fetchImpl)) }));
+  }
+  if (part === "deal") {
+    const api = url.searchParams.get("api") || "";
+    const corp = url.searchParams.get("corp_code") || "";
+    if (!DEAL_APIS.some(([, a]) => a === api) || !/^\d{8}$/.test(corp)) return json({ detail: "api 또는 corp_code가 잘못됐습니다." }, 400);
+    const today = todayKst();
+    return cached(`events/deal?api=${api}&corp=${corp}&d=${today}`, DEAL_TTL, fresh, ctx, async () => ({ event: await fetchDeal(env.DART_API_KEY, api, corp, today, fetchImpl) }));
+  }
+  if (part === "tender") {
+    const rcept = url.searchParams.get("rcept_no") || "";
+    if (!/^\d{14}$/.test(rcept)) return json({ detail: "rcept_no가 잘못됐습니다." }, 400);
+    return cached(`events/tender?r=${rcept}`, DEAL_TTL * 4, fresh, ctx, async () => ({ event: await fetchTender(env.DART_API_KEY, rcept, fetchImpl) }));
+  }
+  return json({ detail: "not found" }, 404);
+}
+
+async function handleQuotes(url, env, ctx, fetchImpl) {
+  const codes = [...new Set((url.searchParams.get("codes") || "").split(",").filter((c) => /^[0-9A-Z]{6}$/.test(c)))].sort();
+  if (!codes.length || codes.length > 100) return json({ detail: "codes는 종목코드 1~100개(쉼표 구분)여야 합니다." }, 400);
+  return cached(`quotes?c=${codes.join(",")}`, QUOTE_TTL, false, ctx, async () => ({ quotes: await fetchQuotes(codes, fetchImpl) }));
+}
+
 export async function handle(request, env, ctx, fetchImpl = fetch) {
   const url = new URL(request.url);
   if (url.pathname === "/healthz") return json({ ok: true });
@@ -116,6 +149,8 @@ export async function handle(request, env, ctx, fetchImpl = fetch) {
   if (url.pathname === "/api/page" && request.method === "GET") return handlePage(url, env, ctx, fetchImpl);
   if (url.pathname === "/api/day" && request.method === "GET") return handleDay(url, env, ctx, fetchImpl);
   if (url.pathname === "/api/market" && request.method === "GET") return handleMarket(url, env, ctx, fetchImpl);
+  if (url.pathname.startsWith("/api/events/") && request.method === "GET") return handleEvents(url, env, ctx, fetchImpl);
+  if (url.pathname === "/api/quotes" && request.method === "GET") return handleQuotes(url, env, ctx, fetchImpl);
   if (url.pathname === "/api/status") {
     return json({ today: todayKst(), api_key_set: Boolean(env.DART_API_KEY), categories: TRADE_CATEGORIES.map(([name]) => name) });
   }

@@ -103,35 +103,45 @@ export function redact(message, apiKey) {
   return m.replace(/https?:\/\/\S+/g, "(URL)").slice(0, 300);
 }
 
+// OpenDART 아무 API나 호출한다(endpoint 예: "list.json", "cmpMgDecsn.json", "document.xml").
+// JSON이면 상태코드까지 확인해서 돌려주고("013" 데이터 없음은 null), 그 밖에는 바이트(ArrayBuffer).
+export async function dartRequest(apiKey, endpoint, params, fetchImpl = fetch) {
+  if (!apiKey) throw new DartError("DART_API_KEY가 설정되지 않았습니다.");
+  const url = new URL(`https://opendart.fss.or.kr/api/${endpoint}`);
+  url.search = new URLSearchParams({ crtfc_key: apiKey, ...params });
+  const isJson = endpoint.endsWith(".json");
+  let data;
+  try {
+    // User-Agent가 없으면 DART가 error1.html로 계속 리다이렉트한다(Workers fetch는 기본으로 안 붙임).
+    // 리다이렉트는 따라가지 않고 오류로 처리한다.
+    const resp = await fetchImpl(url, { headers: { Accept: isJson ? "application/json" : "*/*", "User-Agent": USER_AGENT }, redirect: "manual" });
+    if (resp.status >= 300 && resp.status < 400) throw new Error(`DART가 요청을 거부했습니다(리다이렉트 ${resp.status})`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    data = isJson ? await resp.json() : await resp.arrayBuffer();
+  } catch (e) {
+    // 오류 메시지에 요청 URL(=API 키)이 섞여 들어올 수 있어 키를 지운다
+    throw new DartError(`DART 요청 실패: ${redact(e.message, apiKey)}`);
+  }
+  if (!isJson) return data;
+  if (data.status === "013") return null; // 조회된 데이터 없음
+  if (data.status !== "000") throw new DartError(`DART 오류 ${data.status}: ${redact(data.message, apiKey)}`);
+  return data;
+}
+
 // date(YYYYMMDD)의 공시 목록 한 페이지(최신순)와 전체 페이지 수.
 // corpCls(Y=코스피, K=코스닥)를 주면 그 시장만 받는다.
 export async function fetchPage(apiKey, date, page, fetchImpl = fetch, corpCls = "") {
-  if (!apiKey) throw new DartError("DART_API_KEY가 설정되지 않았습니다.");
-  const url = new URL(DART_LIST_URL);
-  url.search = new URLSearchParams({
-    crtfc_key: apiKey,
+  const params = {
     bgn_de: date,
     end_de: date,
     page_no: String(page),
     page_count: String(PAGE_COUNT),
     sort: "date",
     sort_mth: "desc",
-  });
-  if (corpCls) url.searchParams.set("corp_cls", corpCls);
-  let data;
-  try {
-    // User-Agent가 없으면 DART가 error1.html로 계속 리다이렉트한다(Workers fetch는 기본으로 안 붙임).
-    // 리다이렉트는 따라가지 않고 오류로 처리한다.
-    const resp = await fetchImpl(url, { headers: { Accept: "application/json", "User-Agent": USER_AGENT }, redirect: "manual" });
-    if (resp.status >= 300 && resp.status < 400) throw new Error(`DART가 요청을 거부했습니다(리다이렉트 ${resp.status})`);
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    data = await resp.json();
-  } catch (e) {
-    // 오류 메시지에 요청 URL(=API 키)이 섞여 들어올 수 있어 키를 지운다
-    throw new DartError(`DART 요청 실패: ${redact(e.message, apiKey)}`);
-  }
-  if (data.status === "013") return { items: [], total_page: 0, total_count: 0 }; // 조회된 데이터 없음
-  if (data.status !== "000") throw new DartError(`DART 오류 ${data.status}: ${redact(data.message, apiKey)}`);
+  };
+  if (corpCls) params.corp_cls = corpCls;
+  const data = await dartRequest(apiKey, "list.json", params, fetchImpl);
+  if (!data) return { items: [], total_page: 0, total_count: 0 };
   return {
     items: (data.list || []).map(normalize),
     total_page: Number(data.total_page) || 1,
