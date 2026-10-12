@@ -19,7 +19,7 @@
       seen: null, added: {}, released: {}, notified: new Set(),
     },
     cal: {
-      month: null, events: [], quotes: {}, loadedAt: null, loading: false, selected: null, error: null,
+      month: null, events: [], quotes: {}, loadedAt: null, loading: false, selected: null, error: null, newIds: new Set(),
       manual: [],
     },
     mode: "day",      // "day"(하루, 실시간) | "range"(기간 조회)
@@ -829,7 +829,7 @@
       const c = await fetchJSON(`/api/events/candidates?x=1${q}`);
       const jobs = [
         ...c.deals.map((d) => async () => {
-          const r = await fetchJSON(`/api/events/deal?api=${d.api}&corp_code=${d.corp_code}${q}`);
+          const r = await fetchJSON(`/api/events/deal?api=${d.api}&corp_code=${d.corp_code}&rcept_no=${d.rcept_no}${q}`);
           const e = r.event;
           if (!e || e.none) return null;
           return { ...e, id: `deal:${d.corp_code}:${d.api}`, name: d.corp_name, code: d.stock_code, market: d.market };
@@ -851,6 +851,13 @@
         }
       };
       await Promise.all(Array.from({ length: 6 }, run));
+      // 이전에 불러온 것과 비교해 새로 생긴 일정 표시(처음 불러올 땐 표시 안 함)
+      if (cal.loadedAt) {
+        const before = new Set(cal.events.map((e) => e.id));
+        const added = out.filter((e) => !before.has(e.id));
+        for (const e of added) cal.newIds.add(e.id);
+        if (added.length) toast(`📅 캘린더에 새 일정 ${added.length}건: ${added.slice(0, 3).map((e) => `${e.name}(${e.type === "tender" ? "공개매수" : "매수청구"})`).join(", ")}`);
+      }
       cal.events = out;
       cal.failed = failed;
       cal.loadedAt = nowKst();
@@ -954,7 +961,7 @@
       <td class="kind-cell"><span class="kind ev ${e.type}">${esc(kindLabel)}</span></td>
       <td><div class="corp">
         ${e.code ? `<button class="star ${watched ? "on" : ""}" data-calstar="${esc(e.code)}" data-name="${esc(e.name)}">${watched ? "★" : "☆"}</button>` : ""}
-        <span class="nm" title="${esc(e.name)}">${esc(e.name)}</span>${e.code ? `<span class="cd">${esc(e.code)}</span>` : ""}${flagBadges(e.code)}
+        <span class="nm" title="${esc(e.name)}">${esc(e.name)}</span>${e.code ? `<span class="cd">${esc(e.code)}</span>` : ""}${state.cal.newIds.has(e.id) ? '<span class="badge new">NEW</span>' : ""}${flagBadges(e.code)}
       </div></td>
       <td class="period">${period}</td>
       <td class="num">${e.price ? e.price.toLocaleString() : "–"}</td>
@@ -1347,6 +1354,8 @@
     render();
     state.mk.seen = loadSeen();
     state.cal.manual = loadManual();
+    // 캘린더를 한 번이라도 연 뒤에는 15분마다 새 공개매수·매수청구 공시를 다시 확인한다
+    setInterval(() => { if (state.cal.loadedAt && !state.cal.loading) loadCalendar(false); }, 15 * 60_000);
     loadMarketLists(false); // 공시 목록의 경고·관리 표시와 신규 지정 알림용(5분마다 다시 확인)
     setInterval(() => loadMarketLists(false), MK_REFRESH_MS);
     state.timer = setInterval(poll, REFRESH_MS);

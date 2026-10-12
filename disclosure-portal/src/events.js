@@ -86,8 +86,8 @@ export async function fetchCandidates(apiKey, today, fetchImpl = fetch) {
         t = { ...base(r), offeror: (r.flr_nm || "").trim(), rcept_no: r.rcept_no, first_rcept_no: r.rcept_no, done: false };
         tenders.push(t);
         open.set(r.corp_code, t);
-      } else {
-        t.rcept_no = r.rcept_no; // 정정된 최신 신고서를 읽는다
+      } else if (!title.includes("첨부정정")) {
+        t.rcept_no = r.rcept_no; // 정정된 최신 신고서를 읽는다(첨부서류만 바꾼 정정은 본문이 없어 건너뜀)
       }
     } else if (title.includes("공개매수결과보고서")) {
       const t = open.get(r.corp_code);

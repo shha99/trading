@@ -14,8 +14,10 @@ import { DEAL_APIS, fetchCandidates, fetchDeal, fetchTender } from "./events.js"
 const TODAY_TTL = 15; // 오늘 목록 캐시(초) — 탭 여러 개를 열어도 DART 호출이 늘지 않게
 const PAST_TTL = 600; // 지난 날짜는 거의 안 바뀐다
 const MARKET_TTL = 300; // 시장조치 종목 목록은 5분 캐시
-const EVENTS_TTL = 3 * 3600; // 캘린더 후보 목록
-const DEAL_TTL = 6 * 3600; // 회사별 매수청구 일정·공개매수 신고서
+// 캘린더 후보 목록(새 공시 발견)은 짧게 — 새 공개매수·합병 공시가 늦어도 15분 안에 잡힌다.
+// 회사별 일정·신고서는 보고서 접수번호로 캐시하므로 정정 공시가 나오면 바로 새로 읽는다.
+const EVENTS_TTL = 15 * 60;
+const DEAL_TTL = 12 * 3600;
 const QUOTE_TTL = 60;
 const DAY_PAST_TTL = 12 * 3600; // 기간 조회(/api/day)용 지난 날짜 — 한번 받으면 반나절 재사용
 
@@ -119,14 +121,15 @@ async function handleEvents(url, env, ctx, fetchImpl) {
   if (part === "deal") {
     const api = url.searchParams.get("api") || "";
     const corp = url.searchParams.get("corp_code") || "";
+    const rcept = url.searchParams.get("rcept_no") || ""; // 후보 목록의 최신 보고서 — 캐시 키에만 쓴다
     if (!DEAL_APIS.some(([, a]) => a === api) || !/^\d{8}$/.test(corp)) return json({ detail: "api 또는 corp_code가 잘못됐습니다." }, 400);
     const today = todayKst();
-    return cached(`events/deal?api=${api}&corp=${corp}&d=${today}`, DEAL_TTL, fresh, ctx, async () => ({ event: await fetchDeal(env.DART_API_KEY, api, corp, today, fetchImpl) }));
+    return cached(`events/deal?api=${api}&corp=${corp}&r=${rcept}&d=${today}`, DEAL_TTL, fresh, ctx, async () => ({ event: await fetchDeal(env.DART_API_KEY, api, corp, today, fetchImpl) }));
   }
   if (part === "tender") {
     const rcept = url.searchParams.get("rcept_no") || "";
     if (!/^\d{14}$/.test(rcept)) return json({ detail: "rcept_no가 잘못됐습니다." }, 400);
-    return cached(`events/tender?r=${rcept}`, DEAL_TTL * 4, fresh, ctx, async () => ({ event: await fetchTender(env.DART_API_KEY, rcept, fetchImpl) }));
+    return cached(`events/tender?r=${rcept}`, DEAL_TTL * 2, fresh, ctx, async () => ({ event: await fetchTender(env.DART_API_KEY, rcept, fetchImpl) }));
   }
   return json({ detail: "not found" }, 404);
 }
