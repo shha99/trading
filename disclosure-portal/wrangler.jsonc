@@ -4,6 +4,8 @@
   "name": "disclosure-portal",
   "main": "src/worker.js",
   "compatibility_date": "2025-09-01",
+  // <이름>.<계정>.workers.dev 무료 주소를 켠다(배포할 때마다 유지)
+  "workers_dev": true,
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
