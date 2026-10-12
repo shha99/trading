@@ -14,7 +14,10 @@
   const state = {
     today: null,      // 오늘(KST) YYYYMMDD
     view: "disc",     // "disc"(공시) | "market"(투자경고·관리종목)
-    mk: { kind: "warning", market: "", lists: {}, errors: {}, flags: new Map(), loadedAt: null },
+    mk: {
+      kind: "all", market: "", lists: {}, errors: {}, flags: new Map(), loadedAt: null,
+      seen: null, added: {}, released: {}, notified: new Set(),
+    },
     mode: "day",      // "day"(하루, 실시간) | "range"(기간 조회)
     date: null,       // 하루 모드에서 보고 있는 날짜
     range: null,      // 기간 모드의 { from, to } (YYYYMMDD)
@@ -550,7 +553,22 @@
 
   // ---------- 투자경고·관리종목 ----------
   const MK_KINDS = [["warning", "투자경고"], ["risk", "투자위험"], ["caution", "투자주의"], ["management", "관리종목"], ["halt", "거래정지"]];
+  const MK_LABEL = Object.fromEntries(MK_KINDS);
   const MK_SHORT = { warning: "경고", risk: "위험", caution: "주의", management: "관리", halt: "정지" };
+  const MK_REFRESH_MS = 5 * 60_000; // 서버도 5분 캐시
+  // 신규 지정 알림: "마지막으로 확인한 목록"을 브라우저에 저장해 두고, 지금 목록과 비교한다.
+  // 확인 완료를 누르기 전까지 새 종목은 NEW로 남는다.
+  const SEEN_KEY = "disclosure-portal.market-seen.v1";
+
+  function loadSeen() {
+    try {
+      const v = JSON.parse(localStorage.getItem(SEEN_KEY) || "null");
+      return v && v.kinds ? v : { kinds: {}, at: null };
+    } catch { return { kinds: {}, at: null }; }
+  }
+  function saveSeen() {
+    try { localStorage.setItem(SEEN_KEY, JSON.stringify(state.mk.seen)); } catch { /* 저장 불가 */ }
+  }
 
   async function loadMarketLists(fresh) {
     const res = await Promise.all(MK_KINDS.map(([k]) =>
@@ -566,8 +584,94 @@
     }
     state.mk.flags = flags;
     state.mk.loadedAt = nowKst();
+    diffWithSeen();
     renderMarket();
     if (state.view === "disc") render();
+  }
+
+  // 지난 확인 이후 새로 지정된/해제된 종목. 처음 보는 목록은 조용히 기준으로 저장한다.
+  function diffWithSeen() {
+    const seen = state.mk.seen;
+    let changed = false;
+    state.mk.added = {};
+    state.mk.released = {};
+    for (const [k] of MK_KINDS) {
+      const list = state.mk.lists[k];
+      if (!list) continue;
+      if (!seen.kinds[k]) {
+        seen.kinds[k] = list.map((it) => ({ code: it.code, name: it.name }));
+        changed = true;
+        continue;
+      }
+      const before = new Set(seen.kinds[k].map((x) => x.code));
+      const now = new Set(list.map((it) => it.code));
+      state.mk.added[k] = new Set(list.filter((it) => !before.has(it.code)).map((it) => it.code));
+      state.mk.released[k] = seen.kinds[k].filter((x) => !now.has(x.code));
+    }
+    if (changed) {
+      seen.at = seen.at || nowKst();
+      saveSeen();
+    }
+    notifyNew();
+  }
+
+  const isNew = (code, kind) => (kind === "all"
+    ? MK_KINDS.some(([k]) => state.mk.added[k] && state.mk.added[k].has(code))
+    : Boolean(state.mk.added[kind] && state.mk.added[kind].has(code)));
+  const addedCount = (k) => (state.mk.added[k] ? state.mk.added[k].size : 0);
+  const totalAdded = () => MK_KINDS.reduce((n, [k]) => n + addedCount(k), 0);
+
+  // 이번 접속에서 처음 발견한 신규 종목만 알린다(5분마다 다시 확인해도 같은 걸 반복해서 알리지 않음)
+  function notifyNew() {
+    const fresh = [];
+    for (const [k, label] of MK_KINDS) {
+      for (const code of state.mk.added[k] || []) {
+        const key = `${k}:${code}`;
+        if (state.mk.notified.has(key)) continue;
+        state.mk.notified.add(key);
+        const it = state.mk.lists[k].find((x) => x.code === code);
+        fresh.push(`${label} ${it ? it.name : code}`);
+      }
+    }
+    updateViewBadge();
+    if (!fresh.length) return;
+    const msg = `새로 지정: ${fresh.slice(0, 3).join(", ")}${fresh.length > 3 ? ` 외 ${fresh.length - 3}건` : ""}`;
+    toast(`⚠ ${msg}`);
+    if ("Notification" in window && Notification.permission === "granted") {
+      try { new Notification("투자경고·관리종목 신규 지정", { body: msg, tag: "market-new" }); } catch { /* 일부 모바일 브라우저 */ }
+    }
+  }
+
+  function ackSeen() {
+    for (const [k] of MK_KINDS) {
+      if (state.mk.lists[k]) state.mk.seen.kinds[k] = state.mk.lists[k].map((it) => ({ code: it.code, name: it.name }));
+    }
+    state.mk.seen.at = nowKst();
+    saveSeen();
+    diffWithSeen();
+    renderMarket();
+  }
+
+  function updateViewBadge() {
+    const n = totalAdded();
+    const b = document.querySelector('#viewNav button[data-view="market"]');
+    b.innerHTML = `투자경고·관리종목${n ? ` <span class="nbadge">${n}</span>` : ""}`;
+  }
+
+  // 전체: 다섯 목록을 종목 하나로 합친다(조치 여러 개면 배지 여러 개)
+  function mergedList() {
+    const by = new Map();
+    for (const [k] of MK_KINDS) {
+      for (const it of state.mk.lists[k] || []) {
+        let m = by.get(it.code);
+        if (!m) { m = { ...it, kinds: [], reasons: [] }; by.set(it.code, m); }
+        m.kinds.push(k);
+        if (it.reason && !m.reasons.includes(it.reason)) m.reasons.push(it.reason);
+        if (it.date && (!m.date || it.date > m.date)) m.date = it.date;
+      }
+    }
+    const order = (m) => MK_KINDS.findIndex(([k]) => m.kinds.includes(k));
+    return [...by.values()].sort((a, b) => (isNew(b.code, "all") - isNew(a.code, "all")) || order(a) - order(b) || (b.date || "").localeCompare(a.date || ""));
   }
 
   // 공시 목록의 회사 옆에 붙이는 표시 (경고·관리·정지 등)
@@ -578,48 +682,82 @@
       .map(([k, label]) => `<span class="badge ${k}" title="${label}">${MK_SHORT[k]}</span>`).join("");
   }
 
-  function mkRowHTML(it, q) {
+  function mkRowHTML(it, q, kind) {
     const watched = state.watch.some((w) => w.code === it.code);
+    const fresh = isNew(it.code, kind);
     const rate = it.change_rate;
     const rateCls = rate > 0 ? "up" : rate < 0 ? "down" : "";
     const date = it.date ? `${it.date.slice(0, 4)}.${it.date.slice(4, 6)}.${it.date.slice(6, 8)}` : "–";
     const st = { raw: q ? q.split(/\s+/).filter(Boolean) : [] };
-    return `<tr class="${watched ? "watched" : ""}">
+    const reasons = kind === "all" ? it.reasons.join(" · ") : it.reason || "";
+    const badges = kind === "all"
+      ? it.kinds.map((k) => `<span class="badge ${k}">${MK_SHORT[k]}</span>`).join("")
+      : flagBadges(it.code, kind);
+    return `<tr class="${watched ? "watched" : ""} ${fresh ? "mk-new" : ""}">
       <td><div class="corp">
         <button class="star ${watched ? "on" : ""}" data-mkstar="${esc(it.code)}" data-name="${esc(it.name)}" title="${watched ? "관심종목 해제" : "관심종목 추가"}">${watched ? "★" : "☆"}</button>
         <span class="nm" title="${esc(it.name)}">${hl(it.name, st)}</span><span class="cd">${hl(it.code, st)}</span>
+        ${fresh ? '<span class="badge new">NEW</span>' : ""}
       </div></td>
       <td class="mkt-cell"><span class="mkt ${esc(it.market)}">${esc(it.market)}</span></td>
       <td class="num">${it.price === null ? "–" : it.price.toLocaleString()}</td>
       <td class="num ${rateCls}">${rate === null ? "–" : `${rate > 0 ? "+" : ""}${rate.toFixed(2)}%`}</td>
       <td class="date">${date}</td>
-      <td class="reason">${hl(it.reason || "", st)}${flagBadges(it.code, state.mk.kind)}</td>
+      <td class="reason">${kind === "all" ? badges + " " : ""}${hl(reasons, st)}${kind === "all" ? "" : badges}</td>
       <td><button class="linkbtn" data-disc="${esc(it.name)}">공시 보기</button></td>
     </tr>`;
   }
 
+  function renderNews() {
+    const box = $("mkNews");
+    const n = totalAdded();
+    const rel = MK_KINDS.flatMap(([k, label]) => (state.mk.released[k] || []).map((x) => `${label} ${x.name}`));
+    const perm = "Notification" in window ? Notification.permission : "unsupported";
+    const notifBtn = perm === "default" ? '<button id="mkNotify" class="ghost small">브라우저 알림 켜기</button>' : "";
+    const since = state.mk.seen.at ? `${state.mk.seen.at} 확인 이후` : "";
+    if (!n && !rel.length) {
+      box.className = "mk-news";
+      box.innerHTML = `<span>${since ? `${since} 새로 지정된 종목이 없습니다.` : "지금 목록을 기준으로 저장했습니다. 다음부터 새로 지정되면 알려드립니다."} 열어두면 5분마다 확인합니다.</span>${notifBtn}`;
+      return;
+    }
+    const parts = MK_KINDS.filter(([k]) => addedCount(k)).map(([k, label]) => `${label} ${addedCount(k)}`);
+    box.className = "mk-news alert";
+    box.innerHTML = `<span><b>${since} 새로 지정 ${n}종목</b>${parts.length ? ` (${parts.join(", ")})` : ""}` +
+      `${rel.length ? ` · 해제 ${rel.length}종목: ${esc(rel.slice(0, 5).join(", "))}${rel.length > 5 ? " …" : ""}` : ""}</span>` +
+      `<button id="mkAck" class="primary small">확인 완료</button>${notifBtn}`;
+  }
+
   function renderMarket() {
     const k = state.mk.kind;
-    $("mkTabs").innerHTML = MK_KINDS.map(([kind, label]) => {
-      const list = state.mk.lists[kind];
+    const merged = mergedList();
+    const tabs = [["all", "전체"], ...MK_KINDS];
+    $("mkTabs").innerHTML = tabs.map(([kind, label]) => {
+      const list = kind === "all" ? merged : state.mk.lists[kind];
       const w = (list || []).filter((it) => state.watch.some((x) => x.code === it.code)).length;
-      const count = state.mk.errors[kind] && !list ? "!" : list ? list.length : "…";
+      const err = kind === "all" ? MK_KINDS.some(([x]) => state.mk.errors[x] && !state.mk.lists[x]) : state.mk.errors[kind] && !list;
+      const count = err && !(list && list.length) ? "!" : list ? list.length : "…";
+      const nNew = kind === "all" ? totalAdded() : addedCount(kind);
       return `<button data-k="${kind}" class="${kind === k ? "on" : ""}">
-        <span class="t">${label}</span><span class="c">${count}</span><span class="w">${w ? `관심종목 ${w}` : ""}</span></button>`;
+        <span class="t">${label}</span><span class="c">${count}</span>
+        <span class="w">${nNew ? `<span class="new">신규 ${nNew}</span>` : ""}${w ? `관심종목 ${w}` : ""}</span></button>`;
     }).join("");
-    $("mkDateHead").textContent = k === "management" || k === "halt" ? "지정일" : "";
+    $("mkDateHead").textContent = ["management", "halt", "all"].includes(k) ? "지정일" : "";
+    renderNews();
     const q = $("mkSearch").value.trim();
     const nq = norm(q);
     const watchOnly = $("mkWatchOnly").checked;
-    const rows = (state.mk.lists[k] || []).filter((it) =>
+    const source = k === "all" ? merged : state.mk.lists[k];
+    const rows = (source || []).filter((it) =>
       (!state.mk.market || it.market === state.mk.market) &&
       (!watchOnly || state.watch.some((w) => w.code === it.code)) &&
-      (!nq || norm(`${it.name} ${it.code} ${it.reason}`).includes(nq)));
-    $("mkRows").innerHTML = rows.map((it) => mkRowHTML(it, q)).join("");
+      (!nq || norm(`${it.name} ${it.code} ${k === "all" ? it.reasons.join(" ") + " " + it.kinds.map((x) => MK_LABEL[x]).join(" ") : it.reason}`).includes(nq)));
+    if (k !== "all") rows.sort((a, b) => isNew(b.code, k) - isNew(a.code, k)); // 신규를 맨 위로
+    $("mkRows").innerHTML = rows.map((it) => mkRowHTML(it, q, k)).join("");
     const empty = $("mkEmpty");
-    if (state.mk.errors[k] && !state.mk.lists[k]) { empty.hidden = false; empty.textContent = `불러오지 못했습니다: ${state.mk.errors[k]}`; }
-    else if (!state.mk.lists[k]) { empty.hidden = false; empty.textContent = "불러오는 중…"; }
-    else if (!rows.length) { empty.hidden = false; empty.textContent = state.mk.lists[k].length ? "조건에 맞는 종목이 없습니다." : "지금 지정된 종목이 없습니다."; }
+    const err = k === "all" ? null : state.mk.errors[k];
+    if (err && !source) { empty.hidden = false; empty.textContent = `불러오지 못했습니다: ${err}`; }
+    else if (!source || (k === "all" && !state.mk.loadedAt)) { empty.hidden = false; empty.textContent = "불러오는 중…"; }
+    else if (!rows.length) { empty.hidden = false; empty.textContent = source.length ? "조건에 맞는 종목이 없습니다." : "지금 지정된 종목이 없습니다."; }
     else empty.hidden = true;
     $("mkMeta").textContent = state.mk.loadedAt ? `${rows.length}종목 · ${state.mk.loadedAt} 확인` : "";
   }
@@ -775,6 +913,14 @@
     $("mkSearch").addEventListener("input", renderMarket);
     $("mkWatchOnly").addEventListener("change", renderMarket);
     $("mkRefresh").addEventListener("click", () => loadMarketLists(true));
+    $("mkNews").addEventListener("click", async (e) => {
+      if (e.target.closest("#mkAck")) ackSeen();
+      if (e.target.closest("#mkNotify") && "Notification" in window) {
+        const r = await Notification.requestPermission();
+        toast(r === "granted" ? "브라우저 알림을 켰습니다. 이 페이지가 열려 있으면 새 지정 종목을 알려드립니다." : "알림이 허용되지 않았습니다.");
+        renderNews();
+      }
+    });
     $("mkRows").addEventListener("click", (e) => {
       const star = e.target.closest("[data-mkstar]");
       if (star) {
@@ -919,7 +1065,9 @@
     else await loadDate(state.today);
     fillWatchNames();
     render();
-    loadMarketLists(false); // 공시 목록의 경고·관리 표시용으로 미리 받아둔다(5분 캐시)
+    state.mk.seen = loadSeen();
+    loadMarketLists(false); // 공시 목록의 경고·관리 표시와 신규 지정 알림용(5분마다 다시 확인)
+    setInterval(() => loadMarketLists(false), MK_REFRESH_MS);
     state.timer = setInterval(poll, REFRESH_MS);
   }
 
