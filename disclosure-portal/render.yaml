@@ -1,0 +1,24 @@
+# Render 무료(Free) 웹 서비스 기준 설정 — binance-futures-bot/render.yaml과 같은 방식.
+#
+# DB가 없는 구조라 무료 플랜의 "재시작마다 디스크 초기화"가 문제되지 않는다:
+# 공시 원본은 서버가 켜질 때 DART에서 다시 받고, 관심종목은 브라우저에 저장된다.
+# ~15분 미접속 시 슬립하는 건 똑같으니 .github/workflows/keep-render-awake.yml에
+# 이 서비스 주소도 등록할 것(저장소 변수 DISCLOSURE_URL).
+#
+# DART_API_KEY는 값 없이 자리만 정의 — Render 대시보드 Environment 화면에서만 입력.
+services:
+  - type: web
+    name: disclosure-portal
+    runtime: python
+    plan: free
+    rootDir: disclosure-portal
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /healthz
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      - key: POLL_SECONDS
+        value: "60"
+      - key: DART_API_KEY
+        sync: false

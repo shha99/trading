@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>공시 포털</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">공시</span>
+      <div>
+        <h1>공시 포털</h1>
+        <p class="sub">DART · KIND(거래소) 공시 실시간 모아보기</p>
+      </div>
+    </div>
+    <div class="live" id="live">
+      <span class="dot"></span><span id="liveText">연결 중…</span>
+    </div>
+    <div class="datenav">
+      <button id="prevDay" title="전날">◀</button>
+      <input type="date" id="dateInput" />
+      <button id="nextDay" title="다음날">▶</button>
+      <button id="todayBtn" class="ghost">오늘</button>
+    </div>
+  </header>
+
+  <div class="banner" id="banner" hidden></div>
+
+  <main class="layout">
+    <aside class="watch">
+      <div class="watch-head">
+        <h2>관심종목 <span class="count" id="watchCount">0</span></h2>
+      </div>
+      <form id="addForm" class="add">
+        <input id="addInput" list="corpList" placeholder="종목코드 또는 회사명" autocomplete="off" />
+        <button type="submit">추가</button>
+        <datalist id="corpList"></datalist>
+      </form>
+      <ul id="watchList" class="watch-list"></ul>
+      <p class="watch-empty" id="watchEmpty">목록의 ☆를 누르거나 위에서 추가하세요.</p>
+      <div class="watch-foot">
+        <button id="exportBtn" class="ghost small">링크로 내보내기</button>
+        <p class="hint">관심종목은 이 브라우저에 저장돼 서버가 재시작돼도 유지됩니다. 다른 기기로 옮길 때는 링크를 복사해 열면 됩니다.</p>
+      </div>
+    </aside>
+
+    <section class="feed">
+      <div class="tabs" role="tablist">
+        <button class="tab active" data-tab="all" role="tab">전체 공시 <span id="allCount">0</span></button>
+        <button class="tab" data-tab="watch" role="tab">관심종목 <span id="watchFeedCount">0</span></button>
+      </div>
+
+      <div class="filters">
+        <div class="seg" id="marketSeg">
+          <button data-m="" class="on">전체</button>
+          <button data-m="유가">유가</button>
+          <button data-m="코스닥">코스닥</button>
+          <button data-m="코넥스">코넥스</button>
+          <button data-m="기타">기타</button>
+        </div>
+        <label class="chk"><input type="checkbox" id="fExchange" /> 거래소(KIND)만</label>
+        <label class="chk"><input type="checkbox" id="fImportant" /> 중요 공시만</label>
+        <label class="chk"><input type="checkbox" id="fNoCorrection" /> 정정 제외</label>
+        <input type="search" id="search" placeholder="회사명·제목 검색" />
+      </div>
+
+      <div class="table-wrap">
+        <table class="list">
+          <thead>
+            <tr>
+              <th class="c-time">감지</th>
+              <th class="c-mkt">시장</th>
+              <th class="c-corp">회사</th>
+              <th>공시 제목</th>
+              <th class="c-flr">제출인</th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+        <p class="empty" id="empty" hidden></p>
+        <button id="moreBtn" class="ghost more" hidden>더 보기</button>
+      </div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" hidden></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

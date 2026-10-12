@@ -30,3 +30,13 @@ jobs:
           URL="${{ vars.RENDER_URL || 'https://binance-futures-bot-w5ei.onrender.com' }}"
           echo "Pinging $URL"
           curl -sS -o /dev/null -w "HTTP %{http_code}\n" --max-time 60 "$URL"
+
+      # 공시 포털(disclosure-portal/) — 배포 후 저장소 Settings > Variables에
+      # DISCLOSURE_URL(예: https://disclosure-portal-xxxx.onrender.com)을 넣으면 같이 깨운다.
+      # 슬립 중엔 오늘 공시 폴링도 멈추므로, 상시 수집하려면 등록해둘 것.
+      - name: Ping disclosure portal
+        if: ${{ vars.DISCLOSURE_URL != '' }}
+        run: |
+          URL="${{ vars.DISCLOSURE_URL }}/healthz"
+          echo "Pinging $URL"
+          curl -sS -o /dev/null -w "HTTP %{http_code}\n" --max-time 60 "$URL"
