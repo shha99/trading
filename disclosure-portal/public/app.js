@@ -143,6 +143,7 @@
     state.limit = PAGE;
     state.freshIds.clear();
     state.error = null;
+    state.lastChecked = null; // 불러오는 동안 이전 시각이 남지 않게
     $("dateInput").value = toInput(date);
     $("nextDay").disabled = date >= state.today;
     $("rows").innerHTML = "";
@@ -237,6 +238,7 @@
     state.limit = PAGE;
     state.freshIds.clear();
     state.error = null;
+    state.lastChecked = null; // 불러오는 동안 이전 시각이 남지 않게
     $("rangeFrom").value = toInput(from);
     $("rangeTo").value = toInput(to);
     $("rows").innerHTML = "";
@@ -373,6 +375,16 @@
     else if (state.error) setLive("err", "갱신 실패 · 30초 뒤 다시 시도");
     else if (state.lastChecked) setLive("ok", `실시간 · 30초마다 확인 · 마지막 ${state.lastChecked}`);
     else setLive("", "불러오는 중…");
+    renderDiscMeta();
+  }
+
+  // 필터 줄의 "N건 · 마지막 업데이트" (투자경고·관리종목 탭과 같은 자리)
+  function renderDiscMeta(count = scoped().length) {
+    const t = state.lastChecked;
+    $("discMeta").textContent = !t ? ""
+      : state.mode === "range" ? `${count.toLocaleString()}건 · ${t} 불러옴`
+      : state.date === state.today ? `${count.toLocaleString()}건 · ${t} 업데이트 (30초마다 확인)`
+      : `${count.toLocaleString()}건 · ${t} 불러옴`;
   }
 
   function setLive(cls, text) {
@@ -484,6 +496,7 @@
     }
     const filtering = st.whole || state.cats.size || state.market || $("fExchange").checked || $("fImportant").checked || $("fNoCorrection").checked;
     $("resultLine").textContent = filtering ? `조건에 맞는 공시 ${list.length.toLocaleString()}건` : "";
+    renderDiscMeta(all.length);
     $("allCount").textContent = all.length.toLocaleString();
     $("watchFeedCount").textContent = all.filter((it) => watchOf(it)).length.toLocaleString();
     renderCats(base);
