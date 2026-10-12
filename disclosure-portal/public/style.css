@@ -161,6 +161,11 @@ td.period .est { font-size: 11px; color: var(--faint); }
 td.note { font-size: 12.5px; color: var(--muted); }
 .list tr.past td { opacity: 0.55; }
 .linkbtn.del { color: var(--danger); }
+.list tr.pin-head td { background: #fffaeb; font-size: 12px; font-weight: 700; color: #8a5a00; padding: 8px 14px; }
+.list tr.pinned { background: #fffdf5; }
+.list tr.pinned:hover { background: #fff7e0; }
+.list tr.pin-sep td { padding: 0; height: 6px; background: var(--line-soft); border-bottom: 1px solid var(--line); }
+.ann { font-size: 11px; color: #8a5a00; margin-top: 3px; font-weight: 600; }
 
 .live { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; white-space: nowrap; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }

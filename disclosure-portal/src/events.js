@@ -82,7 +82,10 @@ export async function fetchCandidates(apiKey, today, fetchImpl = fetch) {
     if (!title.includes("주요사항보고서") || title.includes("철회")) continue;
     const hit = DEAL_APIS.find(([kw]) => title.includes(kw));
     if (!hit) continue;
-    deals.set(`${r.corp_code}:${hit[1]}`, { ...base(r), api: hit[1], kind: hit[2], rcept_no: r.rcept_no, rcept_dt: r.rcept_dt });
+    const key = `${r.corp_code}:${hit[1]}`;
+    const prev = deals.get(key);
+    // rcept_no: 최신 보고서(정정 포함, 일정을 읽을 것), first_rcept_no: 처음 공시된 보고서(언제 "떴는지")
+    deals.set(key, { ...base(r), api: hit[1], kind: hit[2], rcept_no: r.rcept_no, rcept_dt: r.rcept_dt, first_rcept_no: prev ? prev.first_rcept_no : r.rcept_no });
   }
 
   // 공개매수: 정정이 아닌 신고서가 새 공개매수의 시작, 그 뒤 정정은 같은 건, 결과보고서가 나오면 종료

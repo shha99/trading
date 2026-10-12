@@ -832,11 +832,11 @@
           const r = await fetchJSON(`/api/events/deal?api=${d.api}&corp_code=${d.corp_code}&rcept_no=${d.rcept_no}${q}`);
           const e = r.event;
           if (!e || e.none) return null;
-          return { ...e, id: `deal:${d.corp_code}:${d.api}`, name: d.corp_name, code: d.stock_code, market: d.market, withdrawn: Boolean(d.withdrawn_rcept_no) };
+          return { ...e, id: `deal:${d.corp_code}:${d.api}`, name: d.corp_name, code: d.stock_code, market: d.market, withdrawn: Boolean(d.withdrawn_rcept_no), announced: (d.first_rcept_no || d.rcept_no).slice(0, 8) };
         }),
         ...c.tenders.map((t) => async () => {
           const r = await fetchJSON(`/api/events/tender?rcept_no=${t.rcept_no}${q}`);
-          return { ...r.event, id: `tender:${t.first_rcept_no}`, kind: "공개매수", name: t.corp_name, code: t.stock_code, market: t.market, offeror: t.offeror, done: t.done };
+          return { ...r.event, id: `tender:${t.first_rcept_no}`, announced: t.first_rcept_no.slice(0, 8), kind: "공개매수", name: t.corp_name, code: t.stock_code, market: t.market, offeror: t.offeror, done: t.done };
         }),
       ];
       const out = [];
@@ -940,7 +940,7 @@
     return dt.toISOString().slice(0, 10).replaceAll("-", "");
   }
 
-  function calRowHTML(e) {
+  function calRowHTML(e, pinned = false) {
     const st = status(e);
     const watched = isWatchedCode(e.code);
     const q = e.code ? state.cal.quotes[e.code] : null;
@@ -959,8 +959,8 @@
       e.manual ? "직접 추가" : "",
     ].filter(Boolean).join(" · ");
     const kindLabel = e.type === "tender" ? "공개매수" : `매수청구·${e.kind || ""}`.replace(/·$/, "");
-    return `<tr class="${watched ? "watched" : ""} ${st.key === "done" ? "past" : ""}">
-      <td><span class="st ${st.key}">${st.label}</span></td>
+    return `<tr class="${watched ? "watched" : ""} ${st.key === "done" && !pinned ? "past" : ""} ${pinned ? "pinned" : ""}">
+      <td><span class="st ${st.key}">${st.label}</span>${pinned && e.announced ? `<div class="ann">공시 ${fmtMD(e.announced)}</div>` : ""}</td>
       <td class="kind-cell"><span class="kind ev ${e.type}">${esc(kindLabel)}</span></td>
       <td><div class="corp">
         ${e.code ? `<button class="star ${watched ? "on" : ""}" data-calstar="${esc(e.code)}" data-name="${esc(e.name)}">${watched ? "★" : "☆"}</button>` : ""}
@@ -975,6 +975,21 @@
         ? `<button class="linkbtn del" data-caldel="${esc(e.id)}">삭제</button>`
         : `<a class="linkbtn" href="https://dart.fss.or.kr/dsaf001/main.do?rcpNo=${esc(e.rcept_no)}" target="_blank" rel="noopener">원문</a>`}</td>
     </tr>`;
+  }
+
+  // 📌 최근 공시: 처음 공시된 날짜가 가장 최근인 공개매수·매수청구 각 3건을 리스트 맨 위에 고정.
+  // 날짜 선택·체크박스 필터와 상관없이 항상 보인다(철회된 건만 뺀다).
+  const PIN_PER_TYPE = 3;
+  function pinnedHTML() {
+    const pick = (type) => allEvents()
+      .filter((e) => e.type === type && !e.withdrawn && e.announced)
+      .sort((a, b) => b.announced.localeCompare(a.announced) || a.name.localeCompare(b.name))
+      .slice(0, PIN_PER_TYPE);
+    const list = [...pick("tender"), ...pick("buyback")];
+    if (!list.length) return "";
+    return `<tr class="pin-head"><td colspan="9">📌 최근 공시된 공개매수·매수청구 (각 ${PIN_PER_TYPE}건, 처음 공시일 기준)</td></tr>` +
+      list.map((e) => calRowHTML(e, true)).join("") +
+      '<tr class="pin-sep"><td colspan="9"></td></tr>';
   }
 
   function renderCal() {
@@ -993,7 +1008,8 @@
     });
     $("calListTitle").textContent = cal.selected ? `${+cal.selected.slice(4, 6)}월 ${+cal.selected.slice(6, 8)}일 진행 중인 일정 ${rows.length}건` : `일정 ${rows.length}건`;
     $("calClearDay").hidden = !cal.selected;
-    $("calRows").innerHTML = rows.map(calRowHTML).join("");
+    $("calPinned").innerHTML = pinnedHTML();
+    $("calRows").innerHTML = rows.map((e) => calRowHTML(e)).join("");
     const empty = $("calEmpty");
     if (cal.error) { empty.hidden = false; empty.textContent = `불러오지 못했습니다: ${cal.error}`; }
     else if (cal.loading && !cal.events.length) { empty.hidden = false; empty.textContent = "DART에서 일정을 모으는 중… (처음엔 30초 정도 걸릴 수 있어요)"; }
