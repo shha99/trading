@@ -11,6 +11,7 @@
 import { DartError, PAGE_COUNT, dartRequest } from "./dart.js";
 
 // 주요사항보고서 제목 → 구조화 API. 분할합병을 합병보다 먼저 확인한다.
+// "doc"은 구조화 API가 없어 보고서 본문만 읽는 종류다.
 export const DEAL_APIS = [
   ["회사분할합병결정", "cmpDvmgDecsn", "분할합병"],
   ["회사합병결정", "cmpMgDecsn", "합병"],
@@ -18,6 +19,8 @@ export const DEAL_APIS = [
   ["주식교환·이전결정", "stkExtrDecsn", "주식교환·이전"],
   ["영업양수결정", "bsnInhDecsn", "영업양수"],
   ["영업양도결정", "bsnTrfDecsn", "영업양도"],
+  ["회사분할결정", "cmpDvDecsn", "물적분할"], // 인적분할은 매수청구 없음 — 물적분할만 남긴다
+  ["중요한자산양수도결정", "doc", "중요자산양수도"],
 ];
 const DEAL_LABEL = Object.fromEntries(DEAL_APIS.map(([, api, label]) => [api, label]));
 
@@ -58,17 +61,25 @@ export async function fetchCandidates(apiKey, today, fetchImpl = fetch) {
   for (const [bgn, end] of windows) {
     for (const cls of SCOPE) jobs.push(listAll(apiKey, { bgn_de: bgn, end_de: end, corp_cls: cls, pblntf_ty: "B" }, fetchImpl));
     jobs.push(listAll(apiKey, { bgn_de: bgn, end_de: end, pblntf_detail_ty: "D004" }, fetchImpl)); // 공개매수
+    jobs.push(listAll(apiKey, { bgn_de: bgn, end_de: end, pblntf_detail_ty: "C004" }, fetchImpl)); // 합병등 증권신고서(철회 확인용)
   }
   const rows = (await Promise.all(jobs)).flat().filter((r) => SCOPE.has(r.corp_cls));
   rows.sort((a, b) => a.rcept_no.localeCompare(b.rcept_no)); // 오래된 것부터
 
   const base = (r) => ({ corp_code: r.corp_code, corp_name: r.corp_name.trim(), stock_code: (r.stock_code || "").trim(), market: MARKET[r.corp_cls] });
 
+  // 철회: 합병등 증권신고서 철회신고서, 또는 제목에 "철회"가 붙은 주요사항보고서 → 회사별 마지막 철회 접수번호
+  const withdrawn = new Map();
+  for (const r of rows) {
+    const title = r.report_nm.replace(/\s/g, "");
+    if (title.includes("철회신고서") || (title.includes("주요사항보고서") && title.includes("철회"))) withdrawn.set(r.corp_code, r.rcept_no);
+  }
+
   // 매수청구 후보: 회사×API마다 가장 최근 보고서 하나
   const deals = new Map();
   for (const r of rows) {
     const title = r.report_nm.replace(/\s/g, "");
-    if (!title.includes("주요사항보고서")) continue;
+    if (!title.includes("주요사항보고서") || title.includes("철회")) continue;
     const hit = DEAL_APIS.find(([kw]) => title.includes(kw));
     if (!hit) continue;
     deals.set(`${r.corp_code}:${hit[1]}`, { ...base(r), api: hit[1], kind: hit[2], rcept_no: r.rcept_no, rcept_dt: r.rcept_dt });
@@ -94,7 +105,47 @@ export async function fetchCandidates(apiKey, today, fetchImpl = fetch) {
       if (t) { t.done = true; t.result_rcept_no = r.rcept_no; open.delete(r.corp_code); }
     }
   }
+  for (const d of deals.values()) {
+    const w = withdrawn.get(d.corp_code);
+    if (w && w > d.rcept_no) d.withdrawn_rcept_no = w; // 결정 뒤에 철회가 나왔다
+  }
   return { deals: [...deals.values()], tenders };
+}
+
+
+// 보고서 본문에서 매수청구 정보 읽기. 구조화 API에 없는 칸(영업양수도의 행사기간, 물적분할 등)을
+// 채우는 데 쓴다. 표가 글자로 풀리면 "주식매수청구권 행사기간 시작일 2026년 10월 20일 종료일 …"이나
+// "행사기간 2026.11.06 ~ 2026.11.25" 꼴이 된다.
+const DATE = "(\\d{4})\\s*[년.\\-]\\s*(\\d{1,2})\\s*[월.\\-]\\s*(\\d{1,2})\\s*일?\\.?";
+export function parseAppraisalText(text) {
+  const t = text.replace(/<[^>]+>/g, " ").replace(/&nbsp;|&#160;/g, " ").replace(/\s+/g, " ");
+  const section = t.match(/주식\s*매수\s*청구권?에\s*관한\s*사항\s*[-–:]?\s*(.{0,30})/);
+  if (section && /해당\s*사항\s*(?:이\s*)?없/.test(section[1])) return { none: true };
+  const pad = (x) => x.padStart(2, "0");
+  const pm = t.match(new RegExp(`행사\\s*기간[^0-9]{0,30}?${DATE}[^0-9]{0,15}?${DATE}`));
+  const gm = t.match(new RegExp(`주주\\s*총회\\s*(?:예정)?\\s*(?:일자|일)[^0-9]{0,10}?${DATE}`));
+  let planned = null;
+  // "1주당"의 1은 건너뛰고 숫자를 찾는다
+  for (const m of t.matchAll(/(?:매수\s*예정\s*가격|주식\s*매수\s*(?:청구\s*)?가격|매수\s*가격)(?:1\s*주\s*당|[^0-9]){0,80}?([\d,]{3,})\s*원/g)) {
+    const v = price(m[1]);
+    if (v && v >= 100 && v <= 5_000_000) { planned = v; break; } // "100억원 초과 시 해제" 같은 조건 금액은 건너뜀
+  }
+  return {
+    start: pm ? `${pm[1]}${pad(pm[2])}${pad(pm[3])}` : null,
+    end: pm ? `${pm[4]}${pad(pm[5])}${pad(pm[6])}` : null,
+    gm_date: gm ? `${gm[1]}${pad(gm[2])}${pad(gm[3])}` : null,
+    price: planned,
+  };
+}
+
+async function documentText(apiKey, rceptNo, fetchImpl) {
+  const buf = await dartRequest(apiKey, "document.xml", { rcept_no: rceptNo }, fetchImpl);
+  const head = new TextDecoder().decode(new Uint8Array(buf).subarray(0, 200));
+  if (!head.startsWith("PK")) {
+    const m = head.match(/<message>([^<]*)/);
+    throw new DartError(`공시 원문을 받지 못했습니다${m ? `: ${m[1]}` : ""}`);
+  }
+  return new TextDecoder("utf-8").decode(await unzipFirst(buf));
 }
 
 // "(주)진에어 (JIN AIR CO., LTD.) (에어서울(주)에 대한 사항은 …)" → "(주)진에어": 띄어 쓴 괄호 설명과 영문명을 뗀다
@@ -104,30 +155,50 @@ export function cleanName(s) {
   return out.replace(/\((?=[A-Za-z])[^()]*\)/g, "").trim();
 }
 
-// 매수청구: 구조화 API에서 기간·가격·주총일을 꺼낸다. 필드 이름이 API마다 접두어만 달라서
-// (mgsc_aprskh_expd_bgd, extrsc_aprskh_expd_bgd …) 끝부분으로 찾는다.
-export async function fetchDeal(apiKey, api, corpCode, today, fetchImpl = fetch) {
+// 매수청구 일정 하나. 순서:
+// 1) 구조화 API(합병·분할합병·주식교환이전·영업양수도·분할)의 행사기간·매수예정가격·주총일 칸
+// 2) 빈 칸이 있거나 추정이 필요한 종류면 같은 보고서 본문을 읽어 채운다
+// 3) 그래도 기간이 없고 주총일만 있으면 "주총일부터 20일"로 추정(추정 표시)
+// rceptNo는 후보 목록에서 찾은 최신 보고서(정정 포함) — 본문만 읽는 종류("doc")에 쓴다.
+export async function fetchDeal(apiKey, api, corpCode, today, fetchImpl = fetch, rceptNo = "") {
   if (!DEAL_LABEL[api]) throw new DartError("알 수 없는 보고서 종류입니다.");
-  // 이 API의 기간은 이사회 결의일 기준이라, 결의가 오래전이고 정정만 최근인 건도 잡히게 넉넉히 본다
-  const data = await dartRequest(apiKey, `${api}.json`, { corp_code: corpCode, bgn_de: addDays(today, -500), end_de: today }, fetchImpl);
-  const list = (data && data.list) || [];
-  if (!list.length) return null;
-  const x = list.reduce((a, b) => (a.rcept_no > b.rcept_no ? a : b)); // 가장 최근(정정 포함)
+  let x = { rcept_no: rceptNo };
+  if (api !== "doc") {
+    // 이 API의 기간은 이사회 결의일 기준이라, 결의가 오래전이고 정정만 최근인 건도 잡히게 넉넉히 본다
+    const data = await dartRequest(apiKey, `${api}.json`, { corp_code: corpCode, bgn_de: addDays(today, -500), end_de: today }, fetchImpl);
+    const list = (data && data.list) || [];
+    if (!list.length) return null;
+    x = list.reduce((a, b) => (a.rcept_no > b.rcept_no ? a : b)); // 가장 최근(정정 포함)
+    if (api === "cmpDvDecsn" && !/물적\s*분할/.test(x.dv_mth || "")) return { none: true, rcept_no: x.rcept_no };
+  }
   const field = (suffix) => {
     const k = Object.keys(x).find((key) => key.endsWith(suffix));
     return k ? x[k] : null;
   };
   let start = parseKoDate(field("aprskh_expd_bgd"));
   let end = parseKoDate(field("aprskh_expd_edd"));
-  const gm = parseKoDate(field("gmtsck_prd"));
+  let gm = parseKoDate(field("gmtsck_prd"));
+  let planned = price(x.aprskh_plnprc);
+  let source = "구조화";
+
+  if (!start || !end || !planned) {
+    try {
+      const t = parseAppraisalText(await documentText(apiKey, x.rcept_no, fetchImpl));
+      if (t.none && api === "doc") return { none: true, rcept_no: x.rcept_no };
+      if (!start && !end && t.start && t.end) { start = t.start; end = t.end; source = "본문"; }
+      if (!planned && t.price) planned = t.price;
+      if (!gm && t.gm_date) gm = t.gm_date;
+    } catch {
+      // 본문을 못 읽으면 구조화 칸만으로 간다
+    }
+  }
   let estimated = false;
-  if (!start && !end && gm && (api === "bsnInhDecsn" || api === "bsnTrfDecsn")) {
-    // 영업양수·양도 보고서엔 행사기간 칸이 없다 — 상법상 주총 결의일부터 20일(첫날 불산입)
+  if (!start && !end && gm && ["bsnInhDecsn", "bsnTrfDecsn", "cmpDvDecsn", "doc"].includes(api)) {
+    // 상법상 주총 결의일부터 20일(첫날 불산입)
     start = gm;
     end = addDays(gm, 20);
     estimated = true;
   }
-  const planned = price(x.aprskh_plnprc);
   if (!start && !end && !planned) return { none: true, rcept_no: x.rcept_no }; // 소규모·간이합병 등 매수청구 없음
   return {
     type: "buyback",
@@ -135,9 +206,10 @@ export async function fetchDeal(apiKey, api, corpCode, today, fetchImpl = fetch)
     start,
     end,
     estimated,
+    source: estimated ? "추정" : source,
     gm_date: gm,
     price: planned,
-    partner: cleanName(x.mgptncmp_cmpnm || x.extrcmp_cmpnm || x.dlptn_cmpnm || "") || null,
+    partner: cleanName(x.mgptncmp_cmpnm || x.extrcmp_cmpnm || x.dlptn_cmpnm || x.dvfcmp_cmpnm || "") || null,
     rcept_no: x.rcept_no,
   };
 }
@@ -180,12 +252,5 @@ export function parseTenderText(text) {
 }
 
 export async function fetchTender(apiKey, rceptNo, fetchImpl = fetch) {
-  const buf = await dartRequest(apiKey, "document.xml", { rcept_no: rceptNo }, fetchImpl);
-  const head = new TextDecoder().decode(new Uint8Array(buf).subarray(0, 200));
-  if (!head.startsWith("PK")) {
-    const m = head.match(/<message>([^<]*)/);
-    throw new DartError(`공시 원문을 받지 못했습니다${m ? `: ${m[1]}` : ""}`);
-  }
-  const xml = new TextDecoder("utf-8").decode(await unzipFirst(buf));
-  return { type: "tender", rcept_no: rceptNo, ...parseTenderText(xml) };
+  return { type: "tender", rcept_no: rceptNo, ...parseTenderText(await documentText(apiKey, rceptNo, fetchImpl)) };
 }

@@ -121,10 +121,11 @@ async function handleEvents(url, env, ctx, fetchImpl) {
   if (part === "deal") {
     const api = url.searchParams.get("api") || "";
     const corp = url.searchParams.get("corp_code") || "";
-    const rcept = url.searchParams.get("rcept_no") || ""; // 후보 목록의 최신 보고서 — 캐시 키에만 쓴다
-    if (!DEAL_APIS.some(([, a]) => a === api) || !/^\d{8}$/.test(corp)) return json({ detail: "api 또는 corp_code가 잘못됐습니다." }, 400);
+    const rcept = url.searchParams.get("rcept_no") || ""; // 후보 목록의 최신 보고서 — 캐시 키, 본문 읽기에 쓴다
+    if (!DEAL_APIS.some(([, a]) => a === api) || !/^\d{8}$/.test(corp) || (rcept && !/^\d{14}$/.test(rcept))) return json({ detail: "api, corp_code 또는 rcept_no가 잘못됐습니다." }, 400);
+    if (api === "doc" && !rcept) return json({ detail: "rcept_no가 필요합니다." }, 400);
     const today = todayKst();
-    return cached(`events/deal?api=${api}&corp=${corp}&r=${rcept}&d=${today}`, DEAL_TTL, fresh, ctx, async () => ({ event: await fetchDeal(env.DART_API_KEY, api, corp, today, fetchImpl) }));
+    return cached(`events/deal?api=${api}&corp=${corp}&r=${rcept}&d=${today}`, DEAL_TTL, fresh, ctx, async () => ({ event: await fetchDeal(env.DART_API_KEY, api, corp, today, fetchImpl, rcept) }));
   }
   if (part === "tender") {
     const rcept = url.searchParams.get("rcept_no") || "";

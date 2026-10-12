@@ -173,7 +173,7 @@ test("/api/market: 네이버 목록을 코스피·코스닥 주식만 남기고 
 
 // ---- 캘린더 ----
 import { deflateRawSync } from "node:zlib";
-import { cleanName, fetchCandidates, fetchDeal, parseKoDate, parseTenderText, unzipFirst } from "../src/events.js";
+import { cleanName, fetchCandidates, fetchDeal, parseAppraisalText, parseKoDate, parseTenderText, unzipFirst } from "../src/events.js";
 
 test("상대회사 이름 정리", () => {
   assert.equal(cleanName("(주)진에어 (JIN AIR CO., LTD.) (에어서울(주)에 대한 사항은 '18. 기타 투자판단과 관련한 중요사항'을 참고하시기 바랍니다.)"), "(주)진에어");
@@ -227,7 +227,7 @@ test("캘린더 후보: 공개매수 정정·결과보고서 묶기, 매수청�
   const fetchImpl = async (url) => {
     const ty = url.searchParams.get("pblntf_ty") || url.searchParams.get("pblntf_detail_ty");
     const end = url.searchParams.get("end_de");
-    if (end !== "20261012") return listResp([])(); // 두 번째(옛날) 창은 비어 있게
+    if (end !== "20261012" || ty === "C004") return listResp([])(); // 옛날 창·합병 증권신고서는 비어 있게
     const want = rows.filter((r) => (ty === "B" ? r.report_nm.includes("주요사항") : r.report_nm.includes("공개매수")) && (!url.searchParams.get("corp_cls") || r.corp_cls === url.searchParams.get("corp_cls")));
     return listResp(want)();
   };
@@ -251,4 +251,52 @@ test("매수청구 일정: 합병은 행사기간 칸, 영업양수는 주총일
 
   const small = { rcept_no: "20260101000001", aprskh_plnprc: "-", mgsc_aprskh_expd_bgd: "-", mgsc_aprskh_expd_edd: "-" };
   assert.equal((await fetchDeal("k", "cmpMgDecsn", "00000001", "20261012", listResp([small]))).none, true);
+});
+
+test("보고서 본문에서 매수청구 기간·가격 읽기", () => {
+  // 물적분할 표(금양) — "행사기간 시작일 … 종료일 …"
+  const a = parseAppraisalText("주주총회예정일자 2026년 10월 19일 주식매수청구권 행사기간 시작일 2026년 10월 20일 종료일 2026년 11월 08일 채권자 이의제출기간 … 주식매수예정가격 1주당 12,345원");
+  assert.deepEqual(a, { start: "20261020", end: "20261108", gm_date: "20261019", price: 12345 });
+  // 조건 금액(100억원)은 가격으로 보지 않는다
+  const b = parseAppraisalText("매수대금 합이 금 10,000,000,000원을 초과하는 경우 … 행사 기간 2026.11.06 ~ 2026.11.25 … 매수예정가격 7,332원");
+  assert.deepEqual([b.start, b.end, b.price], ["20261106", "20261125", 7332]);
+  assert.equal(parseAppraisalText("5. 주식매수청구권에 관한 사항 - 해당사항 없습니다. 6. 양수도되는 자산").none, true);
+});
+
+test("영업양수: 본문에 기간이 있으면 추정 대신 본문 값", async () => {
+  const inh = { rcept_no: "20260929000583", aprskh_plnprc: "7,332", gmtsck_prd: "2026년 11월 06일" };
+  const fetchImpl = async (url) => {
+    if (url.pathname.endsWith("document.xml")) return new Response(makeZip("1.xml", "<P>주식매수청구권 행사기간 2026년 11월 06일 ~ 2026년 11월 25일</P>"));
+    return listResp([inh])();
+  };
+  const e = await fetchDeal("k", "bsnInhDecsn", "00176835", "20261012", fetchImpl);
+  assert.deepEqual([e.start, e.end, e.estimated, e.source], ["20261106", "20261125", false, "본문"]);
+});
+
+test("회사분할: 인적분할은 제외, 물적분할은 본문에서 일정", async () => {
+  const base = { rcept_no: "20261002000513", gmtsck_prd: "2026년 10월 19일" };
+  const human = await fetchDeal("k", "cmpDvDecsn", "1", "20261012", listResp([{ ...base, dv_mth: "인적분할 방식" }]));
+  assert.equal(human.none, true);
+  const fetchImpl = async (url) => {
+    if (url.pathname.endsWith("document.xml")) return new Response(makeZip("1.xml", "주식매수청구권 행사기간 시작일 2026년 10월 20일 종료일 2026년 11월 08일"));
+    return listResp([{ ...base, dv_mth: "단순ㆍ물적분할의 방식으로 분할한다" }])();
+  };
+  const e = await fetchDeal("k", "cmpDvDecsn", "00106119", "20261012", fetchImpl);
+  assert.deepEqual([e.kind, e.start, e.end, e.gm_date], ["물적분할", "20261020", "20261108", "20261019"]);
+});
+
+test("캘린더 후보: 결정 뒤 철회신고서가 나오면 철회 표시", async () => {
+  const rows = [
+    { rcept_no: "20260716000668", corp_code: "00605522", corp_name: "아리바이오홀딩스", stock_code: "000000", corp_cls: "K", report_nm: "주요사항보고서(회사합병결정)", rcept_dt: "20260716" },
+    { rcept_no: "20260929000637", corp_code: "00605522", corp_name: "아리바이오홀딩스", stock_code: "000000", corp_cls: "K", report_nm: "철회신고서", rcept_dt: "20260929" },
+  ];
+  const fetchImpl = async (url) => {
+    const ty = url.searchParams.get("pblntf_ty") || url.searchParams.get("pblntf_detail_ty");
+    if (url.searchParams.get("end_de") !== "20261012") return listResp([])();
+    if (ty === "B") return listResp(rows.slice(0, 1).filter((r) => r.corp_cls === url.searchParams.get("corp_cls")))();
+    if (ty === "C004") return listResp(rows.slice(1))();
+    return listResp([])();
+  };
+  const c = await fetchCandidates("k", "20261012", fetchImpl);
+  assert.equal(c.deals[0].withdrawn_rcept_no, "20260929000637");
 });

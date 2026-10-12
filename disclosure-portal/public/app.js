@@ -832,7 +832,7 @@
           const r = await fetchJSON(`/api/events/deal?api=${d.api}&corp_code=${d.corp_code}&rcept_no=${d.rcept_no}${q}`);
           const e = r.event;
           if (!e || e.none) return null;
-          return { ...e, id: `deal:${d.corp_code}:${d.api}`, name: d.corp_name, code: d.stock_code, market: d.market };
+          return { ...e, id: `deal:${d.corp_code}:${d.api}`, name: d.corp_name, code: d.stock_code, market: d.market, withdrawn: Boolean(d.withdrawn_rcept_no) };
         }),
         ...c.tenders.map((t) => async () => {
           const r = await fetchJSON(`/api/events/tender?rcept_no=${t.rcept_no}${q}`);
@@ -886,6 +886,7 @@
 
   function status(e) {
     const t = state.today;
+    if (e.withdrawn) return { key: "done", label: "철회", order: 5 };
     if (!e.start && !e.end) return { key: "tbd", label: "미정", order: 3 };
     if (e.end && t > e.end) return { key: "done", label: "종료", order: 4 };
     if (e.start && t < e.start) return { key: "soon", label: `D-${daysDiff(t, e.start)}`, order: 2, sort: e.start };
@@ -952,6 +953,8 @@
       e.partner ? `상대 ${esc(e.partner)}` : "",
       e.gm_date ? `주총 ${fmtMD(e.gm_date)}` : "",
       e.done ? "결과보고서 제출" : "",
+      e.withdrawn ? "결정 뒤 철회 공시 — 원문 확인" : "",
+      e.source === "본문" ? "기간은 보고서 본문 기준" : "",
       e.memo ? esc(e.memo) : "",
       e.manual ? "직접 추가" : "",
     ].filter(Boolean).join(" · ");
