@@ -144,3 +144,29 @@ test("/api/day: 하루치 한 시장을 여러 페이지 모아서 돌려준다"
   assert.equal((await handle(req("/api/day?date=20261008&cls=N"), env(), ctx, fetchImpl)).status, 400);
   assert.equal((await handle(req("/api/day?date=20991231&cls=Y"), env(), ctx, fetchImpl)).status, 400);
 });
+
+test("/api/market: 네이버 목록을 코스피·코스닥 주식만 남기고 사유 코드를 풀어준다", async () => {
+  const rows = [
+    { itemcode: "054410", itemname: "케이피티유", sosok: "1", type: "ST", nowPrice: "2450", prevChangeRate: "1.66", managementDate: "20261008", managementReasonCode: "6045", tradeStopYn: "N", marketAlertType: "00" },
+    { itemcode: "047400", itemname: "유니온머티리얼", sosok: "0", type: "ST", nowPrice: "633", prevChangeRate: "-25.62", managementDate: "20261008", managementReasonCode: "9999", tradeStopYn: "N", marketAlertType: "02" },
+    { itemcode: "001380", itemname: "SG글로벌", sosok: "0", type: "ST", managementDate: "20261007", managementReasonCode: "2008", tradeStopYn: "N" },
+    { itemcode: "123456", itemname: "어떤ETF", sosok: "0", type: "ETF", managementDate: "20261001", tradeStopYn: "N" },
+    { itemcode: "999999", itemname: "코넥스주", sosok: "2", type: "ST", managementDate: "20261001", tradeStopYn: "N" },
+  ];
+  let called;
+  const fetchImpl = async (url) => { called = url; return new Response(JSON.stringify(rows)); };
+  const r = await handle(req("/api/market?kind=management"), env(), ctx, fetchImpl);
+  assert.equal(r.status, 200);
+  const body = await r.json();
+  assert.equal(called.searchParams.get("orderType"), "statusTag");
+  assert.deepEqual(body.items.map((i) => i.name), ["케이피티유", "유니온머티리얼", "SG글로벌"]);
+  assert.equal(body.items[2].reason, "매출액/주가/시가총액 (코드 2008)");
+  assert.equal(body.items[0].reason, "시가총액 40억원 미달 30일 연속");
+  assert.equal(body.items[0].market, "코스닥");
+  assert.equal(body.items[1].reason, "사유코드 9999");
+  assert.equal(body.items[1].alert, "투자경고");
+
+  assert.equal((await handle(req("/api/market?kind=nope"), env(), ctx, fetchImpl)).status, 400);
+  const broken = await handle(req("/api/market?kind=warning"), env(), ctx, async () => new Response("<html>", { status: 200 }));
+  assert.equal(broken.status, 502);
+});

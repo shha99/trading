@@ -8,9 +8,11 @@
 //   DART_API_KEY     OpenDART 인증키 (필수)
 //   PORTAL_PASSWORD  설정하면 접속할 때 비밀번호를 묻는다(아이디는 아무거나) — "나만 보기"
 import { DartError, TRADE_CATEGORIES, fetchDay, fetchPage } from "./dart.js";
+import { MARKET_KINDS, MarketError, fetchMarketList } from "./market.js";
 
 const TODAY_TTL = 15; // 오늘 목록 캐시(초) — 탭 여러 개를 열어도 DART 호출이 늘지 않게
 const PAST_TTL = 600; // 지난 날짜는 거의 안 바뀐다
+const MARKET_TTL = 300; // 시장조치 종목 목록은 5분 캐시
 const DAY_PAST_TTL = 12 * 3600; // 기간 조회(/api/day)용 지난 날짜 — 한번 받으면 반나절 재사용
 
 export function todayKst(now = new Date()) {
@@ -62,7 +64,7 @@ async function cached(key, ttl, fresh, ctx, load) {
   try {
     body = await load();
   } catch (e) {
-    if (e instanceof DartError) return json({ detail: e.message }, 502);
+    if (e instanceof DartError || e instanceof MarketError) return json({ detail: e.message }, 502);
     throw e;
   }
   if (cache) ctx.waitUntil(cache.put(cacheKey, json(body, 200, { "Cache-Control": `max-age=${ttl}` })));
@@ -94,6 +96,14 @@ async function handleDay(url, env, ctx, fetchImpl) {
     async () => ({ date, cls, ...(await fetchDay(env.DART_API_KEY, date, cls, fetchImpl)) }));
 }
 
+// 시장조치 종목 목록(투자경고·관리종목 등)
+async function handleMarket(url, env, ctx, fetchImpl) {
+  const kind = url.searchParams.get("kind") || "";
+  if (!(kind in MARKET_KINDS)) return json({ detail: `kind는 ${Object.keys(MARKET_KINDS).join(", ")} 중 하나여야 합니다.` }, 400);
+  return cached(`market?kind=${kind}`, MARKET_TTL, url.searchParams.get("fresh") === "1", ctx,
+    async () => ({ ...(await fetchMarketList(kind, fetchImpl)), fetched_at: new Date().toISOString() }));
+}
+
 export async function handle(request, env, ctx, fetchImpl = fetch) {
   const url = new URL(request.url);
   if (url.pathname === "/healthz") return json({ ok: true });
@@ -105,6 +115,7 @@ export async function handle(request, env, ctx, fetchImpl = fetch) {
   }
   if (url.pathname === "/api/page" && request.method === "GET") return handlePage(url, env, ctx, fetchImpl);
   if (url.pathname === "/api/day" && request.method === "GET") return handleDay(url, env, ctx, fetchImpl);
+  if (url.pathname === "/api/market" && request.method === "GET") return handleMarket(url, env, ctx, fetchImpl);
   if (url.pathname === "/api/status") {
     return json({ today: todayKst(), api_key_set: Boolean(env.DART_API_KEY), categories: TRADE_CATEGORIES.map(([name]) => name) });
   }

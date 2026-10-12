@@ -16,6 +16,10 @@
         <p class="sub">코스피·코스닥 공시 실시간 모아보기 (DART · KIND)</p>
       </div>
     </div>
+    <nav class="views" id="viewNav">
+      <button data-view="disc" class="on">공시</button>
+      <button data-view="market">투자경고·관리종목</button>
+    </nav>
     <div class="live" id="live">
       <span class="dot"></span><span id="liveText">연결 중…</span>
     </div>
@@ -53,7 +57,40 @@
     <button id="reconClose" class="x" title="닫기">×</button>
   </div>
 
-  <main class="layout">
+  <section class="market" id="marketView" hidden>
+    <div class="mk-tabs" id="mkTabs"></div>
+    <div class="filters">
+      <div class="seg" id="mkMarketSeg">
+        <button data-m="" class="on">전체</button>
+        <button data-m="코스피">코스피</button>
+        <button data-m="코스닥">코스닥</button>
+      </div>
+      <label class="chk"><input type="checkbox" id="mkWatchOnly" /> 관심종목만</label>
+      <span class="mk-meta" id="mkMeta"></span>
+      <button id="mkRefresh" class="ghost small">목록 새로고침</button>
+      <input type="search" id="mkSearch" placeholder="종목명·종목코드·사유 검색" />
+    </div>
+    <div class="table-wrap">
+      <table class="list mk">
+        <thead>
+          <tr>
+            <th class="c-corp">종목</th>
+            <th class="c-mkt">시장</th>
+            <th class="c-num">현재가</th>
+            <th class="c-num">등락률</th>
+            <th class="c-date" id="mkDateHead">지정일</th>
+            <th>사유 · 같이 걸린 조치</th>
+            <th class="c-act"></th>
+          </tr>
+        </thead>
+        <tbody id="mkRows"></tbody>
+      </table>
+      <p class="empty" id="mkEmpty" hidden></p>
+    </div>
+    <p class="hint mk-src">출처: 네이버 증권(한국거래소 자료), 코스피·코스닥 주식만. 지정일·사유는 관리종목과 거래정지만 제공됩니다. 가격은 지연될 수 있습니다.</p>
+  </section>
+
+  <main class="layout" id="discView">
     <aside class="watch">
       <div class="watch-head">
         <h2>관심종목 <span class="count" id="watchCount">0</span></h2>

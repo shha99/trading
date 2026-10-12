@@ -13,6 +13,8 @@
   const $ = (id) => document.getElementById(id);
   const state = {
     today: null,      // 오늘(KST) YYYYMMDD
+    view: "disc",     // "disc"(공시) | "market"(투자경고·관리종목)
+    mk: { kind: "warning", market: "", lists: {}, errors: {}, flags: new Map(), loadedAt: null },
     mode: "day",      // "day"(하루, 실시간) | "range"(기간 조회)
     date: null,       // 하루 모드에서 보고 있는 날짜
     range: null,      // 기간 모드의 { from, to } (YYYYMMDD)
@@ -455,7 +457,7 @@
       <td><div class="corp">
         <button class="star ${watched ? "on" : ""}" data-star="${it.rcept_no}" title="${watched ? "관심종목 해제" : "관심종목 추가"}">${watched ? "★" : "☆"}</button>
         <span class="nm" title="${esc(it.corp_name)}">${hl(it.corp_name, st)}</span>
-        ${it.stock_code ? `<span class="cd">${hl(it.stock_code, st)}</span>` : ""}
+        ${it.stock_code ? `<span class="cd">${hl(it.stock_code, st)}</span>` : ""}${flagBadges(it.stock_code)}
       </div></td>
       <td class="title"><a href="${esc(it.url)}" target="_blank" rel="noopener">${hl(it.report_nm, st)}</a>${tags}</td>
       <td class="flr" title="${esc(it.flr_nm)}">${hl(it.flr_nm, st)}</td>
@@ -544,6 +546,102 @@
     t.hidden = false;
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => { t.hidden = true; }, 6000);
+  }
+
+  // ---------- 투자경고·관리종목 ----------
+  const MK_KINDS = [["warning", "투자경고"], ["risk", "투자위험"], ["caution", "투자주의"], ["management", "관리종목"], ["halt", "거래정지"]];
+  const MK_SHORT = { warning: "경고", risk: "위험", caution: "주의", management: "관리", halt: "정지" };
+
+  async function loadMarketLists(fresh) {
+    const res = await Promise.all(MK_KINDS.map(([k]) =>
+      fetchJSON(`/api/market?kind=${k}${fresh ? "&fresh=1" : ""}`).then((d) => [k, d, null], (e) => [k, null, e.message])));
+    const flags = new Map();
+    for (const [k, d, err] of res) {
+      state.mk.errors[k] = err;
+      if (d) state.mk.lists[k] = d.items;
+      for (const it of state.mk.lists[k] || []) {
+        if (!flags.has(it.code)) flags.set(it.code, new Set());
+        flags.get(it.code).add(k);
+      }
+    }
+    state.mk.flags = flags;
+    state.mk.loadedAt = nowKst();
+    renderMarket();
+    if (state.view === "disc") render();
+  }
+
+  // 공시 목록의 회사 옆에 붙이는 표시 (경고·관리·정지 등)
+  function flagBadges(code, except) {
+    const f = code && state.mk.flags.get(code);
+    if (!f) return "";
+    return MK_KINDS.filter(([k]) => f.has(k) && k !== except)
+      .map(([k, label]) => `<span class="badge ${k}" title="${label}">${MK_SHORT[k]}</span>`).join("");
+  }
+
+  function mkRowHTML(it, q) {
+    const watched = state.watch.some((w) => w.code === it.code);
+    const rate = it.change_rate;
+    const rateCls = rate > 0 ? "up" : rate < 0 ? "down" : "";
+    const date = it.date ? `${it.date.slice(0, 4)}.${it.date.slice(4, 6)}.${it.date.slice(6, 8)}` : "–";
+    const st = { raw: q ? q.split(/\s+/).filter(Boolean) : [] };
+    return `<tr class="${watched ? "watched" : ""}">
+      <td><div class="corp">
+        <button class="star ${watched ? "on" : ""}" data-mkstar="${esc(it.code)}" data-name="${esc(it.name)}" title="${watched ? "관심종목 해제" : "관심종목 추가"}">${watched ? "★" : "☆"}</button>
+        <span class="nm" title="${esc(it.name)}">${hl(it.name, st)}</span><span class="cd">${hl(it.code, st)}</span>
+      </div></td>
+      <td class="mkt-cell"><span class="mkt ${esc(it.market)}">${esc(it.market)}</span></td>
+      <td class="num">${it.price === null ? "–" : it.price.toLocaleString()}</td>
+      <td class="num ${rateCls}">${rate === null ? "–" : `${rate > 0 ? "+" : ""}${rate.toFixed(2)}%`}</td>
+      <td class="date">${date}</td>
+      <td class="reason">${hl(it.reason || "", st)}${flagBadges(it.code, state.mk.kind)}</td>
+      <td><button class="linkbtn" data-disc="${esc(it.name)}">공시 보기</button></td>
+    </tr>`;
+  }
+
+  function renderMarket() {
+    const k = state.mk.kind;
+    $("mkTabs").innerHTML = MK_KINDS.map(([kind, label]) => {
+      const list = state.mk.lists[kind];
+      const w = (list || []).filter((it) => state.watch.some((x) => x.code === it.code)).length;
+      const count = state.mk.errors[kind] && !list ? "!" : list ? list.length : "…";
+      return `<button data-k="${kind}" class="${kind === k ? "on" : ""}">
+        <span class="t">${label}</span><span class="c">${count}</span><span class="w">${w ? `관심종목 ${w}` : ""}</span></button>`;
+    }).join("");
+    $("mkDateHead").textContent = k === "management" || k === "halt" ? "지정일" : "";
+    const q = $("mkSearch").value.trim();
+    const nq = norm(q);
+    const watchOnly = $("mkWatchOnly").checked;
+    const rows = (state.mk.lists[k] || []).filter((it) =>
+      (!state.mk.market || it.market === state.mk.market) &&
+      (!watchOnly || state.watch.some((w) => w.code === it.code)) &&
+      (!nq || norm(`${it.name} ${it.code} ${it.reason}`).includes(nq)));
+    $("mkRows").innerHTML = rows.map((it) => mkRowHTML(it, q)).join("");
+    const empty = $("mkEmpty");
+    if (state.mk.errors[k] && !state.mk.lists[k]) { empty.hidden = false; empty.textContent = `불러오지 못했습니다: ${state.mk.errors[k]}`; }
+    else if (!state.mk.lists[k]) { empty.hidden = false; empty.textContent = "불러오는 중…"; }
+    else if (!rows.length) { empty.hidden = false; empty.textContent = state.mk.lists[k].length ? "조건에 맞는 종목이 없습니다." : "지금 지정된 종목이 없습니다."; }
+    else empty.hidden = true;
+    $("mkMeta").textContent = state.mk.loadedAt ? `${rows.length}종목 · ${state.mk.loadedAt} 확인` : "";
+  }
+
+  function setView(view) {
+    state.view = view;
+    for (const b of document.querySelectorAll("#viewNav button")) b.classList.toggle("on", b.dataset.view === view);
+    const disc = view === "disc";
+    $("discView").hidden = !disc;
+    $("marketView").hidden = disc;
+    for (const id of ["live", "refreshBtn", "modeSeg"]) $(id).hidden = !disc;
+    if (disc) {
+      $("dayNav").hidden = state.mode !== "day";
+      $("rangeBar").hidden = state.mode !== "range";
+      render();
+    } else {
+      $("dayNav").hidden = true;
+      $("rangeBar").hidden = true;
+      $("recon").hidden = true;
+      renderMarket();
+      if (!state.mk.loadedAt) loadMarketLists(false);
+    }
   }
 
   // ---------- 링크 가져오기/내보내기 ----------
@@ -656,6 +754,45 @@
     $("prevDay").addEventListener("click", () => loadDate(shiftDate(state.date, -1)));
     $("nextDay").addEventListener("click", () => { if (state.date < state.today) loadDate(shiftDate(state.date, 1)); });
     $("todayBtn").addEventListener("click", () => loadDate(state.today));
+
+    $("viewNav").addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-view]");
+      if (b && b.dataset.view !== state.view) setView(b.dataset.view);
+    });
+    $("mkTabs").addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-k]");
+      if (!b) return;
+      state.mk.kind = b.dataset.k;
+      renderMarket();
+    });
+    $("mkMarketSeg").addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-m]");
+      if (!b) return;
+      state.mk.market = b.dataset.m;
+      document.querySelectorAll("#mkMarketSeg button").forEach((x) => x.classList.toggle("on", x === b));
+      renderMarket();
+    });
+    $("mkSearch").addEventListener("input", renderMarket);
+    $("mkWatchOnly").addEventListener("change", renderMarket);
+    $("mkRefresh").addEventListener("click", () => loadMarketLists(true));
+    $("mkRows").addEventListener("click", (e) => {
+      const star = e.target.closest("[data-mkstar]");
+      if (star) {
+        const code = star.dataset.mkstar;
+        const w = state.watch.find((x) => x.code === code);
+        if (w) removeWatch(watchKey(w));
+        else addWatch({ code, name: star.dataset.name });
+        renderMarket();
+        renderWatch();
+        return;
+      }
+      const disc = e.target.closest("[data-disc]");
+      if (disc) {
+        $("search").value = disc.dataset.disc;
+        setView("disc");
+        if (state.mode === "day") toast("오늘 공시에서 찾았습니다. 지난 공시까지 보려면 위의 '기간'을 누르세요.");
+      }
+    });
 
     $("modeSeg").addEventListener("click", (e) => {
       const b = e.target.closest("button[data-mode]");
@@ -782,6 +919,7 @@
     else await loadDate(state.today);
     fillWatchNames();
     render();
+    loadMarketLists(false); // 공시 목록의 경고·관리 표시용으로 미리 받아둔다(5분 캐시)
     state.timer = setInterval(poll, REFRESH_MS);
   }
 
