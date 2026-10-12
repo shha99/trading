@@ -18,6 +18,9 @@ class Settings:
         # 오늘 공시 목록을 다시 조회하는 주기(초). 일일 호출 한도(약 2만건) 대비 60초면 넉넉하다.
         self.poll_seconds: int = int(os.getenv("POLL_SECONDS", "60"))
         self.enable_scheduler: bool = os.getenv("ENABLE_SCHEDULER", "true").lower() == "true"
+        # 설정하면 접속할 때 브라우저가 비밀번호를 묻는다(아이디는 아무거나). 도메인을 연결해
+        # 밖에서 접속할 수 있게 열어둘 때 "나만 보기"용.
+        self.portal_password: str = os.getenv("PORTAL_PASSWORD", "")
         self.cors_origins: list[str] = [
             o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()
         ]

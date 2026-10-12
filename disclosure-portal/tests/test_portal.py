@@ -171,3 +171,47 @@ def test_order_follows_dart_not_rcept_no(monkeypatch):
 
 def test_title_whitespace_collapsed():
     assert normalize(raw(1, title="주주총회소집결의              (임시주주총회)"))["report_nm"] == "주주총회소집결의 (임시주주총회)"
+
+
+def test_reconcile_fills_missing_in_dart_order(monkeypatch):
+    monkeypatch.setattr(store_mod, "today_kst", lambda: "20261012")
+    client = OrderedClient([raw(3), raw(2), raw(1)])
+    s = store_mod.DisclosureStore(client)
+    s.poll_today()
+    old_seq = s.today()["seq"]
+
+    # 폴링이 놓친 공시(000002 바로 아래에 끼어 있던 000099)를 대사가 채운다
+    client.rows = [raw(3), raw(2), raw(99), raw(1)]
+    res = s.reconcile("20261012")
+    assert res["dart_count"] == 4 and res["before_count"] == 3
+    assert res["added"] == ["20261012000099"] and res["not_in_dart"] == []
+    items = s.today()["items"]
+    assert [it["rcept_no"][-3:] for it in items] == ["003", "002", "099", "001"]
+    assert all(it["seq"] > old_seq for it in items)  # 증분 조회 중인 화면도 다시 받게
+
+    res = s.reconcile("20261012")
+    assert res["added"] == [] and res["dart_count"] == 4
+
+
+def test_reconcile_past_date_refetches(monkeypatch):
+    monkeypatch.setattr(store_mod, "today_kst", lambda: "20261012")
+    client = OrderedClient([raw(1)])
+    s = store_mod.DisclosureStore(client)
+    assert s.reconcile("20261008")["before_count"] is None  # 캐시가 없었으면 비교 대상 없음
+    client.rows = [raw(2), raw(1)]
+    res = s.reconcile("20261008")
+    assert res["added"] == ["20261012000002"] and res["dart_count"] == 2
+
+
+def test_refresh_endpoint_and_password(api, monkeypatch):
+    import server
+
+    r = api.post("/api/refresh")
+    assert r.status_code == 200 and r.json()["dart_count"] == 3
+    assert api.post("/api/refresh", params={"date": "20991231"}).status_code == 400
+
+    monkeypatch.setattr(server.settings, "portal_password", "s3cret")
+    assert api.get("/").status_code == 401
+    assert api.get("/healthz").status_code == 200
+    assert api.get("/", auth=("me", "wrong")).status_code == 401
+    assert api.get("/", auth=("me", "s3cret")).status_code == 200

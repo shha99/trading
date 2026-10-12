@@ -6,17 +6,20 @@
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import logging
 import re
+import secrets
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
@@ -54,6 +57,31 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def password_gate(request: Request, call_next):
+    """PORTAL_PASSWORD가 있으면 HTTP Basic 인증으로 막는다(/healthz는 예외)."""
+    if not settings.portal_password or request.url.path == "/healthz":
+        return await call_next(request)
+    try:
+        scheme, _, encoded = request.headers.get("authorization", "").partition(" ")
+        _, _, password = base64.b64decode(encoded).decode().partition(":")
+        ok = scheme.lower() == "basic" and secrets.compare_digest(password, settings.portal_password)
+    except (binascii.Error, UnicodeDecodeError):
+        ok = False
+    if ok:
+        return await call_next(request)
+    return PlainTextResponse(
+        "비밀번호가 필요합니다.", status_code=401, headers={"WWW-Authenticate": 'Basic realm="disclosure-portal", charset="UTF-8"'}
+    )
+
+
+def _check_date(date: str) -> None:
+    if not re.fullmatch(r"\d{8}", date):
+        raise HTTPException(400, "date는 YYYYMMDD 형식이어야 합니다.")
+    if date > today_kst():
+        raise HTTPException(400, "미래 날짜는 조회할 수 없습니다.")
+
+
 @app.get("/api/disclosures")
 def disclosures(
     date: str | None = Query(None, description="YYYYMMDD, 생략하면 오늘(KST)"),
@@ -61,12 +89,20 @@ def disclosures(
 ):
     if date is None or date == today_kst():
         return store.today(after_seq)
-    if not re.fullmatch(r"\d{8}", date):
-        raise HTTPException(400, "date는 YYYYMMDD 형식이어야 합니다.")
-    if date > today_kst():
-        raise HTTPException(400, "미래 날짜는 조회할 수 없습니다.")
+    _check_date(date)
     try:
         return store.for_date(date)
+    except DartError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
+@app.post("/api/refresh")
+def refresh(date: str | None = Query(None, description="YYYYMMDD, 생략하면 오늘(KST)")):
+    """수동 새로고침: DART에서 그 날짜 전체를 다시 받아 지금 목록과 대사한다."""
+    date = date or today_kst()
+    _check_date(date)
+    try:
+        return store.reconcile(date)
     except DartError as exc:
         raise HTTPException(502, str(exc)) from exc
 

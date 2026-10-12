@@ -111,22 +111,78 @@ class DisclosureStore:
                 "status": self.status_locked(),
             }
 
+    # ---- 수동 새로고침(대사) ----
+    def reconcile(self, date: str) -> dict[str, Any]:
+        """DART에서 그 날짜 전체를 처음부터 다시 받아 지금 가진 목록과 맞춰본다.
+
+        평소 폴링은 1페이지만 보고 멈추므로, 혹시 빠진 공시가 있는지 사용자가 원할 때
+        전수 확인하는 용도다. 빠진 공시는 채워 넣고, 결과(건수 비교)를 돌려준다.
+        """
+        if date != today_kst():
+            with self._lock:
+                cached = self._past.pop(date, None)
+            before = {it["rcept_no"] for it in cached[1]} if cached else None
+            items = self.for_date(date)["items"]
+            dart = {it["rcept_no"] for it in items}
+            return self._result(date, len(dart), before, dart)
+
+        with self._poll_lock:  # 진행 중인 폴링이 끝날 때까지 기다린다
+            fetched = self._fetch_all(date)
+            now = datetime.now(KST).isoformat(timespec="seconds")
+            with self._lock:
+                if self._date != date:
+                    self._date, self._items = date, {}
+                before = set(self._items)
+                dart = {it["rcept_no"] for it in fetched}
+                if dart - before:
+                    # 빠졌던 공시를 DART 순서대로 끼워 넣기 위해 전체 seq를 새로 매긴다.
+                    # 새 seq는 전부 기존 최대값보다 커서 증분 조회 중인 화면도 깨지지 않는다.
+                    initial = not before
+                    for it in reversed(fetched):
+                        old = self._items.get(it["rcept_no"])
+                        if old is not None:
+                            it = old
+                        else:
+                            it["first_seen"] = None if initial else now
+                            self._items[it["rcept_no"]] = it
+                        self._seq += 1
+                        it["seq"] = self._seq
+                self._last_polled = now
+                self._last_error = None
+            return self._result(date, len(dart), before, dart)
+
+    @staticmethod
+    def _result(date: str, dart_count: int, before: set[str] | None, dart: set[str]) -> dict[str, Any]:
+        return {
+            "date": date,
+            "dart_count": dart_count,
+            "before_count": None if before is None else len(before),
+            "added": [] if before is None else sorted(dart - before),
+            "not_in_dart": [] if before is None else sorted(before - dart),
+            "checked_at": datetime.now(KST).isoformat(timespec="seconds"),
+        }
+
+    def _fetch_all(self, date: str) -> list[dict[str, Any]]:
+        """그 날짜 전체 공시를 DART 순서(최신순) 그대로, 중복 없이."""
+        items: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        page, total = 1, 1
+        while page <= min(total, MAX_PAGES):
+            got, total = self.client.fetch_page(date, page)
+            for it in got:
+                if it["rcept_no"] not in seen:
+                    seen.add(it["rcept_no"])
+                    items.append(it)
+            page += 1
+        return items
+
     # ---- 지난 날짜 ----
     def for_date(self, date: str) -> dict[str, Any]:
         cached = self._past.get(date)
         if cached and time.monotonic() - cached[0] < PAST_CACHE_TTL:
             items = cached[1]
         else:
-            items: list[dict[str, Any]] = []
-            seen: set[str] = set()
-            page, total = 1, 1
-            while page <= min(total, MAX_PAGES):
-                got, total = self.client.fetch_page(date, page)
-                for it in got:
-                    if it["rcept_no"] not in seen:
-                        seen.add(it["rcept_no"])
-                        items.append(it)
-                page += 1
+            items = self._fetch_all(date)
             for i, it in enumerate(reversed(items), 1):
                 it["seq"] = i
                 it["first_seen"] = None

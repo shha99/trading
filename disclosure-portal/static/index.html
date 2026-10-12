@@ -19,6 +19,9 @@
     <div class="live" id="live">
       <span class="dot"></span><span id="liveText">연결 중…</span>
     </div>
+    <button id="refreshBtn" class="refresh" title="DART에서 전체를 다시 받아 지금 목록과 맞춰봅니다">
+      <span class="ico">↻</span><span id="refreshText">새로고침</span>
+    </button>
     <div class="datenav">
       <button id="prevDay" title="전날">◀</button>
       <input type="date" id="dateInput" />
@@ -28,6 +31,10 @@
   </header>
 
   <div class="banner" id="banner" hidden></div>
+  <div class="recon" id="recon" hidden>
+    <div id="reconBody"></div>
+    <button id="reconClose" class="x" title="닫기">×</button>
+  </div>
 
   <main class="layout">
     <aside class="watch">

@@ -354,6 +354,8 @@
     });
     ["fExchange", "fImportant", "fNoCorrection"].forEach((id) => $(id).addEventListener("change", () => { state.limit = PAGE; render(); }));
     $("search").addEventListener("input", () => { state.limit = PAGE; render(); });
+    $("refreshBtn").addEventListener("click", manualRefresh);
+    $("reconClose").addEventListener("click", () => { $("recon").hidden = true; });
     $("moreBtn").addEventListener("click", () => { state.limit += PAGE; render(); });
 
     $("dateInput").addEventListener("change", (e) => {
@@ -370,6 +372,63 @@
       if (!document.hidden) { document.title = "공시 포털"; setTimeout(() => state.freshIds.clear(), 4000); }
     });
     window.addEventListener("storage", (e) => { if (e.key === WATCH_KEY) { state.watch = loadWatch(); render(); } });
+  }
+
+  // ---------- 수동 새로고침(대사) ----------
+  // 서버가 DART에서 그 날짜 전체를 다시 받아 빠진 공시를 채우고, 화면은 목록을 통째로
+  // 다시 받아 "새로고침 전 화면"과 비교한다.
+  async function manualRefresh() {
+    const btn = $("refreshBtn");
+    if (btn.disabled || !state.date) return;
+    const date = state.date;
+    const before = new Set(state.items.keys());
+    btn.disabled = true;
+    btn.classList.add("busy");
+    $("refreshText").textContent = "대사 중…";
+    try {
+      const r = await fetch(`/api/refresh?date=${date}`, { method: "POST", cache: "no-store" });
+      const res = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(res.detail || `HTTP ${r.status}`);
+      await loadDate(date);
+      if (state.date !== date) return;
+      const after = new Set(state.items.keys());
+      const added = [...after].filter((id) => !before.has(id));
+      const gone = [...before].filter((id) => !after.has(id));
+      added.forEach((id) => state.freshIds.add(id));
+      render();
+      showRecon(res, added, gone, null, before.size);
+    } catch (e) {
+      showRecon(null, [], [], e.message);
+    } finally {
+      btn.disabled = false;
+      btn.classList.remove("busy");
+      $("refreshText").textContent = "새로고침";
+    }
+  }
+
+  function showRecon(res, added, gone, error, beforeCount) {
+    const box = $("recon");
+    box.hidden = false;
+    if (error) {
+      box.className = "recon err";
+      $("reconBody").innerHTML = `<b>새로고침 실패</b> · ${esc(error)}`;
+      return;
+    }
+    const shown = state.items.size;
+    const match = res.dart_count === shown && !added.length && !gone.length;
+    box.className = `recon ${match ? "ok" : "diff"}`;
+    const names = (ids) => ids.slice(0, 5).map((id) => {
+      const it = state.items.get(id);
+      return it ? `${esc(it.corp_name)} – ${esc(it.report_nm)}` : esc(id);
+    }).join("<br>");
+    const lines = [
+      `<b>${match ? "✓ 일치" : "차이 있음"}</b> · ${res.checked_at.slice(11, 19)} 대사 · ` +
+      `DART 원본 <b class="num">${res.dart_count.toLocaleString()}</b>건 / ` +
+      `화면 <b class="num">${shown.toLocaleString()}</b>건 (새로고침 전 ${beforeCount.toLocaleString()}건)`,
+    ];
+    if (added.length) lines.push(`새로 채워진 공시 <b>${added.length}</b>건 (파란색 표시)<br>${names(added)}${added.length > 5 ? "<br>…" : ""}`);
+    if (res.not_in_dart && res.not_in_dart.length) lines.push(`DART 목록에서 빠진 공시 ${res.not_in_dart.length}건 (철회·재분류 등 — 화면에는 남겨둠)`);
+    $("reconBody").innerHTML = lines.join("<br>");
   }
 
   function setTab(tab) {
