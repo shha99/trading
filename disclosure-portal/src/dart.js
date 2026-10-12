@@ -104,7 +104,8 @@ export function redact(message, apiKey) {
 }
 
 // date(YYYYMMDD)의 공시 목록 한 페이지(최신순)와 전체 페이지 수.
-export async function fetchPage(apiKey, date, page, fetchImpl = fetch) {
+// corpCls(Y=코스피, K=코스닥)를 주면 그 시장만 받는다.
+export async function fetchPage(apiKey, date, page, fetchImpl = fetch, corpCls = "") {
   if (!apiKey) throw new DartError("DART_API_KEY가 설정되지 않았습니다.");
   const url = new URL(DART_LIST_URL);
   url.search = new URLSearchParams({
@@ -116,6 +117,7 @@ export async function fetchPage(apiKey, date, page, fetchImpl = fetch) {
     sort: "date",
     sort_mth: "desc",
   });
+  if (corpCls) url.searchParams.set("corp_cls", corpCls);
   let data;
   try {
     // User-Agent가 없으면 DART가 error1.html로 계속 리다이렉트한다(Workers fetch는 기본으로 안 붙임).
@@ -135,4 +137,19 @@ export async function fetchPage(apiKey, date, page, fetchImpl = fetch) {
     total_page: Number(data.total_page) || 1,
     total_count: Number(data.total_count) || 0,
   };
+}
+
+// 하루치 한 시장 전체: 1페이지로 전체 페이지 수를 알고 나머지는 동시에 받는다(최신순, 중복 제거).
+export async function fetchDay(apiKey, date, corpCls, fetchImpl = fetch, maxPages = 40) {
+  const first = await fetchPage(apiKey, date, 1, fetchImpl, corpCls);
+  const pages = Math.min(first.total_page, maxPages);
+  const rest = await Promise.all(
+    Array.from({ length: Math.max(0, pages - 1) }, (_, i) => fetchPage(apiKey, date, i + 2, fetchImpl, corpCls)),
+  );
+  const seen = new Set();
+  const items = [];
+  for (const it of [first, ...rest].flatMap((p) => p.items)) {
+    if (!seen.has(it.rcept_no)) { seen.add(it.rcept_no); items.push(it); }
+  }
+  return { items, total_count: first.total_count, truncated: first.total_page > maxPages };
 }

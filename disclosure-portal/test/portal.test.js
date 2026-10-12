@@ -125,3 +125,22 @@ test("fetchPage: User-Agent를 붙이고, 리다이렉트는 오류로, 오류�
     (e) => !e.message.includes("secret-key-123") && !e.message.includes("crtfc_key"),
   );
 });
+
+test("/api/day: 하루치 한 시장을 여러 페이지 모아서 돌려준다", async () => {
+  const calls = [];
+  const fetchImpl = async (url) => {
+    calls.push(url);
+    const page = Number(url.searchParams.get("page_no"));
+    const list = page === 1 ? [raw(3), raw(2)] : [raw(2), raw(1)]; // 페이지 경계 중복도 걸러야 함
+    return dartResponse(list, { total_page: 2, total_count: 3 })();
+  };
+  const r = await handle(req("/api/day?date=20261008&cls=K"), env(), ctx, fetchImpl);
+  assert.equal(r.status, 200);
+  const body = await r.json();
+  assert.deepEqual(body.items.map((i) => i.rcept_no.slice(-1)), ["3", "2", "1"]);
+  assert.equal(calls.length, 2);
+  assert.ok(calls.every((u) => u.searchParams.get("corp_cls") === "K" && u.searchParams.get("bgn_de") === "20261008"));
+
+  assert.equal((await handle(req("/api/day?date=20261008&cls=N"), env(), ctx, fetchImpl)).status, 400);
+  assert.equal((await handle(req("/api/day?date=20991231&cls=Y"), env(), ctx, fetchImpl)).status, 400);
+});

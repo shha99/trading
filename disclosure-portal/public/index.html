@@ -22,7 +22,11 @@
     <button id="refreshBtn" class="refresh" title="DART에서 전체를 다시 받아 지금 목록과 맞춰봅니다">
       <span class="ico">↻</span><span id="refreshText">새로고침</span>
     </button>
-    <div class="datenav">
+    <div class="seg mode" id="modeSeg">
+      <button data-mode="day" class="on">하루</button>
+      <button data-mode="range">기간</button>
+    </div>
+    <div class="datenav" id="dayNav">
       <button id="prevDay" title="전날">◀</button>
       <input type="date" id="dateInput" />
       <button id="nextDay" title="다음날">▶</button>
@@ -30,6 +34,19 @@
     </div>
   </header>
 
+  <div class="rangebar" id="rangeBar" hidden>
+    <span class="lbl">기간</span>
+    <input type="date" id="rangeFrom" /> <span class="tilde">~</span> <input type="date" id="rangeTo" />
+    <div class="presets" id="rangePresets">
+      <button data-p="7">1주</button>
+      <button data-p="month">지난달 1일부터</button>
+      <button data-p="30">1개월</button>
+      <button data-p="91">3개월</button>
+    </div>
+    <button id="rangeLoad" class="primary">불러오기</button>
+    <span class="progress" id="rangeProgress"></span>
+    <span class="hint">최대 3개월 · 지난 날짜는 한 번 받으면 반나절 동안 빠르게 다시 열립니다</span>
+  </div>
   <div class="banner" id="banner" hidden></div>
   <div class="recon" id="recon" hidden>
     <div id="reconBody"></div>
@@ -82,7 +99,7 @@
         <table class="list">
           <thead>
             <tr>
-              <th class="c-time">감지</th>
+              <th class="c-time" id="timeHead">감지</th>
               <th class="c-mkt">시장</th>
               <th class="c-corp">회사</th>
               <th>공시 제목</th>

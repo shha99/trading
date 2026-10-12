@@ -4,13 +4,18 @@
   "use strict";
 
   const WATCH_KEY = "disclosure-portal.watchlist.v1";
+  const VIEW_KEY = "disclosure-portal.view.v1"; // 마지막으로 본 모드·기간
+  const MAX_RANGE_DAYS = 92; // DART 기간 검색 한도(3개월)에 맞춤
+  const RANGE_CONCURRENCY = 6;
   const REFRESH_MS = 30_000;
   const PAGE = 300;
 
   const $ = (id) => document.getElementById(id);
   const state = {
     today: null,      // 오늘(KST) YYYYMMDD
-    date: null,       // 보고 있는 날짜
+    mode: "day",      // "day"(하루, 실시간) | "range"(기간 조회)
+    date: null,       // 하루 모드에서 보고 있는 날짜
+    range: null,      // 기간 모드의 { from, to } (YYYYMMDD)
     items: new Map(), // rcept_no -> item
     seq: 0,
     lastChecked: null, // 마지막으로 DART를 확인한 시각(KST HH:MM:SS)
@@ -126,6 +131,7 @@
 
   async function loadDate(date) {
     const token = ++loadToken;
+    setMode("day");
     state.date = date;
     state.items = new Map();
     state.seq = 0;
@@ -156,16 +162,149 @@
     render();
   }
 
+  // ---------- 기간 조회 ----------
+  // 날짜×시장(코스피 Y, 코스닥 K)마다 /api/day로 하루치를 받는다. 지난 날짜는 Worker가 반나절
+  // 캐시하므로 두 번째부터는 빠르다. 결과는 최신 날짜부터, 같은 날 안에서는 두 시장 목록을
+  // 각자 순서를 지키며 섞는다(두 시장 사이의 정확한 게시 순서는 DART가 따로 주지 않는다).
+  function daysBetween(from, to) {
+    const out = [];
+    for (let d = to; d >= from; d = shiftDate(d, -1)) out.push(d);
+    return out;
+  }
+
+  function interleave(a, b) {
+    const out = [];
+    let i = 0;
+    let j = 0;
+    while (i < a.length || j < b.length) {
+      if (j >= b.length || (i < a.length && i / a.length <= j / b.length)) out.push(a[i++]);
+      else out.push(b[j++]);
+    }
+    return out;
+  }
+
+  async function fetchRange(from, to, fresh, onProgress) {
+    const days = daysBetween(from, to);
+    const jobs = days.flatMap((d) => ["Y", "K"].map((c) => ({ d, c })));
+    const got = new Map();
+    let next = 0;
+    let done = 0;
+    let failed = null;
+    const run = async () => {
+      while (next < jobs.length && !failed) {
+        const { d, c } = jobs[next++];
+        try {
+          const r = await fetchJSON(`/api/day?date=${d}&cls=${c}${fresh ? "&fresh=1" : ""}`);
+          got.set(d + c, r.items);
+          onProgress(++done, jobs.length);
+        } catch (e) {
+          failed = e;
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: RANGE_CONCURRENCY }, run));
+    if (failed) throw failed;
+    return days.flatMap((d) => interleave(got.get(d + "Y") || [], got.get(d + "K") || []));
+  }
+
+  function validRange(from, to) {
+    if (!/^\d{8}$/.test(from) || !/^\d{8}$/.test(to)) return "시작일과 종료일을 모두 고르세요.";
+    if (from > to) return "시작일이 종료일보다 늦습니다.";
+    if (to > state.today) return "종료일은 오늘까지만 고를 수 있습니다.";
+    if (daysBetween(from, to).length > MAX_RANGE_DAYS) return "기간은 최대 3개월까지입니다.";
+    return null;
+  }
+
+  function progressText(done, total) {
+    return `불러오는 중 ${Math.round((done / total) * 100)}% (${done}/${total})`;
+  }
+
+  async function loadRange(from, to) {
+    const bad = validRange(from, to);
+    if (bad) { toast(bad); return; }
+    const token = ++loadToken;
+    setMode("range");
+    state.range = { from, to };
+    saveView();
+    state.date = null;
+    state.items = new Map();
+    state.seq = 0;
+    state.limit = PAGE;
+    state.freshIds.clear();
+    state.error = null;
+    $("rangeFrom").value = toInput(from);
+    $("rangeTo").value = toInput(to);
+    $("rows").innerHTML = "";
+    $("rangeLoad").disabled = true;
+    showEmpty("불러오는 중…");
+    updateLive();
+    busy = true;
+    try {
+      const list = await fetchRange(from, to, false, (d, t) => {
+        if (token !== loadToken) return;
+        $("rangeProgress").textContent = progressText(d, t);
+        showEmpty(progressText(d, t));
+      });
+      if (token !== loadToken) return;
+      setAll(list, () => null);
+      state.lastChecked = nowKst();
+      $("rangeProgress").textContent = `${list.length.toLocaleString()}건`;
+    } catch (e) {
+      if (token !== loadToken) return;
+      state.error = e.message;
+      $("rangeProgress").textContent = "";
+      showEmpty(`불러오지 못했습니다: ${e.message}`);
+      updateLive();
+      return;
+    } finally {
+      if (token === loadToken) {
+        busy = false;
+        $("rangeLoad").disabled = false;
+      }
+    }
+    updateLive();
+    render();
+  }
+
+  function setMode(mode) {
+    state.mode = mode;
+    for (const b of document.querySelectorAll("#modeSeg button")) b.classList.toggle("on", b.dataset.mode === mode);
+    $("dayNav").hidden = mode !== "day";
+    $("rangeBar").hidden = mode !== "range";
+    $("timeHead").textContent = mode === "range" ? "일자" : "감지";
+    $("recon").hidden = true;
+    if (mode === "day") $("rangeProgress").textContent = "";
+  }
+
+  function saveView() {
+    try { localStorage.setItem(VIEW_KEY, JSON.stringify({ mode: state.mode, range: state.range })); } catch { /* 무시 */ }
+  }
+  function loadView() {
+    try { return JSON.parse(localStorage.getItem(VIEW_KEY) || "null") || {}; } catch { return {}; }
+  }
+
+  // 기본 기간: 지난달 1일 ~ 오늘
+  function presetRange(p) {
+    const to = state.today;
+    if (p === "month") {
+      const y = +to.slice(0, 4);
+      const m = +to.slice(4, 6);
+      const from = m === 1 ? `${y - 1}1201` : `${y}${String(m - 1).padStart(2, "0")}01`;
+      return { from, to };
+    }
+    return { from: shiftDate(to, -(Number(p) - 1)), to };
+  }
+
   // 오늘 화면이면 1페이지부터 받아, 이미 아는 공시가 섞인 페이지에서 멈춘다(평소 요청 1번)
   async function poll() {
     const today = todayKst();
     if (today !== state.today) {
-      const wasToday = state.date === state.today;
+      const wasToday = state.mode === "day" && state.date === state.today;
       state.today = today;
       $("dateInput").max = toInput(today);
       if (wasToday) return loadDate(today); // 자정이 지나면 새 날짜로
     }
-    if (busy || state.date !== state.today) return;
+    if (busy || state.mode !== "day" || state.date !== state.today) return;
     busy = true;
     const token = loadToken;
     try {
@@ -221,7 +360,11 @@
     } else {
       banner.hidden = true;
     }
-    if (state.date !== state.today) setLive("", "지난 날짜 보는 중");
+    if (state.mode === "range") {
+      const r = state.range;
+      const fmt = (d) => `${+d.slice(4, 6)}/${+d.slice(6, 8)}`;
+      setLive(state.error ? "err" : "", state.error ? "기간 조회 실패" : `기간 조회 · ${fmt(r.from)}~${fmt(r.to)} · 실시간 갱신 없음`);
+    } else if (state.date !== state.today) setLive("", "지난 날짜 보는 중");
     else if (state.error) setLive("err", "갱신 실패 · 30초 뒤 다시 시도");
     else if (state.lastChecked) setLive("ok", `실시간 · 30초마다 확인 · 마지막 ${state.lastChecked}`);
     else setLive("", "불러오는 중…");
@@ -297,7 +440,9 @@
   function rowHTML(it, st) {
     const watched = !!watchOf(it);
     const cls = [watched ? "watched" : "", state.freshIds.has(it.rcept_no) ? "fresh" : ""].join(" ");
-    const time = it.first_seen ? it.first_seen.slice(0, 5) : "–";
+    const time = state.mode === "range"
+      ? `${it.rcept_dt.slice(4, 6)}.${it.rcept_dt.slice(6, 8)}`
+      : it.first_seen ? it.first_seen.slice(0, 5) : "–";
     const tags = [
       it.is_exchange ? `<span class="tag krx" title="${esc(it.flags.join(", "))}">KRX</span>` : "",
       ...it.categories.map((c) => `<span class="tag cat">${esc(c)}</span>`),
@@ -512,6 +657,26 @@
     $("nextDay").addEventListener("click", () => { if (state.date < state.today) loadDate(shiftDate(state.date, 1)); });
     $("todayBtn").addEventListener("click", () => loadDate(state.today));
 
+    $("modeSeg").addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-mode]");
+      if (!b || b.dataset.mode === state.mode) return;
+      if (b.dataset.mode === "day") {
+        loadDate(state.today);
+      } else {
+        const r = state.range || presetRange("month");
+        loadRange(r.from, r.to);
+      }
+      saveView();
+    });
+    $("rangePresets").addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-p]");
+      if (!b) return;
+      const r = presetRange(b.dataset.p);
+      $("rangeFrom").value = toInput(r.from);
+      $("rangeTo").value = toInput(r.to);
+    });
+    $("rangeLoad").addEventListener("click", () => loadRange(fromInput($("rangeFrom").value), fromInput($("rangeTo").value)));
+
     // 탭으로 돌아오면 "새 공시" 표시 초기화
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden) { document.title = "공시 포털"; setTimeout(() => state.freshIds.clear(), 4000); }
@@ -524,8 +689,10 @@
   // 원본과 똑같이 맞춘다(빠진 건 채우고, DART에 없는 건 뺀다).
   async function manualRefresh() {
     const btn = $("refreshBtn");
-    if (btn.disabled || !state.date) return;
+    if (btn.disabled || (state.mode === "day" && !state.date)) return;
     const date = state.date;
+    const range = state.range;
+    const isRange = state.mode === "range";
     const token = ++loadToken; // 진행 중인 폴링 결과는 버린다
     const before = new Map(state.items);
     busy = true;
@@ -533,7 +700,9 @@
     btn.classList.add("busy");
     $("refreshText").textContent = "대사 중…";
     try {
-      const list = await fetchAll(date, true);
+      const list = isRange
+        ? await fetchRange(range.from, range.to, true, (d, t) => { $("refreshText").textContent = `대사 중 ${Math.round((d / t) * 100)}%`; })
+        : await fetchAll(date, true);
       if (token !== loadToken) return;
       const t = nowKst();
       const dartIds = new Set(list.map((it) => it.rcept_no));
@@ -541,7 +710,8 @@
       const gone = [...before.values()].filter((it) => inScope(it) && !dartIds.has(it.rcept_no));
       const beforeScoped = [...before.values()].filter(inScope).length;
       const markNew = before.size > 0;
-      setAll(list, (it) => (before.has(it.rcept_no) ? before.get(it.rcept_no).first_seen : markNew && date === state.today ? t : null));
+      setAll(list, (it) => (before.has(it.rcept_no) ? before.get(it.rcept_no).first_seen : markNew && !isRange && date === state.today ? t : null));
+      if (isRange) $("rangeProgress").textContent = `${list.length.toLocaleString()}건`;
       state.freshIds = new Set(markNew ? added : []);
       state.lastChecked = t;
       state.error = null;
@@ -606,7 +776,10 @@
     } catch (e) {
       state.error = `서버 연결 실패 · ${e.message}`;
     }
-    await loadDate(state.today);
+    $("rangeFrom").max = $("rangeTo").max = toInput(state.today);
+    const view = loadView();
+    if (view.mode === "range" && view.range && !validRange(view.range.from, view.range.to)) await loadRange(view.range.from, view.range.to);
+    else await loadDate(state.today);
     fillWatchNames();
     render();
     state.timer = setInterval(poll, REFRESH_MS);
