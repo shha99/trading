@@ -1,5 +1,5 @@
 // 공시 포털 프론트엔드 — 빌드 없이 쓰는 바닐라 JS.
-// 관심종목은 localStorage에 저장한다(서버 재시작/재배포와 무관하게 유지).
+// 관심종목은 localStorage에 저장한다(재배포와 무관하게 이 브라우저에 유지).
 (() => {
   "use strict";
 
@@ -9,11 +9,13 @@
 
   const $ = (id) => document.getElementById(id);
   const state = {
-    today: null,      // 서버 기준 오늘(KST) YYYYMMDD
+    today: null,      // 오늘(KST) YYYYMMDD
     date: null,       // 보고 있는 날짜
     items: new Map(), // rcept_no -> item
     seq: 0,
-    boot: null,       // 서버 기동 id — 바뀌면 seq가 다시 시작된 것
+    lastChecked: null, // 마지막으로 DART를 확인한 시각(KST HH:MM:SS)
+    error: null,
+    apiKeySet: null,
     tab: "all",
     market: "",
     selected: null,   // 사이드바에서 고른 관심종목 key
@@ -64,6 +66,17 @@
   }
 
   // ---------- 데이터 ----------
+  // 서버(Worker)는 DART 목록 한 페이지를 대신 받아줄 뿐이고, 새 공시 감지·순서·대사는 전부
+  // 여기서 한다. seq는 DART가 준 순서(최신순)를 뒤집어 매긴 번호로, 클수록 최신이다.
+  // 접수번호는 거래소 공시가 800/900번대라 시간순이 아니어서 정렬에 쓰면 안 된다.
+  const MAX_PAGES = 45;
+  const todayKst = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul" }).format(new Date()).replaceAll("-", "");
+  const nowKst = () => new Date().toLocaleTimeString("en-GB", { timeZone: "Asia/Seoul", hour12: false });
+  const pageURL = (date, page, fresh) => `/api/page?date=${date}&page=${page}${fresh ? "&fresh=1" : ""}`;
+
+  let busy = false;  // 불러오기/대사 중엔 폴링을 쉰다
+  let loadToken = 0; // 날짜를 바꾸거나 대사를 시작하면 늘려서, 늦게 끝난 이전 요청 결과를 버린다
+
   async function fetchJSON(url) {
     const r = await fetch(url, { cache: "no-store" });
     const body = await r.json().catch(() => ({}));
@@ -71,91 +84,136 @@
     return body;
   }
 
+  // 그 날짜 전체 공시를 DART 순서(최신순) 그대로, 중복 없이
+  async function fetchAll(date, fresh) {
+    const items = [];
+    const seen = new Set();
+    let page = 1;
+    let total = 1;
+    while (page <= Math.min(total, MAX_PAGES)) {
+      const d = await fetchJSON(pageURL(date, page, fresh));
+      total = d.total_page;
+      for (const it of d.items) {
+        if (!seen.has(it.rcept_no)) { seen.add(it.rcept_no); items.push(it); }
+      }
+      page++;
+    }
+    return items;
+  }
+
+  // 최신순 목록으로 state.items를 통째로 다시 만든다
+  function setAll(list, firstSeenOf) {
+    state.items = new Map();
+    state.seq = 0;
+    for (let i = list.length - 1; i >= 0; i--) {
+      const it = list[i];
+      it.seq = ++state.seq;
+      it.first_seen = firstSeenOf(it);
+      state.items.set(it.rcept_no, it);
+    }
+  }
+
   async function loadDate(date) {
+    const token = ++loadToken;
     state.date = date;
     state.items = new Map();
     state.seq = 0;
     state.limit = PAGE;
     state.freshIds.clear();
+    state.error = null;
     $("dateInput").value = toInput(date);
     $("nextDay").disabled = date >= state.today;
     $("rows").innerHTML = "";
     showEmpty("불러오는 중…");
+    updateLive();
+    busy = true;
     try {
-      const data = await fetchJSON(`/api/disclosures?date=${date}`);
-      if (state.date !== date) return;
-      ingest(data, false);
+      const list = await fetchAll(date, false);
+      if (token !== loadToken) return;
+      setAll(list, () => null); // 처음 불러온 것은 감지 시각을 비워둔다
+      state.lastChecked = nowKst();
     } catch (e) {
-      if (state.date !== date) return;
+      if (token !== loadToken) return;
+      state.error = e.message;
       showEmpty(`불러오지 못했습니다: ${e.message}`);
-      setLive("err", "조회 실패");
+      updateLive();
       return;
+    } finally {
+      if (token === loadToken) busy = false;
     }
+    updateLive();
     render();
   }
 
-  async function refresh() {
+  // 오늘 화면이면 1페이지부터 받아, 이미 아는 공시가 섞인 페이지에서 멈춘다(평소 요청 1번)
+  async function poll() {
+    const today = todayKst();
+    if (today !== state.today) {
+      const wasToday = state.date === state.today;
+      state.today = today;
+      $("dateInput").max = toInput(today);
+      if (wasToday) return loadDate(today); // 자정이 지나면 새 날짜로
+    }
+    if (busy || state.date !== state.today) return;
+    busy = true;
+    const token = loadToken;
     try {
-      const st = await fetchJSON("/api/status");
-      if (state.today && st.today !== state.today && state.date === state.today) {
-        // 자정이 지나면 새 날짜로 넘어간다
-        state.today = st.today;
-        return loadDate(st.today);
+      const known = new Set(state.items.keys());
+      const fresh = [];
+      let page = 1;
+      let total = 1;
+      while (page <= Math.min(total, MAX_PAGES)) {
+        const d = await fetchJSON(pageURL(state.date, page));
+        total = d.total_page;
+        const nw = d.items.filter((it) => !known.has(it.rcept_no));
+        nw.forEach((it) => known.add(it.rcept_no));
+        fresh.push(...nw);
+        if (nw.length < d.items.length) break;
+        page++;
       }
-      state.today = st.today;
-      if (state.date !== state.today) { applyStatus(st); return; }
-      const data = await fetchJSON(`/api/disclosures?after_seq=${state.seq}`);
-      if (state.date !== data.date) return;
-      if (data.boot !== state.boot) return loadDate(state.date); // 서버 재시작 — 처음부터 다시
-      ingest(data, state.seq > 0); // 첫 수집분은 "새 공시"로 치지 않는다
-      render();
-    } catch (e) {
-      setLive("err", `서버 연결 실패 · ${e.message}`);
-    }
-  }
-
-  function ingest(data, live) {
-    const newWatched = [];
-    for (const it of data.items) {
-      if (state.items.has(it.rcept_no)) continue;
-      state.items.set(it.rcept_no, it);
-      if (live) {
+      if (token !== loadToken) return;
+      const t = nowKst();
+            for (let i = fresh.length - 1; i >= 0; i--) {
+        const it = fresh[i];
+        it.seq = ++state.seq;
+        it.first_seen = t;
+        state.items.set(it.rcept_no, it);
         state.freshIds.add(it.rcept_no);
-        if (watchOf(it)) newWatched.push(it);
       }
-    }
-    state.seq = Math.max(state.seq, data.seq);
-    state.boot = data.boot;
-    applyStatus(data.status);
-    if (live && state.freshIds.size) {
-      document.title = `(${state.freshIds.size}) 공시 포털`;
-    }
-    if (newWatched.length) {
-      const it = newWatched[0];
-      toast(`★ ${it.corp_name}: ${it.report_nm}${newWatched.length > 1 ? ` 외 ${newWatched.length - 1}건` : ""}`);
+      state.lastChecked = t;
+      state.error = null;
+      if (fresh.length) {
+        document.title = `(${state.freshIds.size}) 공시 포털`;
+        const watched = fresh.filter((it) => watchOf(it));
+        if (watched.length) {
+          const it = watched[0];
+          toast(`★ ${it.corp_name}: ${it.report_nm}${watched.length > 1 ? ` 외 ${watched.length - 1}건` : ""}`);
+        }
+        render();
+      }
+    } catch (e) {
+      if (token === loadToken) state.error = e.message;
+    } finally {
+      if (token === loadToken) busy = false;
+      updateLive();
     }
   }
 
-  function applyStatus(st) {
+  function updateLive() {
     const banner = $("banner");
-    if (!st.api_key_set) {
+    if (state.apiKeySet === false) {
       banner.hidden = false;
-      banner.textContent = "DART_API_KEY가 설정되지 않았습니다. opendart.fss.or.kr에서 인증키를 발급받아 서버 환경변수(Render → Environment)에 넣어주세요.";
-    } else if (st.last_error) {
+      banner.textContent = "DART_API_KEY가 설정되지 않았습니다. Cloudflare 대시보드 → 이 Worker → Settings → Variables and Secrets에 인증키를 넣어주세요.";
+    } else if (state.error) {
       banner.hidden = false;
-      banner.textContent = `DART 조회 오류: ${st.last_error}`;
+      banner.textContent = `DART 조회 오류: ${state.error}`;
     } else {
       banner.hidden = true;
     }
-    if (state.date !== state.today) {
-      setLive("", "지난 날짜 보는 중");
-    } else if (st.last_error || !st.api_key_set) {
-      setLive("err", "갱신 실패");
-    } else if (st.last_polled) {
-      setLive("ok", `실시간 · 마지막 확인 ${st.last_polled.slice(11, 19)}`);
-    } else {
-      setLive("", "첫 수집 중…");
-    }
+    if (state.date !== state.today) setLive("", "지난 날짜 보는 중");
+    else if (state.error) setLive("err", "갱신 실패 · 30초 뒤 다시 시도");
+    else if (state.lastChecked) setLive("ok", `실시간 · 30초마다 확인 · 마지막 ${state.lastChecked}`);
+    else setLive("", "불러오는 중…");
   }
 
   function setLive(cls, text) {
@@ -191,7 +249,7 @@
   function rowHTML(it) {
     const watched = !!watchOf(it);
     const cls = [watched ? "watched" : "", state.freshIds.has(it.rcept_no) ? "fresh" : ""].join(" ");
-    const time = it.first_seen ? it.first_seen.slice(11, 16) : "–";
+    const time = it.first_seen ? it.first_seen.slice(0, 5) : "–";
     const tags = [
       it.is_exchange ? `<span class="tag krx" title="${esc(it.flags.join(", "))}">KRX</span>` : "",
       ...it.tags.map((t) => `<span class="tag ${it.important ? "imp" : ""}">${esc(t)}</span>`),
@@ -375,34 +433,40 @@
   }
 
   // ---------- 수동 새로고침(대사) ----------
-  // 서버가 DART에서 그 날짜 전체를 다시 받아 빠진 공시를 채우고, 화면은 목록을 통째로
-  // 다시 받아 "새로고침 전 화면"과 비교한다.
+  // DART에서 보고 있는 날짜 전체를 캐시 없이 다시 받아 지금 화면과 비교하고, 화면을 DART
+  // 원본과 똑같이 맞춘다(빠진 건 채우고, DART에 없는 건 뺀다).
   async function manualRefresh() {
     const btn = $("refreshBtn");
     if (btn.disabled || !state.date) return;
     const date = state.date;
-    const before = new Set(state.items.keys());
+    const token = ++loadToken; // 진행 중인 폴링 결과는 버린다
+    const before = new Map(state.items);
+    busy = true;
     btn.disabled = true;
     btn.classList.add("busy");
     $("refreshText").textContent = "대사 중…";
     try {
-      const r = await fetch(`/api/refresh?date=${date}`, { method: "POST", cache: "no-store" });
-      const res = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(res.detail || `HTTP ${r.status}`);
-      await loadDate(date);
-      if (state.date !== date) return;
-      const after = new Set(state.items.keys());
-      const added = [...after].filter((id) => !before.has(id));
-      const gone = [...before].filter((id) => !after.has(id));
-      added.forEach((id) => state.freshIds.add(id));
+      const list = await fetchAll(date, true);
+      if (token !== loadToken) return;
+      const t = nowKst();
+      const dartIds = new Set(list.map((it) => it.rcept_no));
+      const added = list.filter((it) => !before.has(it.rcept_no)).map((it) => it.rcept_no);
+      const gone = [...before.values()].filter((it) => !dartIds.has(it.rcept_no));
+      const markNew = before.size > 0;
+      setAll(list, (it) => (before.has(it.rcept_no) ? before.get(it.rcept_no).first_seen : markNew && date === state.today ? t : null));
+      state.freshIds = new Set(markNew ? added : []);
+      state.lastChecked = t;
+      state.error = null;
       render();
-      showRecon(res, added, gone, null, before.size);
+      showRecon({ dart_count: list.length, checked_at: t }, added, gone, null, before.size);
     } catch (e) {
-      showRecon(null, [], [], e.message);
+      if (token === loadToken) showRecon(null, [], [], e.message);
     } finally {
+      if (token === loadToken) busy = false;
       btn.disabled = false;
       btn.classList.remove("busy");
       $("refreshText").textContent = "새로고침";
+      updateLive();
     }
   }
 
@@ -415,19 +479,22 @@
       return;
     }
     const shown = state.items.size;
-    const match = res.dart_count === shown && !added.length && !gone.length;
+    const match = !added.length && !gone.length;
     box.className = `recon ${match ? "ok" : "diff"}`;
     const names = (ids) => ids.slice(0, 5).map((id) => {
       const it = state.items.get(id);
       return it ? `${esc(it.corp_name)} – ${esc(it.report_nm)}` : esc(id);
     }).join("<br>");
     const lines = [
-      `<b>${match ? "✓ 일치" : "차이 있음"}</b> · ${res.checked_at.slice(11, 19)} 대사 · ` +
+      `<b>${match ? "✓ 일치" : "차이 있음 → DART 기준으로 맞춤"}</b> · ${res.checked_at} 대사 · ` +
       `DART 원본 <b class="num">${res.dart_count.toLocaleString()}</b>건 / ` +
       `화면 <b class="num">${shown.toLocaleString()}</b>건 (새로고침 전 ${beforeCount.toLocaleString()}건)`,
     ];
     if (added.length) lines.push(`새로 채워진 공시 <b>${added.length}</b>건 (파란색 표시)<br>${names(added)}${added.length > 5 ? "<br>…" : ""}`);
-    if (res.not_in_dart && res.not_in_dart.length) lines.push(`DART 목록에서 빠진 공시 ${res.not_in_dart.length}건 (철회·재분류 등 — 화면에는 남겨둠)`);
+    if (gone.length) {
+      lines.push(`DART 목록에 없어 화면에서 뺀 공시 <b>${gone.length}</b>건 (철회 등)<br>` +
+        gone.slice(0, 5).map((it) => `${esc(it.corp_name)} – ${esc(it.report_nm)}`).join("<br>"));
+    }
     $("reconBody").innerHTML = lines.join("<br>");
   }
 
@@ -442,19 +509,18 @@
     importFromHash();
     bind();
     renderWatch();
+    state.today = todayKst();
+    $("dateInput").max = toInput(state.today);
     try {
       const st = await fetchJSON("/api/status");
-      state.today = st.today;
-      $("dateInput").max = toInput(st.today);
+      state.apiKeySet = st.api_key_set;
     } catch (e) {
-      setLive("err", `서버 연결 실패 · ${e.message}`);
-      showEmpty("서버에 연결할 수 없습니다.");
-      return;
+      state.error = `서버 연결 실패 · ${e.message}`;
     }
     await loadDate(state.today);
     fillWatchNames();
     render();
-    state.timer = setInterval(refresh, REFRESH_MS);
+    state.timer = setInterval(poll, REFRESH_MS);
   }
 
   init();

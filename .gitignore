@@ -19,3 +19,7 @@ frontend/.vite/
 
 # OS / editor
 .DS_Store
+
+# Cloudflare Worker (disclosure-portal)
+.dev.vars
+.wrangler/
