@@ -72,6 +72,15 @@ export function normalize(raw) {
 
 export class DartError extends Error {}
 
+const USER_AGENT = "Mozilla/5.0 (compatible; disclosure-portal/1.0)";
+
+// 메시지에서 API 키와 URL을 지운다 — 오류가 화면에 그대로 나가기 때문
+export function redact(message, apiKey) {
+  let m = String(message || "");
+  if (apiKey) m = m.split(apiKey).join("***");
+  return m.replace(/https?:\/\/\S+/g, "(URL)").slice(0, 300);
+}
+
 // date(YYYYMMDD)의 공시 목록 한 페이지(최신순)와 전체 페이지 수.
 export async function fetchPage(apiKey, date, page, fetchImpl = fetch) {
   if (!apiKey) throw new DartError("DART_API_KEY가 설정되지 않았습니다.");
@@ -87,14 +96,18 @@ export async function fetchPage(apiKey, date, page, fetchImpl = fetch) {
   });
   let data;
   try {
-    const resp = await fetchImpl(url, { headers: { Accept: "application/json" } });
+    // User-Agent가 없으면 DART가 error1.html로 계속 리다이렉트한다(Workers fetch는 기본으로 안 붙임).
+    // 리다이렉트는 따라가지 않고 오류로 처리한다.
+    const resp = await fetchImpl(url, { headers: { Accept: "application/json", "User-Agent": USER_AGENT }, redirect: "manual" });
+    if (resp.status >= 300 && resp.status < 400) throw new Error(`DART가 요청을 거부했습니다(리다이렉트 ${resp.status})`);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     data = await resp.json();
   } catch (e) {
-    throw new DartError(`DART 요청 실패: ${e.message}`);
+    // 오류 메시지에 요청 URL(=API 키)이 섞여 들어올 수 있어 키를 지운다
+    throw new DartError(`DART 요청 실패: ${redact(e.message, apiKey)}`);
   }
   if (data.status === "013") return { items: [], total_page: 0, total_count: 0 }; // 조회된 데이터 없음
-  if (data.status !== "000") throw new DartError(`DART 오류 ${data.status}: ${data.message || ""}`);
+  if (data.status !== "000") throw new DartError(`DART 오류 ${data.status}: ${redact(data.message, apiKey)}`);
   return {
     items: (data.list || []).map(normalize),
     total_page: Number(data.total_page) || 1,

@@ -82,3 +82,19 @@ test("비밀번호 잠금: 화면·API 모두 막고 /healthz만 열어둔다", 
   assert.equal(st.api_key_set, true);
   assert.equal(st.today, todayKst());
 });
+
+test("fetchPage: User-Agent를 붙이고, 리다이렉트는 오류로, 오류에 키가 안 새게", async () => {
+  let opts;
+  await fetchPage("k", "20261012", 1, async (url, o) => { opts = o; return dartResponse([])(); });
+  assert.match(opts.headers["User-Agent"], /Mozilla/); // 없으면 DART가 error1.html로 돌려보낸다
+  assert.equal(opts.redirect, "manual");
+
+  await assert.rejects(
+    fetchPage("secret-key-123", "20261012", 1, async () => new Response(null, { status: 302, headers: { Location: "https://opendart.fss.or.kr/error1.html" } })),
+    (e) => /거부/.test(e.message) && !e.message.includes("secret-key-123"),
+  );
+  await assert.rejects(
+    fetchPage("secret-key-123", "20261012", 1, async (url) => { throw new TypeError(`Too many redirects. ${url}, https://x/error1.html`); }),
+    (e) => !e.message.includes("secret-key-123") && !e.message.includes("crtfc_key"),
+  );
+});
