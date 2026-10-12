@@ -13,7 +13,7 @@
       <span class="logo">공시</span>
       <div>
         <h1>공시 포털</h1>
-        <p class="sub">DART · KIND(거래소) 공시 실시간 모아보기</p>
+        <p class="sub">코스피·코스닥 공시 실시간 모아보기 (DART · KIND)</p>
       </div>
     </div>
     <div class="live" id="live">
@@ -63,16 +63,20 @@
       <div class="filters">
         <div class="seg" id="marketSeg">
           <button data-m="" class="on">전체</button>
-          <button data-m="유가">유가</button>
+          <button data-m="코스피">코스피</button>
           <button data-m="코스닥">코스닥</button>
-          <button data-m="코넥스">코넥스</button>
-          <button data-m="기타">기타</button>
         </div>
         <label class="chk"><input type="checkbox" id="fExchange" /> 거래소(KIND)만</label>
         <label class="chk"><input type="checkbox" id="fImportant" /> 중요 공시만</label>
         <label class="chk"><input type="checkbox" id="fNoCorrection" /> 정정 제외</label>
-        <input type="search" id="search" placeholder="회사명·제목 검색" />
+        <input type="search" id="search" placeholder="회사명·제목·종목코드 검색 (일부만 입력해도 됨)" />
       </div>
+
+      <div class="cats" id="catBar">
+        <span class="lbl" title="상장주식 매매에 제한이나 조건(권리락, 거래정지, 주식수·가격 변동, 매도 제한 등)이 생기는 공시">거래·권리 영향</span>
+        <button data-c="*">전체 <span class="n" data-n="*"></span></button>
+      </div>
+      <p class="result" id="resultLine"></p>
 
       <div class="table-wrap">
         <table class="list">

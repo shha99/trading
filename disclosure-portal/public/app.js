@@ -18,6 +18,8 @@
     apiKeySet: null,
     tab: "all",
     market: "",
+    cats: new Set(),  // 고른 거래·권리 영향 분류 (비면 필터 없음, "*"는 분류 전체)
+    catNames: [],
     selected: null,   // 사이드바에서 고른 관심종목 key
     limit: PAGE,
     freshIds: new Set(),
@@ -73,6 +75,15 @@
   const todayKst = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul" }).format(new Date()).replaceAll("-", "");
   const nowKst = () => new Date().toLocaleTimeString("en-GB", { timeZone: "Asia/Seoul", hour12: false });
   const pageURL = (date, page, fresh) => `/api/page?date=${date}&page=${page}${fresh ? "&fresh=1" : ""}`;
+
+  // 코스피·코스닥 종목만 본다. 코넥스·기타(비상장·펀드 등)도 받아두긴 해야 새 공시 감지
+  // (이미 아는 공시가 나오면 멈춤)가 맞게 돌아서, 저장은 다 하고 보여줄 때만 거른다.
+  const inScope = (it) => it.market === "코스피" || it.market === "코스닥";
+  function scoped() {
+    const out = [];
+    for (const it of state.items.values()) if (inScope(it)) out.push(it);
+    return out;
+  }
 
   let busy = false;  // 불러오기/대사 중엔 폴링을 쉰다
   let loadToken = 0; // 날짜를 바꾸거나 대사를 시작하면 늘려서, 늦게 끝난 이전 요청 결과를 버린다
@@ -178,13 +189,13 @@
         it.seq = ++state.seq;
         it.first_seen = t;
         state.items.set(it.rcept_no, it);
-        state.freshIds.add(it.rcept_no);
+        if (inScope(it)) state.freshIds.add(it.rcept_no);
       }
       state.lastChecked = t;
       state.error = null;
       if (fresh.length) {
-        document.title = `(${state.freshIds.size}) 공시 포털`;
-        const watched = fresh.filter((it) => watchOf(it));
+        if (state.freshIds.size) document.title = `(${state.freshIds.size}) 공시 포털`;
+        const watched = fresh.filter((it) => inScope(it) && watchOf(it));
         if (watched.length) {
           const it = watched[0];
           toast(`★ ${it.corp_name}: ${it.report_nm}${watched.length > 1 ? ` 외 ${watched.length - 1}건` : ""}`);
@@ -222,14 +233,38 @@
   }
 
   // ---------- 필터/렌더 ----------
-  function filtered() {
-    const q = $("search").value.trim().toLowerCase();
+  // 검색: 대소문자·공백·가운뎃점·괄호를 무시하고, 입력한 글자가 일부만 들어 있어도 찾는다.
+  // 띄어 쓴 여러 단어는 각각 들어 있으면 찾는다(순서 무관). 회사명·제목·종목코드·제출인·태그 대상.
+  const norm = (s) => String(s).toLowerCase().replace(/[\s·ㆍ.,:;()[\]{}<>\-_/'"]/g, "");
+  function haystack(it) {
+    if (!it._hay) it._hay = norm([it.corp_name, it.report_nm, it.stock_code, it.flr_nm, it.market, ...it.tags, ...it.categories].join(" "));
+    return it._hay;
+  }
+  function searchTerms() {
+    const q = $("search").value.trim();
+    return { whole: norm(q), terms: q.split(/\s+/).map(norm).filter(Boolean), raw: q.split(/\s+/).filter(Boolean) };
+  }
+  function matches(it, st) {
+    if (!st.whole) return true;
+    const h = haystack(it);
+    return h.includes(st.whole) || (st.terms.length > 1 && st.terms.every((t) => h.includes(t)));
+  }
+  function catMatch(it) {
+    if (!state.cats.size) return true;
+    if (state.cats.has("*")) return it.categories.length > 0;
+    return it.categories.some((c) => state.cats.has(c));
+  }
+
+  // 시장·체크박스·검색 조건 (분류 조건은 빼고) — 분류 버튼 옆 건수를 세는 데도 쓴다
+  function baseFiltered() {
     const ex = $("fExchange").checked;
     const imp = $("fImportant").checked;
     const noFix = $("fNoCorrection").checked;
+    const st = searchTerms();
     const sel = state.selected && state.watch.find((w) => watchKey(w) === state.selected);
     const out = [];
     for (const it of state.items.values()) {
+      if (!inScope(it)) continue;
       if (state.tab === "watch") {
         const w = watchOf(it);
         if (!w || (sel && w !== sel)) continue;
@@ -238,20 +273,34 @@
       if (ex && !it.is_exchange) continue;
       if (imp && !it.important) continue;
       if (noFix && it.is_correction) continue;
-      if (q && !(it.corp_name.toLowerCase().includes(q) || it.report_nm.toLowerCase().includes(q) || it.stock_code.includes(q))) continue;
+      if (!matches(it, st)) continue;
       out.push(it);
     }
-    return out.sort((a, b) => b.seq - a.seq); // seq = DART 게시 순서(접수번호는 시간순이 아님)
+    return out;
+  }
+
+  function filtered(base = baseFiltered()) {
+    return base.filter(catMatch).sort((a, b) => b.seq - a.seq); // seq = DART 게시 순서(접수번호는 시간순이 아님)
   }
 
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-  function rowHTML(it) {
+  // 검색어와 글자 그대로 같은 부분에 형광펜 (공백·기호를 무시하고 맞은 경우엔 표시 안 될 수 있음)
+  function hl(text, st) {
+    const words = [...new Set(st.raw)];
+    if (!words.length) return esc(text);
+    const re = new RegExp(`(${words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`, "gi");
+    // split에 캡처 그룹을 쓰면 홀수 번째 조각이 일치한 부분이다
+    return String(text).split(re).map((part, i) => (i % 2 ? `<mark>${esc(part)}</mark>` : esc(part))).join("");
+  }
+
+  function rowHTML(it, st) {
     const watched = !!watchOf(it);
     const cls = [watched ? "watched" : "", state.freshIds.has(it.rcept_no) ? "fresh" : ""].join(" ");
     const time = it.first_seen ? it.first_seen.slice(0, 5) : "–";
     const tags = [
       it.is_exchange ? `<span class="tag krx" title="${esc(it.flags.join(", "))}">KRX</span>` : "",
+      ...it.categories.map((c) => `<span class="tag cat">${esc(c)}</span>`),
       ...it.tags.map((t) => `<span class="tag ${it.important ? "imp" : ""}">${esc(t)}</span>`),
       it.is_correction ? `<span class="tag fix">정정</span>` : "",
     ].join("");
@@ -260,31 +309,55 @@
       <td class="mkt-cell"><span class="mkt ${esc(it.market)}">${esc(it.market)}</span></td>
       <td><div class="corp">
         <button class="star ${watched ? "on" : ""}" data-star="${it.rcept_no}" title="${watched ? "관심종목 해제" : "관심종목 추가"}">${watched ? "★" : "☆"}</button>
-        <span class="nm" title="${esc(it.corp_name)}">${esc(it.corp_name)}</span>
-        ${it.stock_code ? `<span class="cd">${esc(it.stock_code)}</span>` : ""}
+        <span class="nm" title="${esc(it.corp_name)}">${hl(it.corp_name, st)}</span>
+        ${it.stock_code ? `<span class="cd">${hl(it.stock_code, st)}</span>` : ""}
       </div></td>
-      <td class="title"><a href="${esc(it.url)}" target="_blank" rel="noopener">${esc(it.report_nm)}</a>${tags}</td>
-      <td class="flr" title="${esc(it.flr_nm)}">${esc(it.flr_nm)}</td>
+      <td class="title"><a href="${esc(it.url)}" target="_blank" rel="noopener">${hl(it.report_nm, st)}</a>${tags}</td>
+      <td class="flr" title="${esc(it.flr_nm)}">${hl(it.flr_nm, st)}</td>
     </tr>`;
   }
 
   function render() {
-    const list = filtered();
-    $("rows").innerHTML = list.slice(0, state.limit).map(rowHTML).join("");
+    const base = baseFiltered();
+    const list = filtered(base);
+    const st = searchTerms();
+    $("rows").innerHTML = list.slice(0, state.limit).map((it) => rowHTML(it, st)).join("");
     $("moreBtn").hidden = list.length <= state.limit;
+    const all = scoped();
     if (!list.length) {
       const msg = state.tab === "watch" && !state.watch.length
         ? "관심종목이 없습니다. 목록의 ☆를 눌러 추가하세요."
-        : state.items.size ? "조건에 맞는 공시가 없습니다." : "공시가 없습니다.";
+        : all.length ? "조건에 맞는 공시가 없습니다." : "코스피·코스닥 공시가 없습니다.";
       showEmpty(msg);
     } else {
       $("empty").hidden = true;
     }
-    let watchedCount = 0;
-    for (const it of state.items.values()) if (watchOf(it)) watchedCount++;
-    $("allCount").textContent = state.items.size.toLocaleString();
-    $("watchFeedCount").textContent = watchedCount.toLocaleString();
+    const filtering = st.whole || state.cats.size || state.market || $("fExchange").checked || $("fImportant").checked || $("fNoCorrection").checked;
+    $("resultLine").textContent = filtering ? `조건에 맞는 공시 ${list.length.toLocaleString()}건` : "";
+    $("allCount").textContent = all.length.toLocaleString();
+    $("watchFeedCount").textContent = all.filter((it) => watchOf(it)).length.toLocaleString();
+    renderCats(base);
     renderWatch();
+  }
+
+  function renderCats(base) {
+    const counts = new Map([["*", 0]]);
+    for (const it of base) {
+      if (it.categories.length) counts.set("*", counts.get("*") + 1);
+      for (const c of it.categories) counts.set(c, (counts.get(c) || 0) + 1);
+    }
+    for (const b of $("catBar").querySelectorAll("button[data-c]")) {
+      const n = counts.get(b.dataset.c) || 0;
+      b.querySelector(".n").textContent = n;
+      b.classList.toggle("on", state.cats.has(b.dataset.c));
+      b.classList.toggle("zero", n === 0);
+    }
+  }
+
+  function buildCatBar(names) {
+    state.catNames = names;
+    $("catBar").insertAdjacentHTML("beforeend", names
+      .map((c) => `<button data-c="${esc(c)}">${esc(c)} <span class="n"></span></button>`).join(""));
   }
 
   function showEmpty(msg) {
@@ -294,7 +367,8 @@
 
   function renderWatch() {
     const counts = new Map();
-    for (const it of state.items.values()) {
+    const all = scoped();
+    for (const it of all) {
       const w = watchOf(it);
       if (w) counts.set(watchKey(w), (counts.get(watchKey(w)) || 0) + 1);
     }
@@ -313,7 +387,7 @@
 
     // 자동완성: 오늘 목록에 나온 회사들
     const seen = new Map();
-    for (const it of state.items.values()) if (!seen.has(it.corp_name)) seen.set(it.corp_name, it.stock_code);
+    for (const it of all) if (!seen.has(it.corp_name)) seen.set(it.corp_name, it.stock_code);
     $("corpList").innerHTML = [...seen].slice(0, 3000)
       .map(([n, c]) => `<option value="${esc(n)}">${c ? esc(c) : ""}</option>`).join("");
   }
@@ -410,6 +484,19 @@
       state.limit = PAGE;
       render();
     });
+    $("catBar").addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-c]");
+      if (!b) return;
+      const c = b.dataset.c;
+      if (c === "*") {
+        state.cats = state.cats.has("*") ? new Set() : new Set(["*"]);
+      } else {
+        state.cats.delete("*");
+        state.cats.has(c) ? state.cats.delete(c) : state.cats.add(c);
+      }
+      state.limit = PAGE;
+      render();
+    });
     ["fExchange", "fImportant", "fNoCorrection"].forEach((id) => $(id).addEventListener("change", () => { state.limit = PAGE; render(); }));
     $("search").addEventListener("input", () => { state.limit = PAGE; render(); });
     $("refreshBtn").addEventListener("click", manualRefresh);
@@ -450,15 +537,16 @@
       if (token !== loadToken) return;
       const t = nowKst();
       const dartIds = new Set(list.map((it) => it.rcept_no));
-      const added = list.filter((it) => !before.has(it.rcept_no)).map((it) => it.rcept_no);
-      const gone = [...before.values()].filter((it) => !dartIds.has(it.rcept_no));
+      const added = list.filter((it) => inScope(it) && !before.has(it.rcept_no)).map((it) => it.rcept_no);
+      const gone = [...before.values()].filter((it) => inScope(it) && !dartIds.has(it.rcept_no));
+      const beforeScoped = [...before.values()].filter(inScope).length;
       const markNew = before.size > 0;
       setAll(list, (it) => (before.has(it.rcept_no) ? before.get(it.rcept_no).first_seen : markNew && date === state.today ? t : null));
       state.freshIds = new Set(markNew ? added : []);
       state.lastChecked = t;
       state.error = null;
       render();
-      showRecon({ dart_count: list.length, checked_at: t }, added, gone, null, before.size);
+      showRecon({ dart_count: list.filter(inScope).length, checked_at: t }, added, gone, null, beforeScoped);
     } catch (e) {
       if (token === loadToken) showRecon(null, [], [], e.message);
     } finally {
@@ -478,7 +566,7 @@
       $("reconBody").innerHTML = `<b>새로고침 실패</b> · ${esc(error)}`;
       return;
     }
-    const shown = state.items.size;
+    const shown = scoped().length;
     const match = !added.length && !gone.length;
     box.className = `recon ${match ? "ok" : "diff"}`;
     const names = (ids) => ids.slice(0, 5).map((id) => {
@@ -487,7 +575,7 @@
     }).join("<br>");
     const lines = [
       `<b>${match ? "✓ 일치" : "차이 있음 → DART 기준으로 맞춤"}</b> · ${res.checked_at} 대사 · ` +
-      `DART 원본 <b class="num">${res.dart_count.toLocaleString()}</b>건 / ` +
+      `DART 원본(코스피·코스닥) <b class="num">${res.dart_count.toLocaleString()}</b>건 / ` +
       `화면 <b class="num">${shown.toLocaleString()}</b>건 (새로고침 전 ${beforeCount.toLocaleString()}건)`,
     ];
     if (added.length) lines.push(`새로 채워진 공시 <b>${added.length}</b>건 (파란색 표시)<br>${names(added)}${added.length > 5 ? "<br>…" : ""}`);
@@ -514,6 +602,7 @@
     try {
       const st = await fetchJSON("/api/status");
       state.apiKeySet = st.api_key_set;
+      buildCatBar(st.categories || []);
     } catch (e) {
       state.error = `서버 연결 실패 · ${e.message}`;
     }

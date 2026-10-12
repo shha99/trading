@@ -7,7 +7,7 @@
 // 비밀값(Cloudflare 대시보드 → Worker → Settings → Variables and Secrets):
 //   DART_API_KEY     OpenDART 인증키 (필수)
 //   PORTAL_PASSWORD  설정하면 접속할 때 비밀번호를 묻는다(아이디는 아무거나) — "나만 보기"
-import { DartError, fetchPage } from "./dart.js";
+import { DartError, TRADE_CATEGORIES, fetchPage } from "./dart.js";
 
 const TODAY_TTL = 15; // 오늘 목록 캐시(초) — 탭 여러 개를 열어도 DART 호출이 늘지 않게
 const PAST_TTL = 600; // 지난 날짜는 거의 안 바뀐다
@@ -84,7 +84,9 @@ export async function handle(request, env, ctx, fetchImpl = fetch) {
     });
   }
   if (url.pathname === "/api/page" && request.method === "GET") return handlePage(url, env, ctx, fetchImpl);
-  if (url.pathname === "/api/status") return json({ today: todayKst(), api_key_set: Boolean(env.DART_API_KEY) });
+  if (url.pathname === "/api/status") {
+    return json({ today: todayKst(), api_key_set: Boolean(env.DART_API_KEY), categories: TRADE_CATEGORIES.map(([name]) => name) });
+  }
   if (url.pathname.startsWith("/api/")) return json({ detail: "not found" }, 404);
   return env.ASSETS.fetch(request);
 }

@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { fetchPage, normalize, tagsFor } from "../src/dart.js";
+import { categoriesFor, fetchPage, normalize, tagsFor } from "../src/dart.js";
 import { handle, todayKst } from "../src/worker.js";
 
 const raw = (n, o = {}) => ({
@@ -16,7 +16,7 @@ const dartResponse = (list, extra = {}) => async () =>
 
 test("정규화: 시장·거래소·정정·태그", () => {
   const it = normalize(raw(1, { report_nm: "[기재정정]단일판매ㆍ공급계약체결", rm: "유정" }));
-  assert.equal(it.market, "유가");
+  assert.equal(it.market, "코스피");
   assert.equal(it.is_exchange, true);
   assert.equal(it.is_correction, true);
   assert.ok(it.tags.includes("계약") && it.important);
@@ -33,6 +33,32 @@ test("제목 공백 정리, 태그는 공백 무시", () => {
   assert.equal(normalize(raw(1, { report_nm: "주주총회소집결의              (임시주주총회)" })).report_nm, "주주총회소집결의 (임시주주총회)");
   assert.ok(tagsFor("최대주주 변경").includes("최대주주"));
   assert.ok(tagsFor("연결재무제표기준영업(잠정)실적(공정공시)").includes("실적"));
+});
+
+test("거래·권리 영향 분류 (실제 DART 제목)", () => {
+  const cases = {
+    "[기재정정]주요사항보고서(유상증자결정)": ["증자·감자"],
+    "주요사항보고서(감자결정)": ["증자·감자"],
+    "현금ㆍ현물배당결정 (분기배당)": ["배당"],
+    "현금ㆍ현물배당을위한주주명부폐쇄(기준일)결정": ["배당", "권리락·기준일"],
+    "중간(분기)배당락": ["배당", "권리락·기준일"],
+    "권리락 (유상증자)": ["증자·감자", "권리락·기준일"],
+    "주주명부폐쇄기간또는기준일설정": ["권리락·기준일"],
+    "주식소각결정": ["주식수·가격조정"],
+    "전환가액ㆍ신주인수권행사가액ㆍ교환가액의조정(안내공시)": ["주식수·가격조정"],
+    "주권매매거래정지 (투자자 보호)": ["거래정지"],
+    "주권매매거래정지 (상장적격성 실질심사 대상 (사유발생))": ["거래정지", "시장조치·경고"],
+    "기타시장안내(관리종목지정우려종목) (시가총액 200억원 미달)": ["시장조치·경고"],
+    "불성실공시법인지정 (공시번복)": ["시장조치·경고"],
+    "기타시장안내 (최대주주의 의무보유 이행 관련)": ["의무보유"],
+    "임원ㆍ주요주주특정증권등소유상황보고서": [],
+    "단일판매ㆍ공급계약체결": [],
+  };
+  for (const [title, want] of Object.entries(cases)) assert.deepEqual(categoriesFor(title), want, title);
+
+  const it = normalize(raw(1, { report_nm: "현금ㆍ현물배당결정" }));
+  assert.deepEqual(it.categories, ["배당"]);
+  assert.equal(it.important, true);
 });
 
 test("fetchPage: 데이터 없음(013)과 오류", async () => {
@@ -81,6 +107,7 @@ test("비밀번호 잠금: 화면·API 모두 막고 /healthz만 열어둔다", 
   const st = await (await handle(req("/api/status", basic("s3cret")), e, ctx)).json();
   assert.equal(st.api_key_set, true);
   assert.equal(st.today, todayKst());
+  assert.ok(st.categories.includes("배당") && st.categories.includes("거래정지"));
 });
 
 test("fetchPage: User-Agent를 붙이고, 리다이렉트는 오류로, 오류에 키가 안 새게", async () => {
