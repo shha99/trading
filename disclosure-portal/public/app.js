@@ -367,7 +367,10 @@
       banner.textContent = "DART_API_KEY가 설정되지 않았습니다. Cloudflare 대시보드 → 이 Worker → Settings → Variables and Secrets에 인증키를 넣어주세요.";
     } else if (state.error) {
       banner.hidden = false;
-      banner.textContent = `DART 조회 오류: ${state.error}`;
+      // 이미 받아둔 목록이 있으면 그대로 보여주고 있다는 걸 알린다(일시적 지연은 30초 뒤 자동 재시도)
+      banner.textContent = state.items.size
+        ? `DART 연결이 잠시 원활하지 않습니다. 받아둔 목록을 그대로 보여주는 중이고 30초마다 다시 시도합니다. (${state.error})`
+        : `DART 조회 오류: ${state.error}`;
     } else {
       banner.hidden = true;
     }

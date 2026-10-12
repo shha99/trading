@@ -103,6 +103,12 @@ export function redact(message, apiKey) {
   return m.replace(/https?:\/\/\S+/g, "(URL)").slice(0, 300);
 }
 
+function describeStatus(status) {
+  if (status === 522 || status === 524) return `DART 서버가 제때 응답하지 않았습니다(HTTP ${status}) — 잠시 후 자동으로 다시 시도합니다`;
+  if (status === 503) return "DART 서버 점검 중이거나 일시적으로 사용할 수 없습니다(HTTP 503)";
+  return `DART 서버 오류(HTTP ${status})`;
+}
+
 // OpenDART 아무 API나 호출한다(endpoint 예: "list.json", "cmpMgDecsn.json", "document.xml").
 // JSON이면 상태코드까지 확인해서 돌려주고("013" 데이터 없음은 null), 그 밖에는 바이트(ArrayBuffer).
 export async function dartRequest(apiKey, endpoint, params, fetchImpl = fetch) {
@@ -111,16 +117,26 @@ export async function dartRequest(apiKey, endpoint, params, fetchImpl = fetch) {
   url.search = new URLSearchParams({ crtfc_key: apiKey, ...params });
   const isJson = endpoint.endsWith(".json");
   let data;
-  try {
-    // User-Agent가 없으면 DART가 error1.html로 계속 리다이렉트한다(Workers fetch는 기본으로 안 붙임).
-    // 리다이렉트는 따라가지 않고 오류로 처리한다.
-    const resp = await fetchImpl(url, { headers: { Accept: isJson ? "application/json" : "*/*", "User-Agent": USER_AGENT }, redirect: "manual" });
-    if (resp.status >= 300 && resp.status < 400) throw new Error(`DART가 요청을 거부했습니다(리다이렉트 ${resp.status})`);
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    data = isJson ? await resp.json() : await resp.arrayBuffer();
-  } catch (e) {
-    // 오류 메시지에 요청 URL(=API 키)이 섞여 들어올 수 있어 키를 지운다
-    throw new DartError(`DART 요청 실패: ${redact(e.message, apiKey)}`);
+  // 5xx(Cloudflare 522 = DART 응답 시간 초과 포함)나 네트워크 오류는 잠깐 쉬고 두 번까지 다시 시도한다
+  for (let attempt = 0; ; attempt++) {
+    try {
+      // User-Agent가 없으면 DART가 error1.html로 계속 리다이렉트한다(Workers fetch는 기본으로 안 붙임).
+      // 리다이렉트는 따라가지 않고 오류로 처리한다.
+      const resp = await fetchImpl(url, { headers: { Accept: isJson ? "application/json" : "*/*", "User-Agent": USER_AGENT }, redirect: "manual" });
+      if (resp.status >= 300 && resp.status < 400) throw new Error(`DART가 요청을 거부했습니다(리다이렉트 ${resp.status})`);
+      if (resp.status >= 500) throw Object.assign(new Error(describeStatus(resp.status)), { retry: true });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      data = isJson ? await resp.json() : await resp.arrayBuffer();
+      break;
+    } catch (e) {
+      const retryable = e.retry || e instanceof TypeError; // TypeError = 연결 자체 실패
+      if (retryable && attempt < 2) {
+        await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+        continue;
+      }
+      // 오류 메시지에 요청 URL(=API 키)이 섞여 들어올 수 있어 키를 지운다
+      throw new DartError(`DART 요청 실패: ${redact(e.message, apiKey)}`);
+    }
   }
   if (!isJson) return data;
   if (data.status === "013") return null; // 조회된 데이터 없음

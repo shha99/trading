@@ -300,3 +300,20 @@ test("캘린더 후보: 결정 뒤 철회신고서가 나오면 철회 표시", 
   const c = await fetchCandidates("k", "20261012", fetchImpl);
   assert.equal(c.deals[0].withdrawn_rcept_no, "20260929000637");
 });
+
+test("DART 5xx·연결 실패는 두 번까지 재시도, 그래도 안 되면 알기 쉬운 메시지", async () => {
+  let n = 0;
+  const flaky = async () => (++n < 3 ? new Response("", { status: 522 }) : dartResponse([raw(1)])());
+  const ok = await fetchPage("k", "20261012", 1, flaky);
+  assert.equal(ok.items.length, 1);
+  assert.equal(n, 3);
+
+  let m = 0;
+  await assert.rejects(fetchPage("secret", "20261012", 1, async () => { m++; return new Response("", { status: 522 }); }),
+    (e) => /제때 응답하지 않았습니다/.test(e.message) && !e.message.includes("secret"));
+  assert.equal(m, 3);
+
+  let k = 0;
+  await assert.rejects(fetchPage("k", "20261012", 1, async () => { k++; return new Response("", { status: 404 }); }), /HTTP 404/);
+  assert.equal(k, 1); // 4xx는 재시도하지 않는다
+});
