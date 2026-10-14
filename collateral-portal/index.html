@@ -247,10 +247,10 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
   <div id="pane-cands" hidden style="display:grid;gap:14px;">
     <section class="panel">
       <h2>OB+ 코드 자동 연결</h2>
-      <p class="fine">엑셀에서 하던 순서 그대로 연결합니다: 일일정산 <b>담보관리번호</b> = 하나플러스 <b>장파담보번호</b> → <b>관련상품</b> = OB+_71006 <b>관련상품코드</b> → OB+코드·코드명(관련상품명). ETF 종목코드는 코드명의 “ETF_481050” 부분으로 KR7481050003처럼 계산합니다. 엑셀 조회 결과를 <b>머리글 행까지 포함해 복사 → 붙여넣기</b> 하면 됩니다. 한 번 넣은 연결은 저장돼 계속 쓰이고, 다시 붙여넣으면 기존 연결에 <b>추가·갱신</b>됩니다(제공과 수취를 따로 넣어도 됩니다). 내용은 이 브라우저 안에서만 처리됩니다.</p>
+      <p class="fine">엑셀에서 하던 순서 그대로 연결합니다: 일일정산 <b>담보관리번호</b> = 하나플러스 <b>장파담보번호</b> → 하나플러스 <b>상품명</b>(TRS(ETF_…)) = OB+_71006 <b>관련상품명</b> → <b>관련상품코드</b>가 OB+코드입니다. ETF 종목코드는 코드명의 “ETF_481050” 부분으로 KR7481050003처럼 계산합니다. 엑셀 조회 결과를 <b>머리글 행까지 포함해 복사 → 붙여넣기</b> 하면 됩니다. 한 번 넣은 연결은 저장돼 계속 쓰이고, 다시 붙여넣으면 기존 연결에 <b>추가·갱신</b>됩니다(제공과 수취를 따로 넣어도 됩니다). 내용은 이 브라우저 안에서만 처리됩니다.</p>
       <div class="grid2">
         <div class="lk-box">
-          <h3>① 하나플러스_4670 <span class="muted">(담보번호 ↔ 관련상품)</span></h3>
+          <h3>① 하나플러스_4670 <span class="muted">(장파담보번호 → 상품명)</span></h3>
           <p class="fine" id="lk-hp-saved"></p>
           <textarea id="lk-hp-paste" style="min-height:90px" placeholder="하나플러스_4670 조회 결과를 머리글(일자 · 처리구분 · …)부터 복사해 붙여넣기 (Ctrl+V)"></textarea>
           <div class="row"><button type="button" class="btn primary" id="lk-hp-go">붙여넣은 내용 반영</button></div>
@@ -258,7 +258,7 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
           <div id="lk-hp"></div>
         </div>
         <div class="lk-box">
-          <h3>② OB+_71006 제공 · 수취 <span class="muted">(관련상품코드 = OB+코드, 관련상품명 = OB+코드명)</span></h3>
+          <h3>② OB+_71006 제공 · 수취 <span class="muted">(관련상품명 → 관련상품코드 = OB+코드)</span></h3>
           <p class="fine" id="lk-ob-saved"></p>
           <textarea id="lk-ob-paste" style="min-height:90px" placeholder="OB+_71006 제공 또는 수취 조회 결과를 머리글(거래상대방 · 펀드코드 · …)부터 복사해 붙여넣기 (Ctrl+V)"></textarea>
           <div class="row"><button type="button" class="btn primary" id="lk-ob-go">붙여넣은 내용 반영</button></div>
@@ -269,7 +269,7 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
       <div class="row"><button type="button" class="btn" id="lk-apply">열 바꾼 뒤 다시 반영</button><button type="button" class="btn" id="lk-clear">저장된 연결 비우기</button><span class="fine" id="lk-msg"></span></div>
       <h3>③ 연결 결과 <span class="muted num" id="lk-count"></span></h3>
       <div class="tablewrap scrolllist"><table>
-        <thead><tr><th>상태</th><th>담보번호</th><th>관련상품</th><th>OB+코드</th><th>OB+코드명</th><th>ETF 종목코드</th><th>출처</th></tr></thead>
+        <thead><tr><th>상태</th><th>담보번호</th><th>상품명 (하나플러스)</th><th>OB+코드</th><th>OB+코드명</th><th>ETF 종목코드</th><th>출처</th></tr></thead>
         <tbody id="lk-body"></tbody>
       </table></div>
     </section>
@@ -508,9 +508,10 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
   // 머리글 후보는 앞에서부터 우선 (하나플러스 / OB+_71006 제공·수취 조회 화면 머리글 기준)
   var LK_F = {
     hp: [["key", "장파담보번호 열", true, [/^장파담보번호$/, /장파.*담보/, /담보관리번호|담보번호/]],
-         ["prod", "관련상품 열", true, [/^관련상품$/, /관련상품(?!명)/]]],
-    ob: [["prod", "관련상품코드 열 (하나플러스 관련상품과 맞출 값)", true, [/^관련상품코드$/, /관련상품(?!명)/]],
-         ["ob", "OB+코드 열", true, [/^관련상품코드$/, /OB\+?코드(?!명)/i]],
+         ["key2", "계좌번호/관리번호 열 (보조 키)", false, [/^계좌번호\/관리번호$/]],
+         ["prod", "상품명 열 (TRS(ETF_…))", true, [/^상품명$/]]],
+    ob: [["prod", "관련상품명 열 (하나플러스 상품명과 맞출 값)", true, [/^관련상품명$/]],
+         ["ob", "OB+코드 열 (관련상품코드)", true, [/^관련상품코드$/, /OB\+?코드(?!명)/i]],
          ["obName", "OB+코드명 열", false, [/^관련상품명$/, /OB\+?코드명/i]],
          ["mgmt", "담보관리번호 열 (보조 연결)", false, [/^담보관리번호$/]],
          ["etf", "ETF 종목코드 열 (없으면 코드명에서 계산)", false, [/^ETF.*코드$/i]]]
@@ -525,12 +526,12 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     }
     return best;
   }
-  // 머리글 없이 붙여넣었을 때 쓸 기본 위치 (하나플러스 AB·S열 / OB+_71006 Z·AA·X열)
-  var LK_DEF = { hp: { key: 27, prod: 18 }, ob: { prod: 25, ob: 25, obName: 26, mgmt: 23 } };
+  // 머리글 없이 붙여넣었을 때 쓸 기본 위치 (하나플러스 AB·R·I열 / OB+_71006 AA·Z·X열)
+  var LK_DEF = { hp: { key: 27, key2: 17, prod: 8 }, ob: { prod: 26, ob: 25, obName: 26, mgmt: 23 } };
   function lkSetSheet(kind, t, sheet) {
     t.sheet = sheet; var rows = t.sheets[sheet] || [];
     t.hdr = guessHeader(rows); t.map = {};
-    var saved = (state.settings.lk || {})[kind] || {}, head = (rows[t.hdr] || []).map(function (c) { return String(c).replace(/\s/g, ""); });
+    var saved = (state.settings.lkCols || {})[kind] || {}, head = (rows[t.hdr] || []).map(function (c) { return String(c).replace(/\s/g, ""); });
     LK_F[kind].forEach(function (f) {
       var i = saved[f[0]] ? head.indexOf(saved[f[0]]) : -1;
       for (var r = 0; i < 0 && r < f[3].length; r++) i = head.findIndex(function (h) { return f[3][r].test(h); });
@@ -566,18 +567,21 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
   function lkReq(kind, t) { return t && LK_F[kind].every(function (f) { return !f[2] || t.map[f[0]] >= 0; }); }
   function lkReady() { return (lk.hp ? lkReq("hp", lk.hp) : false) || lk.ob.some(function (t) { return lkReq("ob", t); }); }
   function lkApply(auto) {
-    state.link = state.link || { hp: {}, ob: {} };
-    state.settings.lk = state.settings.lk || {};
+    if (!state.link || state.link.ver !== 2) state.link = { hp: {}, ob: {}, mgmt: {}, ver: 2 };
+    state.settings.lkCols = state.settings.lkCols || {};
     var msgs = [];
     var remember = function (kind, t) {
       var head = t.sheets[t.sheet][t.hdr] || [], m = {};
       LK_F[kind].forEach(function (f) { if (t.map[f[0]] >= 0) m[f[0]] = String(head[t.map[f[0]]]).replace(/\s/g, ""); });
-      state.settings.lk[kind] = m;
+      state.settings.lkCols[kind] = m;
     };
     if (lk.hp && lkReq("hp", lk.hp)) {
       var t = lk.hp, hp = Object.assign({}, state.link.hp || {}), n0 = 0;
       t.sheets[t.sheet].slice(t.hdr + 1).forEach(function (r) {
-        var k = lkKey(r[t.map.key]), pr = lkKey(r[t.map.prod]); if (k && pr) { hp[k] = pr; n0++; }
+        var pr = lkKey(r[t.map.prod]); if (!pr) return;
+        var k = lkKey(r[t.map.key]), k2 = t.map.key2 >= 0 ? lkKey(r[t.map.key2]) : "";
+        if (k) hp[k] = pr; if (k2 && !hp[k2]) hp[k2] = pr;
+        if (k || k2) n0++;
       });
       state.link.hp = hp; state.link.hpFile = t.name; state.link.hpAt = new Date().toISOString(); if (!t.noHeader) remember("hp", t);
       msgs.push("하나플러스 " + n0 + "건 반영 (저장 " + Object.keys(hp).length + "건)");
@@ -590,19 +594,18 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
         t.sheets[t.sheet].slice(t.hdr + 1).forEach(function (r) {
           var pr = lkKey(r[t.map.prod]), code = g(r, "ob"); if (!pr || !code) return;
           var rec = { ob: code, obName: g(r, "obName"), etf: g(r, "etf") };
-          ob[pr] = rec; n1++;
-          // 하나플러스 관련상품에 코드명이 들어 있어도 맞도록 코드명으로도 찾게 둔다
-          if (rec.obName) ob[lkKey(rec.obName)] = rec;
+          ob[pr] = rec; n1++;           // 관련상품명(= 하나플러스 상품명)으로 찾기
+          ob[lkKey(code)] = rec;         // 혹시 상품명 자리에 코드가 들어 있어도 찾히게
           // OB+ 쪽 담보관리번호가 장파담보번호와 같으면 하나플러스 없이도 연결 (보조)
           var mg = lkKey(g(r, "mgmt")); if (mg) mgmt[mg] = rec;
         });
         if (!t.noHeader) remember("ob", t);
       });
       state.link.ob = ob; state.link.mgmt = mgmt; state.link.obAt = new Date().toISOString();
-      msgs.push("OB+_71006 " + n1 + "건 반영 (저장 " + Object.keys(ob).filter(function (k) { return ob[k].ob && lkKey(ob[k].ob) === k; }).length + "건)");
+      msgs.push("OB+_71006 " + n1 + "건 반영 (저장 " + Object.keys(ob).filter(function (k) { return ob[k].ob && lkKey(ob[k].ob) !== k; }).length + "건)");
     }
     state.link.at = new Date().toISOString();
-    $("lk-msg").textContent = msgs.length ? (auto ? "자동 연결: " : "연결 적용: ") + msgs.join(" · ") : "필수 열(담보번호·관련상품 또는 관련상품·OB+코드)을 골라 주세요.";
+    $("lk-msg").textContent = msgs.length ? (auto ? "자동 연결: " : "연결 적용: ") + msgs.join(" · ") : "필수 열(하나플러스: 장파담보번호·상품명 / OB+: 관련상품명·관련상품코드)을 골라 주세요.";
     commit();
   }
   // 담보번호의 OB+ 정보: 수동 입력 > 자동 연결
@@ -612,7 +615,7 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     var L = state.link || {}, pr = (L.hp || {})[lkKey(k)];
     var o = pr ? (L.ob || {})[pr] : null, src = "자동";
     if (!o && (L.mgmt || {})[lkKey(k)]) { o = L.mgmt[lkKey(k)]; src = "자동(담보관리번호)"; }
-    if (!o) return pr ? { prod: pr, src: "", miss: "OB+코드 없음" } : { src: "", miss: "관련상품 없음" };
+    if (!o) return pr ? { prod: pr, src: "", miss: "OB+에 상품명 없음" } : { src: "", miss: "하나플러스에 담보번호 없음" };
     return { prod: pr || "", ob: o.ob, obName: o.obName, etf: o.etf || etfFromName(o.obName), src: src };
   }
   // "TRS(ETF_481050)_..." → KR7481050003 (ISIN 검사숫자 계산)
@@ -641,9 +644,9 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
       "</div>" + (lkReq(kind, t) ? "" : '<span class="pill warn">필수 열을 골라 주세요</span>') + "</div>";
   }
   function renderLink() {
-    var L = state.link || {}, nHp = Object.keys(L.hp || {}).length, nOb = Object.keys(L.ob || {}).filter(function (k) { return L.ob[k].ob && lkKey(L.ob[k].ob) === k; }).length;
+    var L = state.link || {}, nHp = Object.keys(L.hp || {}).length, nOb = Object.keys(L.ob || {}).filter(function (k) { return L.ob[k].ob && lkKey(L.ob[k].ob) !== k; }).length;
     $("lk-hp-saved").innerHTML = nHp ? "<span class='pill ok'>저장됨</span> 장파담보번호 <b class='num'>" + nHp + "</b>건 · 마지막 반영 " + localTime(L.hpAt || L.at) + " — 신규 거래가 생겼을 때만 추가로 붙여넣으세요." : "<span class='pill warn'>비어 있음</span> 처음 한 번 붙여넣으세요.";
-    $("lk-ob-saved").innerHTML = nOb ? "<span class='pill ok'>저장됨</span> 관련상품코드 <b class='num'>" + nOb + "</b>건 · 마지막 반영 " + localTime(L.obAt || L.at) + " — 제공·수취를 따로 붙여넣어도 합쳐집니다." : "<span class='pill warn'>비어 있음</span> 제공, 수취를 각각 붙여넣으세요.";
+    $("lk-ob-saved").innerHTML = nOb ? "<span class='pill ok'>저장됨</span> 관련상품명 <b class='num'>" + nOb + "</b>건 · 마지막 반영 " + localTime(L.obAt || L.at) + " — 제공·수취를 따로 붙여넣어도 합쳐집니다." : "<span class='pill warn'>비어 있음</span> 제공, 수취를 각각 붙여넣으세요.";
     $("lk-hp").innerHTML = lk.hp ? lkTableUI("hp", lk.hp, 0) : "";
     $("lk-ob").innerHTML = lk.ob.map(function (t, i) { return lkTableUI("ob", t, i); }).join("");
     var calls = buildCalls(), ok = 0;
@@ -1199,6 +1202,7 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     ["daily", "master", "cands"].forEach(function (k) { if (!Array.isArray(state[k])) state[k] = []; });
     ["prices", "alloc", "names", "link"].forEach(function (k) { if (!state[k] || typeof state[k] !== "object") state[k] = {}; });
     state.tab = tab || "calls"; state.isSample = false;
+    if (!state.link || state.link.ver !== 2) state.link = { hp: {}, ob: {}, mgmt: {}, ver: 2 };
     state.baseSavedAt = data.savedAt;
     state.loadedFrom = { name: sourceName, savedAt: data.savedAt };
     save();
@@ -1230,6 +1234,8 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
   });
 
   // 파일을 열 때: 이 HTML에 저장된 작업이 내 브라우저 작업과 다른 저장본이면 저장본을 보여준다
+  // 예전 버전(관련상품 기준)으로 저장된 연결은 잘못 물린 값이라 비운다
+  if (state.link && state.link.ver !== 2) { state.link = { hp: {}, ob: {}, mgmt: {}, ver: 2 }; save(); }
   var embedded = (function () {
     var el = document.getElementById("embedded-state");
     if (!el) return null;
