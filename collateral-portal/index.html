@@ -126,8 +126,8 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
       <span class="meta" id="hdr-meta">–</span>
     </div>
     <div class="row">
-      <button type="button" class="btn" id="w-save" title="업로드한 데이터·후보 종목·배정 내역을 파일 하나로 저장">작업 저장</button>
-      <button type="button" class="btn" id="w-load-btn" title="다른 사람이 저장한 작업 파일을 불러와 이어서 작업">작업 불러오기</button>
+      <button type="button" class="btn primary" id="w-save" title="지금 화면의 데이터·배정 내역을 이 HTML 파일 안에 저장 — 다음 사람이 파일을 열면 그대로 보입니다">HTML에 저장</button>
+      <button type="button" class="btn" id="w-load-btn" title="다른 HTML 파일이나 예전 작업 파일(.json)에 저장된 작업을 불러옵니다">다른 파일에서 불러오기</button>
       <input type="file" id="w-load" hidden>
     </div>
   </header>
@@ -320,6 +320,12 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
 <script>
 (function () {
   "use strict";
+  // 저장할 때 쓸 원본 페이지 소스 (화면을 그리기 전에 떠 둔다)
+  var PRISTINE = (function () {
+    var c = document.documentElement.cloneNode(true), e = c.querySelector("#embedded-state");
+    if (e) e.remove();
+    return c;
+  })();
   var KEY = "trs-collateral-portal:v2";
   var $ = function (id) { return document.getElementById(id); };
 
@@ -899,66 +905,122 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
   twoStep("s-reset-alloc", "오늘 배정 전부 지우기", function () { state.alloc = {}; commit(); toast("배정을 모두 지웠습니다"); });
   twoStep("s-sample", "예시 데이터로 되돌리기", function () { state = sample(); commit(); setTab("calls"); toast("예시 데이터로 되돌렸습니다"); });
 
-  // ---------- 작업 파일 저장 / 불러오기 (부서 공유폴더로 주고받기) ----------
+  // ---------- 작업을 HTML 파일 안에 저장 / 불러오기 ----------
+  // 저장하면 <body> 바로 뒤에 작업 내용(JSON 스크립트 블록)을 넣은 새 HTML을 쓴다.
+  // 이 스크립트보다 앞에 있어야 파일을 열 때 바로 읽을 수 있다.
+  // 공유폴더의 HTML을 그 파일로 덮어쓰면, 다음 사람이 열 때 저장된 작업이 바로 보인다.
   var APP_ID = "trs-collateral-portal";
-  function stamp(d) {
-    var p = function (n) { return String(n).padStart(2, "0"); };
-    return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + "_" + p(d.getHours()) + p(d.getMinutes());
-  }
+  var fileHandle = null, undoState = null;
   function localTime(iso) {
     var d = new Date(iso); if (isNaN(d)) return "–";
     var p = function (n) { return String(n).padStart(2, "0"); };
     return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
   }
-  $("w-save").addEventListener("click", function () {
-    var now = new Date();
+  function snapshot(savedAt) {
     var copy = JSON.parse(JSON.stringify(state)); delete copy.loadedFrom;
-    var data = { app: APP_ID, format: 1, savedAt: now.toISOString(), dailyDate: state.dailyDate || "", state: copy };
-    // 로컬 파일로 열었을 때 크롬이 한글 파일명을 무시하고 "download"로 저장해서 영문으로 짓는다
-    var name = "TRS_collateral_" + (state.dailyDate ? state.dailyDate.replace(/-/g, "") + "_" : "") + "saved_" + stamp(now) + ".json";
+    copy.baseSavedAt = savedAt;
+    return { app: APP_ID, format: 1, savedAt: savedAt, dailyDate: state.dailyDate || "", state: copy };
+  }
+  function buildHtml(data) {
+    var json = JSON.stringify(data).replace(/</g, "\\u003c");
+    var c = PRISTINE.cloneNode(true), body = c.querySelector("body") || c;
+    var el = document.createElement("script");
+    el.type = "application/json"; el.id = "embedded-state"; el.textContent = json;
+    body.insertBefore(el, body.firstChild);
+    return "<!doctype html>\n" + c.outerHTML;
+  }
+  function downloadHtml(html) {
+    var url = URL.createObjectURL(new Blob([html], { type: "text/html" }));
+    var a = document.createElement("a"); a.href = url; a.download = "trs-collateral-portal.html";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+  }
+  $("w-save").addEventListener("click", async function () {
+    var savedAt = new Date().toISOString();
+    var data = snapshot(savedAt), html = buildHtml(data);
+    var done = function (how) {
+      state.baseSavedAt = savedAt; state.loadedFrom = null; save(); showLoaded(false);
+      $("w-info").hidden = false; $("w-info").className = "banner ok";
+      $("w-info").innerHTML = "<span>" + how + " · 저장 시각 <span class='num'>" + localTime(savedAt) + "</span></span>";
+    };
+    if (window.showSaveFilePicker) {
+      try {
+        if (!fileHandle) fileHandle = await window.showSaveFilePicker({
+          suggestedName: "trs-collateral-portal.html",
+          types: [{ description: "HTML", accept: { "text/html": [".html", ".htm"] } }]
+        });
+        var w = await fileHandle.createWritable(); await w.write(html); await w.close();
+        done("<b>" + esc(fileHandle.name) + "</b>에 저장했습니다. 다음 사람이 이 파일을 열면 지금 작업이 그대로 보입니다");
+        return;
+      } catch (e) {
+        if (e && e.name === "AbortError") return;
+        fileHandle = null; // 권한 거부 등 → 다운로드로 대신 저장
+      }
+    }
     try {
-      var url = URL.createObjectURL(new Blob([JSON.stringify(data)], { type: "application/json" }));
-      var a = document.createElement("a"); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
-      toast("작업 파일을 저장했습니다: " + name);
+      downloadHtml(html);
+      done("작업이 들어간 HTML을 내려받았습니다. 공유폴더의 기존 HTML을 이 파일로 <b>같은 이름으로 덮어쓰세요</b>");
     } catch (e) { toast("저장하지 못했습니다: " + e.message); }
   });
+
+  function readEmbedded(text) {
+    var m = String(text).match(/<script type="application\/json" id="embedded-state">([\s\S]*?)<\/script>/);
+    if (!m) return null;
+    try { return JSON.parse(m[1]); } catch (e) { return null; }
+  }
+  function adopt(data, sourceName) {
+    if (!data || data.app !== APP_ID || !data.state || !data.state.settings) return false;
+    undoState = JSON.parse(JSON.stringify(state));
+    var tab = state.tab;
+    state = data.state;
+    ["daily", "master", "cands"].forEach(function (k) { if (!Array.isArray(state[k])) state[k] = []; });
+    ["prices", "alloc", "names"].forEach(function (k) { if (!state[k] || typeof state[k] !== "object") state[k] = {}; });
+    state.tab = tab || "calls"; state.isSample = false;
+    state.baseSavedAt = data.savedAt;
+    state.loadedFrom = { name: sourceName, savedAt: data.savedAt };
+    save();
+    return true;
+  }
   $("w-load-btn").addEventListener("click", function () { $("w-load").click(); });
-  var undoState = null;
   $("w-load").addEventListener("change", function () {
     var f = this.files[0]; this.value = ""; if (!f) return;
     var fr = new FileReader();
     fr.onload = function () {
-      var data;
-      try { data = JSON.parse(String(fr.result)); } catch (e) { toast("작업 파일 형식이 아닙니다"); return; }
-      if (!data || data.app !== APP_ID || !data.state || !data.state.settings) { toast("이 포털에서 저장한 작업 파일이 아닙니다"); return; }
-      undoState = JSON.parse(JSON.stringify(state));
-      var tab = state.tab;
-      state = data.state;
-      ["daily", "master", "cands"].forEach(function (k) { if (!Array.isArray(state[k])) state[k] = []; });
-      ["prices", "alloc", "names"].forEach(function (k) { if (!state[k] || typeof state[k] !== "object") state[k] = {}; });
-      state.tab = tab; state.isSample = false;
-      state.loadedFrom = { name: f.name, savedAt: data.savedAt };
-      commit(); setTab(tab || "calls");
-      showLoaded(true);
-      toast("작업 파일을 불러왔습니다");
+      var text = String(fr.result), data = null;
+      if (/^\s*\{/.test(text)) { try { data = JSON.parse(text); } catch (e) {} }
+      else data = readEmbedded(text);
+      if (!adopt(data, f.name)) { toast("저장된 작업이 들어 있는 파일이 아닙니다"); return; }
+      render(); setTab(state.tab); showLoaded(true); toast("작업을 불러왔습니다");
     };
     fr.readAsText(f, "utf-8");
   });
   function showLoaded(canUndo) {
     var el = $("w-info"), lf = state.loadedFrom;
     if (!lf) { el.hidden = true; return; }
-    el.hidden = false;
-    el.innerHTML = "<span>불러온 작업 파일 <b>" + esc(lf.name) + "</b> · 저장 시각 <span class='num'>" + localTime(lf.savedAt) + "</span> · 정산 기준일 <span class='num'>" + esc(state.dailyDate || "–") + "</span></span>" +
-      (canUndo ? "<button type='button' class='btn sm' id='w-undo'>불러오기 전으로 되돌리기</button>" : "");
+    el.hidden = false; el.className = "banner info";
+    el.innerHTML = "<span>저장된 작업 <b>" + esc(lf.name) + "</b> · 저장 시각 <span class='num'>" + localTime(lf.savedAt) + "</span> · 정산 기준일 <span class='num'>" + esc(state.dailyDate || "–") + "</span></span>" +
+      (canUndo && undoState ? "<button type='button' class='btn sm' id='w-undo'>불러오기 전 내 작업으로 되돌리기</button>" : "");
   }
   $("w-info").addEventListener("click", function (e) {
     if (!e.target.closest("#w-undo") || !undoState) return;
-    state = undoState; undoState = null; commit(); setTab(state.tab || "calls"); showLoaded(false); toast("불러오기 전 상태로 되돌렸습니다");
+    state = undoState; undoState = null; state.loadedFrom = null; commit(); setTab(state.tab || "calls"); showLoaded(false); toast("불러오기 전 상태로 되돌렸습니다");
   });
+
+  // 파일을 열 때: 이 HTML에 저장된 작업이 내 브라우저 작업과 다른 저장본이면 저장본을 보여준다
+  var embedded = (function () {
+    var el = document.getElementById("embedded-state");
+    if (!el) return null;
+    try { return JSON.parse(el.textContent); } catch (e) { return null; }
+  })();
+  var openedEmbedded = false;
+  if (embedded && embedded.savedAt && embedded.savedAt !== state.baseSavedAt) {
+    openedEmbedded = adopt(embedded, "이 HTML 파일");
+  } else if (embedded && embedded.savedAt === state.baseSavedAt) {
+    state.loadedFrom = { name: "이 HTML 파일", savedAt: embedded.savedAt };
+  }
 
   render();
   setTab(state.tab || "calls");
-  showLoaded(false);
+  showLoaded(openedEmbedded);
 })();
 </script>
