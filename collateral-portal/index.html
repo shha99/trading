@@ -46,6 +46,8 @@ body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--f
 header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 16px; }
 h1 { margin: 0; font-size: 1.35rem; font-weight: 700; letter-spacing: -0.01em; }
 header .meta { color: var(--muted); font-size: 0.82rem; }
+.hdr-l { display: grid; gap: 2px; min-width: 0; }
+#w-info { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; justify-content: space-between; }
 h2 { margin: 0; font-size: 1rem; font-weight: 700; }
 h3 { margin: 0; font-size: 0.9rem; font-weight: 700; }
 .num, td.r, input.r { font-family: var(--font-num); font-variant-numeric: tabular-nums; }
@@ -119,9 +121,17 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
 
 <div class="wrap">
   <header>
-    <h1>TRS 담보관리 포털</h1>
-    <span class="meta" id="hdr-meta">–</span>
+    <div class="hdr-l">
+      <h1>TRS 담보관리 포털</h1>
+      <span class="meta" id="hdr-meta">–</span>
+    </div>
+    <div class="row">
+      <button type="button" class="btn" id="w-save" title="업로드한 데이터·후보 종목·배정 내역을 파일 하나로 저장">작업 저장</button>
+      <button type="button" class="btn" id="w-load-btn" title="다른 사람이 저장한 작업 파일을 불러와 이어서 작업">작업 불러오기</button>
+      <input type="file" id="w-load" hidden>
+    </div>
   </header>
+  <div class="banner info" id="w-info" hidden></div>
 
   <div class="tiles" id="tiles"></div>
 
@@ -889,7 +899,66 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
   twoStep("s-reset-alloc", "오늘 배정 전부 지우기", function () { state.alloc = {}; commit(); toast("배정을 모두 지웠습니다"); });
   twoStep("s-sample", "예시 데이터로 되돌리기", function () { state = sample(); commit(); setTab("calls"); toast("예시 데이터로 되돌렸습니다"); });
 
+  // ---------- 작업 파일 저장 / 불러오기 (부서 공유폴더로 주고받기) ----------
+  var APP_ID = "trs-collateral-portal";
+  function stamp(d) {
+    var p = function (n) { return String(n).padStart(2, "0"); };
+    return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + "_" + p(d.getHours()) + p(d.getMinutes());
+  }
+  function localTime(iso) {
+    var d = new Date(iso); if (isNaN(d)) return "–";
+    var p = function (n) { return String(n).padStart(2, "0"); };
+    return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+  }
+  $("w-save").addEventListener("click", function () {
+    var now = new Date();
+    var copy = JSON.parse(JSON.stringify(state)); delete copy.loadedFrom;
+    var data = { app: APP_ID, format: 1, savedAt: now.toISOString(), dailyDate: state.dailyDate || "", state: copy };
+    // 로컬 파일로 열었을 때 크롬이 한글 파일명을 무시하고 "download"로 저장해서 영문으로 짓는다
+    var name = "TRS_collateral_" + (state.dailyDate ? state.dailyDate.replace(/-/g, "") + "_" : "") + "saved_" + stamp(now) + ".json";
+    try {
+      var url = URL.createObjectURL(new Blob([JSON.stringify(data)], { type: "application/json" }));
+      var a = document.createElement("a"); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+      toast("작업 파일을 저장했습니다: " + name);
+    } catch (e) { toast("저장하지 못했습니다: " + e.message); }
+  });
+  $("w-load-btn").addEventListener("click", function () { $("w-load").click(); });
+  var undoState = null;
+  $("w-load").addEventListener("change", function () {
+    var f = this.files[0]; this.value = ""; if (!f) return;
+    var fr = new FileReader();
+    fr.onload = function () {
+      var data;
+      try { data = JSON.parse(String(fr.result)); } catch (e) { toast("작업 파일 형식이 아닙니다"); return; }
+      if (!data || data.app !== APP_ID || !data.state || !data.state.settings) { toast("이 포털에서 저장한 작업 파일이 아닙니다"); return; }
+      undoState = JSON.parse(JSON.stringify(state));
+      var tab = state.tab;
+      state = data.state;
+      ["daily", "master", "cands"].forEach(function (k) { if (!Array.isArray(state[k])) state[k] = []; });
+      ["prices", "alloc", "names"].forEach(function (k) { if (!state[k] || typeof state[k] !== "object") state[k] = {}; });
+      state.tab = tab; state.isSample = false;
+      state.loadedFrom = { name: f.name, savedAt: data.savedAt };
+      commit(); setTab(tab || "calls");
+      showLoaded(true);
+      toast("작업 파일을 불러왔습니다");
+    };
+    fr.readAsText(f, "utf-8");
+  });
+  function showLoaded(canUndo) {
+    var el = $("w-info"), lf = state.loadedFrom;
+    if (!lf) { el.hidden = true; return; }
+    el.hidden = false;
+    el.innerHTML = "<span>불러온 작업 파일 <b>" + esc(lf.name) + "</b> · 저장 시각 <span class='num'>" + localTime(lf.savedAt) + "</span> · 정산 기준일 <span class='num'>" + esc(state.dailyDate || "–") + "</span></span>" +
+      (canUndo ? "<button type='button' class='btn sm' id='w-undo'>불러오기 전으로 되돌리기</button>" : "");
+  }
+  $("w-info").addEventListener("click", function (e) {
+    if (!e.target.closest("#w-undo") || !undoState) return;
+    state = undoState; undoState = null; commit(); setTab(state.tab || "calls"); showLoaded(false); toast("불러오기 전 상태로 되돌렸습니다");
+  });
+
   render();
   setTab(state.tab || "calls");
+  showLoaded(false);
 })();
 </script>
