@@ -580,7 +580,11 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
       t.sheets[t.sheet].slice(t.hdr + 1).forEach(function (r) {
         var pr = lkKey(r[t.map.prod]); if (!pr) return;
         var k = lkKey(r[t.map.key]), k2 = t.map.key2 >= 0 ? lkKey(r[t.map.key2]) : "";
-        if (k) hp[k] = pr; if (k2 && !hp[k2]) hp[k2] = pr;
+        // 담보번호 하나에 상품이 여러 개일 수 있어 목록으로 모은다
+        [k, k2].forEach(function (kk) {
+          if (!kk) return;
+          var arr = toArr(hp[kk]); if (arr.indexOf(pr) < 0) arr.push(pr); hp[kk] = arr;
+        });
         if (k || k2) n0++;
       });
       state.link.hp = hp; state.link.hpFile = t.name; state.link.hpAt = new Date().toISOString(); if (!t.noHeader) remember("hp", t);
@@ -609,15 +613,25 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     commit();
   }
   // 담보번호의 OB+ 정보: 수동 입력 > 자동 연결
+  function toArr(v) { return Array.isArray(v) ? v.slice() : v ? [v] : []; }
+  // 담보번호의 OB+ 상품 목록: 수동 입력 > 자동 연결. list[0]이 기본 OB+코드.
   function masterOf(key) {
     var k = String(key).trim(), man = (state.master || []).find(function (m) { return String(m.key).trim() === k; });
-    if (man) return { ob: man.ob, obName: man.obName, etf: man.etf, src: "수동" };
-    var L = state.link || {}, pr = (L.hp || {})[lkKey(k)];
-    var o = pr ? (L.ob || {})[pr] : null, src = "자동";
-    if (!o && (L.mgmt || {})[lkKey(k)]) { o = L.mgmt[lkKey(k)]; src = "자동(담보관리번호)"; }
-    if (!o) return pr ? { prod: pr, src: "", miss: "OB+에 상품명 없음" } : { src: "", miss: "하나플러스에 담보번호 없음" };
-    return { prod: pr || "", ob: o.ob, obName: o.obName, etf: o.etf || etfFromName(o.obName), src: src };
+    if (man) { var one = { prod: man.obName, ob: man.ob, obName: man.obName, etf: man.etf || etfFromName(man.obName) }; return Object.assign({ list: [one], miss: [], src: "수동" }, one); }
+    var L = state.link || {}, prods = toArr((L.hp || {})[lkKey(k)]), list = [], miss = [], src = "자동";
+    prods.forEach(function (pr) {
+      var o = (L.ob || {})[pr];
+      if (o) { if (!list.some(function (x) { return x.ob === o.ob; })) list.push({ prod: pr, ob: o.ob, obName: o.obName, etf: o.etf || etfFromName(o.obName) }); }
+      else miss.push(pr);
+    });
+    if (!list.length && (L.mgmt || {})[lkKey(k)]) { var o2 = L.mgmt[lkKey(k)]; list.push({ prod: "", ob: o2.ob, obName: o2.obName, etf: o2.etf || etfFromName(o2.obName) }); src = "자동(담보관리번호)"; }
+    var first = list[0] || {};
+    return { list: list, miss: miss, prods: prods, src: list.length ? src : "",
+      prod: first.prod || prods[0] || "", ob: first.ob, obName: first.obName, etf: first.etf,
+      missText: list.length ? "" : prods.length ? "OB+에 상품명 없음" : "하나플러스에 담보번호 없음" };
   }
+  // 배정 줄이 고른 OB+ 상품 (없으면 담보번호의 첫 상품)
+  function lineOb(c, a) { return (c.m.list || []).find(function (x) { return x.ob === a.ob; }) || c.m; }
   // "TRS(ETF_481050)_..." → KR7481050003 (ISIN 검사숫자 계산)
   function etfFromName(name) {
     var m = String(name || "").match(/ETF[_\s-]?(\d{6})/i); if (!m) return "";
@@ -654,8 +668,13 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     calls.sort(function (a, b) { return (!!a.lm.ob - !!b.lm.ob) || (a.key < b.key ? -1 : 1); }); // 연결 안 된 건 먼저
     $("lk-body").innerHTML = calls.map(function (c) {
       var m = c.lm; if (m.ob) ok++;
-      return "<tr><td>" + (m.ob ? "<span class='pill ok'>연결됨</span>" : "<span class='pill warn'>" + (m.miss || "없음") + "</span>") + "</td><td class='num nw'>" + esc(c.key) + "</td><td class='num'>" + esc(m.prod || "") +
-        "</td><td class='num'>" + esc(m.ob || "") + "</td><td>" + esc(m.obName || "") + "</td><td class='num'>" + esc(m.etf || "") + "</td><td class='muted'>" + esc(m.src) + "</td></tr>";
+      var pill = !m.ob ? "<span class='pill warn'>" + esc(m.missText || "없음") + "</span>"
+        : m.miss.length ? "<span class='pill warn'>일부 연결 " + m.list.length + "/" + (m.list.length + m.miss.length) + "</span>"
+        : "<span class='pill ok'>연결됨" + (m.list.length > 1 ? " · " + m.list.length + "개 상품" : "") + "</span>";
+      var lines = function (f) { return m.list.map(function (x) { return esc(x[f] || ""); }).join("<br>"); };
+      return "<tr><td class='nw'>" + pill + "</td><td class='num nw'>" + esc(c.key) + "</td><td>" + (m.list.length ? lines("prod") : esc(m.prods && m.prods.join(", ") || "")) +
+        (m.miss.length ? "<br><span class='neg'>" + m.miss.map(esc).join("<br>") + " (OB+에 없음)</span>" : "") +
+        "</td><td class='num'>" + lines("ob") + "</td><td>" + lines("obName") + "</td><td class='num'>" + lines("etf") + "</td><td class='muted'>" + esc(m.src) + "</td></tr>";
     }).join("") || "<tr><td colspan='7' class='muted'>일일정산 결과를 먼저 올리세요.</td></tr>";
     $("lk-count").textContent = calls.length ? ok + " / " + calls.length + "건 연결" : "";
   }
@@ -742,7 +761,7 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
         '<td><span class="pill ' + c.st.c + '">' + c.st.t + "</span></td>" +
         '<td class="nw muted">' + esc(c.result) + (c.status ? " · " + esc(c.status) : "") + "</td>" +
         '<td class="nw num">' + esc(c.key) + "</td><td>" + esc(c.cp) + "</td>" +
-        "<td>" + esc(c.m.obName || c.fundName || "") + "</td>" +
+        "<td>" + esc(c.m.obName || c.fundName || "") + (c.m.list && c.m.list.length > 1 ? " <span class='pill dim'>외 " + (c.m.list.length - 1) + "개</span>" : "") + "</td>" +
         "<td>" + c.dir + "</td>" +
         '<td class="r ' + cls(c.T) + '">' + fmt(c.T) + "</td>" +
         '<td class="r ' + cls(c.U) + '">' + fmt(c.U) + "</td>" +
@@ -782,7 +801,7 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     el.innerHTML =
       '<div class="row between"><h2>' + esc(c.key) + " · " + esc(c.cp) + '</h2><span class="pill ' + c.st.c + '">' + c.st.t + "</span></div>" +
       '<div class="kv">' +
-        kv("ETF (상대방 펀드)", esc(c.fundName || "–"), esc(c.fund)) + kv("OB+코드", esc(c.m.ob || "–"), esc(c.m.obName || c.m.miss || "계약 마스터에 없음")) +
+        kv("ETF (상대방 펀드)", esc(c.fundName || "–"), esc(c.fund)) + kv("OB+코드", esc(c.m.ob || "–") + (c.m.list && c.m.list.length > 1 ? " <span class='pill dim'>외 " + (c.m.list.length - 1) + "개</span>" : ""), esc(c.m.obName || c.m.missText || "계약 마스터에 없음")) +
         kv("예탁원 계좌", esc(c.acct || "–")) + kv("만기일", esc(c.end || "–")) +
         kv("현재담보가액", fmt(c.cur), "파일 K열") + kv("필요담보금액", fmt(c.req), "파일 L열") +
         kv("정산결과", esc(c.result || "–")) + kv("이행 상태", esc(c.status || "–")) +
@@ -792,10 +811,16 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
         kv("처리 후 과부족 (Z)", '<span class="' + cls(c.Z) + '">' + fmt(c.Z) + "</span>", "U + ΣY") +
       "</div>" + banner +
       (c.badPrice ? '<div class="banner warn">종가가 없는 종목이 있어 평가금액을 계산하지 못했습니다. “종가” 탭에서 올려 주세요.</div>' : "") +
+      (c.m.list && c.m.list.length > 1 ? "<h3>이 담보번호의 OB+ 상품 " + c.m.list.length + "개</h3>" +
+        '<div class="tablewrap"><table><thead><tr><th>OB+코드</th><th>OB+코드명 (상품명)</th><th>ETF 종목코드</th></tr></thead><tbody>' +
+        c.m.list.map(function (x) { return "<tr><td class='num'>" + esc(x.ob) + "</td><td>" + esc(x.obName) + "</td><td class='num'>" + esc(x.etf) + "</td></tr>"; }).join("") +
+        "</tbody></table></div><p class='fine'>배정한 담보마다 아래 “OB+ 상품” 칸에서 어느 상품 건인지 고르세요. 처리내역(I·J·K열)에 그 상품이 들어갑니다.</p>" : "") +
       "<h3>배정한 담보</h3>" +
-      '<div class="tablewrap"><table><thead><tr><th>설정/말소</th><th>펀드</th><th>종목</th><th>담보구분</th><th class="r">처리수량</th><th class="r">종가</th><th class="r">평가금액 W</th><th class="r">헤어컷 X</th><th class="r">헤어컷 반영 Y</th><th></th></tr></thead><tbody>' +
+      '<div class="tablewrap"><table><thead><tr><th>설정/말소</th>' + (c.m.list && c.m.list.length > 1 ? "<th>OB+ 상품</th>" : "") + '<th>펀드</th><th>종목</th><th>담보구분</th><th class="r">처리수량</th><th class="r">종가</th><th class="r">평가금액 W</th><th class="r">헤어컷 X</th><th class="r">헤어컷 반영 Y</th><th></th></tr></thead><tbody>' +
       (c.lines.length ? c.lines.map(function (l, i) {
-        return "<tr><td><select data-ldir='" + i + "' aria-label='설정 또는 말소'><option" + (l.a.dir === "설정" ? " selected" : "") + ">설정</option><option" + (l.a.dir === "말소" ? " selected" : "") + ">말소</option></select></td>" +
+        var obSel = c.m.list && c.m.list.length > 1 ? "<td><select data-lob='" + i + "' aria-label='OB+ 상품'>" + c.m.list.map(function (x) {
+          return "<option value='" + esc(x.ob) + "'" + (lineOb(c, l.a).ob === x.ob ? " selected" : "") + ">" + esc(x.ob) + " · " + esc(String(x.obName || "").slice(0, 28)) + "</option>"; }).join("") + "</select></td>" : "";
+        return "<tr><td><select data-ldir='" + i + "' aria-label='설정 또는 말소'><option" + (l.a.dir === "설정" ? " selected" : "") + ">설정</option><option" + (l.a.dir === "말소" ? " selected" : "") + ">말소</option></select></td>" + obSel +
           '<td class="num">' + esc(l.a.fund) + '</td><td class="nw">' + esc(l.a.name) + ' <span class="muted num">' + esc(l.a.code) + "</span></td>" +
           '<td class="nw muted">' + esc(kind(l.a.code, l.a.fund)) + "</td>" +
           '<td class="r"><input class="r qty" type="number" min="0" step="1" data-lqty="' + i + '" value="' + l.a.qty + '" aria-label="처리수량"></td>' +
@@ -898,7 +923,8 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     var out = [];
     calls.forEach(function (c) {
       c.lines.forEach(function (l) {
-        out.push([state.dailyDate || "", c.key, c.cp, c.acct, c.m.ob || "", c.m.obName || c.fundName || "", c.m.etf || c.fund || "", c.dir, l.a.dir, l.a.fund, kind(l.a.code, l.a.fund), l.a.code, l.a.name, l.a.qty, "",
+        var lo = lineOb(c, l.a);
+        out.push([state.dailyDate || "", c.key, c.cp, c.acct, lo.ob || "", lo.obName || c.fundName || "", lo.etf || c.fund || "", c.dir, l.a.dir, l.a.fund, kind(l.a.code, l.a.fund), l.a.code, l.a.name, l.a.qty, "",
           c.T, c.U, l.price, Math.round(l.W), Math.round(l.X * 100) + "%", Math.round(l.Y), Math.round(c.Z)]);
       });
     });
@@ -1010,6 +1036,8 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     var key = state.sel, q = e.target.getAttribute("data-lqty"), dr = e.target.getAttribute("data-ldir");
     if (q != null) { state.alloc[key][+q].qty = Math.max(0, num(e.target.value) || 0); commit(); }
     if (dr != null) { state.alloc[key][+dr].dir = e.target.value; commit(); }
+    var lo = e.target.getAttribute("data-lob");
+    if (lo != null) { state.alloc[key][+lo].ob = e.target.value; commit(); }
   });
 
   function dateFromName(name) {
