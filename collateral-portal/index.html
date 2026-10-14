@@ -113,6 +113,10 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
 .dr input { width: 100%; }
 .dr .w-fund { width: 90px; } .dr .w-name { min-width: 140px; } .dr .w-code { width: 150px; } .dr .w-px { width: 120px; } .dr .w-qty { width: 110px; }
 .dr td { padding: 5px 6px; }
+.lk-box { display: grid; gap: 8px; align-content: start; min-width: 0; padding: 12px; border: 1px dashed var(--line); border-radius: 8px; }
+.lk-t { display: grid; gap: 6px; padding: 10px; background: var(--bg); border-radius: 6px; }
+.lk-t .fields { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px 10px; }
+.lk-t select, .lk-t input { width: 100%; }
 .pickrow { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: end; }
 .pickrow .grow { flex: 1 1 360px; min-width: 0; }
 .pickrow select { width: 100%; font-size: 0.92rem; padding: 8px 10px; }
@@ -240,19 +244,39 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
   </div>
 
   <!-- 후보·마스터 -->
-  <div id="pane-cands" hidden>
-    <div>
-      <section class="panel">
-        <h2>계약 마스터 (OB+)</h2>
-        <p class="fine">“하나플러스_4670”·“비고” 시트에서 가져오던 값입니다. 담보번호별 OB+코드, OB+코드명, ETF 종목코드를 붙여넣으세요 (담보번호, OB+코드, OB+코드명, ETF코드 순서). 계약이 바뀔 때만 갱신하면 됩니다.</p>
-        <textarea id="m-paste" style="min-height:90px"></textarea>
-        <div class="row"><button type="button" class="btn primary" id="m-apply">마스터 교체</button><span class="fine" id="m-msg"></span></div>
-        <div class="tablewrap"><table>
-          <thead><tr><th>담보번호</th><th>OB+코드</th><th>OB+코드명</th><th>ETF 종목코드</th></tr></thead>
-          <tbody id="m-body"></tbody>
-        </table></div>
-      </section>
-    </div>
+  <div id="pane-cands" hidden style="display:grid;gap:14px;">
+    <section class="panel">
+      <h2>OB+ 코드 자동 연결</h2>
+      <p class="fine">엑셀에서 하던 순서 그대로 연결합니다: <b>담보번호</b> → (하나플러스_4670) → <b>관련상품</b> → (OB+_71006 제공·수취) → <b>OB+코드·코드명</b>. 조회 파일을 그대로 올리고 처음 한 번만 열을 골라 두면, 다음부터는 같은 머리글을 찾아 올리기만 해도 자동으로 연결됩니다. 파일 내용은 이 브라우저 안에서만 처리됩니다.</p>
+      <div class="grid2">
+        <div class="lk-box">
+          <h3>① 하나플러스_4670 <span class="muted">(담보번호 ↔ 관련상품)</span></h3>
+          <input type="file" id="lk-hp-file" accept=".xlsx,.xls,.csv,.txt">
+          <div id="lk-hp"></div>
+        </div>
+        <div class="lk-box">
+          <h3>② OB+_71006 제공 · 수취 <span class="muted">(관련상품 ↔ OB+코드)</span></h3>
+          <input type="file" id="lk-ob-file" accept=".xlsx,.xls,.csv,.txt" multiple>
+          <div id="lk-ob"></div>
+        </div>
+      </div>
+      <div class="row"><button type="button" class="btn primary" id="lk-apply">연결 적용</button><span class="fine" id="lk-msg"></span></div>
+      <h3>③ 연결 결과 <span class="muted num" id="lk-count"></span></h3>
+      <div class="tablewrap scrolllist"><table>
+        <thead><tr><th>상태</th><th>담보번호</th><th>관련상품</th><th>OB+코드</th><th>OB+코드명</th><th>ETF 종목코드</th><th>출처</th></tr></thead>
+        <tbody id="lk-body"></tbody>
+      </table></div>
+    </section>
+    <section class="panel">
+      <h2>수동 입력 <span class="muted">(자동 연결보다 우선)</span></h2>
+      <p class="fine">자동 연결이 안 되는 건만 담보번호, OB+코드, OB+코드명, ETF코드 순서로 붙여넣으세요. 비워 두면 자동 연결 결과만 씁니다.</p>
+      <textarea id="m-paste" style="min-height:70px"></textarea>
+      <div class="row"><button type="button" class="btn" id="m-apply">수동 입력 교체</button><span class="fine" id="m-msg"></span></div>
+      <div class="tablewrap"><table>
+        <thead><tr><th>담보번호</th><th>OB+코드</th><th>OB+코드명</th><th>ETF 종목코드</th></tr></thead>
+        <tbody id="m-body"></tbody>
+      </table></div>
+    </section>
   </div>
 
   <!-- 처리내역 -->
@@ -456,6 +480,138 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     }
   }
 
+  function readBook(file, cb) {
+    var fr = new FileReader(), clean = function (rows) { return rows.filter(function (r) { return r.some(function (c) { return String(c).trim() !== ""; }); }); };
+    if (/\.(xlsx|xls)$/i.test(file.name)) {
+      if (!window.XLSX) { cb(null, "엑셀 파일을 읽는 라이브러리를 불러오지 못했습니다."); return; }
+      fr.onload = function () {
+        try {
+          var wb = XLSX.read(new Uint8Array(fr.result), { type: "array" }), out = {};
+          wb.SheetNames.forEach(function (n) { out[n] = clean(XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: "" })); });
+          cb(out);
+        } catch (e) { cb(null, "파일을 읽지 못했습니다: " + e.message); }
+      };
+      fr.readAsArrayBuffer(file);
+    } else {
+      fr.onload = function () { cb({ "시트1": parseTSV(String(fr.result)) }); };
+      fr.readAsText(file, "utf-8");
+    }
+  }
+
+  // ---------- OB+ 자동 연결 (담보번호 → 관련상품 → OB+코드) ----------
+  var LK_F = {
+    hp: [["key", "담보번호 열", true, /장파.*담보|담보관리번호|담보번호/], ["prod", "관련상품 열", true, /관련상품/]],
+    ob: [["prod", "관련상품 열", true, /관련상품|상품코드|상품번호/], ["ob", "OB+코드 열", true, /OB\+?\s*코드(?!명)|OB코드(?!명)/i],
+         ["obName", "OB+코드명 열 (선택)", false, /OB\+?\s*코드명|OB코드명|상품명/i], ["etf", "ETF 종목코드 열 (선택)", false, /ETF|기초자산.*코드|종목코드/i]]
+  };
+  var lk = { hp: null, ob: [] }; // 올린 표는 메모리에만 두고, 연결 결과만 저장한다
+  function lkKey(v) { return String(v == null ? "" : v).replace(/\s/g, "").toUpperCase(); }
+  function guessHeader(rows) {
+    var best = 0, bestN = -1;
+    for (var i = 0; i < Math.min(rows.length, 20); i++) {
+      var n = rows[i].filter(function (c) { var t = String(c).trim(); return t && isNaN(num(t)); }).length;
+      if (n > bestN) { bestN = n; best = i; }
+    }
+    return best;
+  }
+  function lkSetSheet(kind, t, sheet) {
+    t.sheet = sheet; var rows = t.sheets[sheet] || [];
+    t.hdr = guessHeader(rows); t.map = {};
+    var saved = (state.settings.lk || {})[kind] || {}, head = (rows[t.hdr] || []).map(function (c) { return String(c).replace(/\s/g, ""); });
+    LK_F[kind].forEach(function (f) {
+      var i = saved[f[0]] ? head.indexOf(saved[f[0]]) : -1;
+      if (i < 0) i = head.findIndex(function (h) { return f[3].test(h); });
+      t.map[f[0]] = i;
+    });
+  }
+  function lkLoad(kind, file) {
+    readBook(file, function (sheets, err) {
+      if (err) { $("lk-msg").textContent = err; return; }
+      var t = { name: file.name, sheets: sheets }, names = Object.keys(sheets);
+      var pick = names.find(function (n) { return kind === "hp" ? /4670|하나플러스/.test(n) : /71006|OB/.test(n); }) || names[0];
+      lkSetSheet(kind, t, pick);
+      if (kind === "hp") lk.hp = t; else lk.ob.push(t);
+      renderLink();
+      if (lkReady()) lkApply(true);
+    });
+  }
+  function lkReq(kind, t) { return t && LK_F[kind].every(function (f) { return !f[2] || t.map[f[0]] >= 0; }); }
+  function lkReady() { return (lk.hp ? lkReq("hp", lk.hp) : false) || lk.ob.some(function (t) { return lkReq("ob", t); }); }
+  function lkApply(auto) {
+    state.link = state.link || { hp: {}, ob: {} };
+    state.settings.lk = state.settings.lk || {};
+    var msgs = [];
+    var remember = function (kind, t) {
+      var head = t.sheets[t.sheet][t.hdr] || [], m = {};
+      LK_F[kind].forEach(function (f) { if (t.map[f[0]] >= 0) m[f[0]] = String(head[t.map[f[0]]]).replace(/\s/g, ""); });
+      state.settings.lk[kind] = m;
+    };
+    if (lk.hp && lkReq("hp", lk.hp)) {
+      var t = lk.hp, hp = {};
+      t.sheets[t.sheet].slice(t.hdr + 1).forEach(function (r) {
+        var k = lkKey(r[t.map.key]), pr = lkKey(r[t.map.prod]); if (k && pr) hp[k] = pr;
+      });
+      state.link.hp = hp; state.link.hpFile = t.name; remember("hp", t);
+      msgs.push("담보번호↔관련상품 " + Object.keys(hp).length + "건");
+    }
+    var obs = lk.ob.filter(function (t) { return lkReq("ob", t); });
+    if (obs.length) {
+      var ob = {};
+      obs.forEach(function (t) {
+        var g = function (r, f) { return t.map[f] >= 0 ? String(r[t.map[f]] == null ? "" : r[t.map[f]]).trim() : ""; };
+        t.sheets[t.sheet].slice(t.hdr + 1).forEach(function (r) {
+          var pr = lkKey(r[t.map.prod]), code = g(r, "ob"); if (!pr || !code) return;
+          if (!ob[pr]) ob[pr] = { ob: code, obName: g(r, "obName"), etf: g(r, "etf") };
+        });
+        remember("ob", t);
+      });
+      state.link.ob = ob; state.link.obFiles = obs.map(function (t) { return t.name; });
+      msgs.push("관련상품↔OB+코드 " + Object.keys(ob).length + "건");
+    }
+    state.link.at = new Date().toISOString();
+    $("lk-msg").textContent = msgs.length ? (auto ? "자동 연결: " : "연결 적용: ") + msgs.join(" · ") : "필수 열(담보번호·관련상품 또는 관련상품·OB+코드)을 골라 주세요.";
+    commit();
+  }
+  // 담보번호의 OB+ 정보: 수동 입력 > 자동 연결
+  function masterOf(key) {
+    var k = String(key).trim(), man = (state.master || []).find(function (m) { return String(m.key).trim() === k; });
+    if (man) return { ob: man.ob, obName: man.obName, etf: man.etf, src: "수동" };
+    var L = state.link || {}, pr = (L.hp || {})[lkKey(k)];
+    if (!pr) return { src: "", miss: "관련상품 없음" };
+    var o = (L.ob || {})[pr];
+    if (!o) return { prod: pr, src: "", miss: "OB+코드 없음" };
+    return { prod: pr, ob: o.ob, obName: o.obName, etf: o.etf, src: "자동" };
+  }
+  function lkTableUI(kind, t, idx) {
+    var rows = t.sheets[t.sheet] || [], head = rows[t.hdr] || [], names = Object.keys(t.sheets);
+    var opts = function (sel) {
+      return '<option value="-1">— 선택 —</option>' + head.map(function (h, i) {
+        return '<option value="' + i + '"' + (i === sel ? " selected" : "") + ">" + colName(i) + ": " + esc(String(h).slice(0, 24)) + "</option>";
+      }).join("");
+    };
+    var a = 'data-lk="' + kind + '" data-i="' + idx + '"';
+    return '<div class="lk-t"><div class="row between"><b>' + esc(t.name) + '</b><span class="muted num">' + Math.max(0, rows.length - t.hdr - 1) + "행" +
+      (kind === "ob" ? ' <button type="button" class="btn x" ' + a + ' data-act="del" aria-label="표 빼기">✕</button>' : "") + "</span></div>" +
+      '<div class="fields">' +
+      (names.length > 1 ? '<label class="f">시트<select ' + a + ' data-act="sheet">' + names.map(function (n) { return "<option" + (n === t.sheet ? " selected" : "") + ">" + esc(n) + "</option>"; }).join("") + "</select></label>" : "") +
+      '<label class="f">머리글 행<input type="number" min="1" ' + a + ' data-act="hdr" value="' + (t.hdr + 1) + '"></label>' +
+      LK_F[kind].map(function (f) { return '<label class="f">' + f[1] + "<select " + a + ' data-act="col" data-f="' + f[0] + '">' + opts(t.map[f[0]]) + "</select></label>"; }).join("") +
+      "</div>" + (lkReq(kind, t) ? "" : '<span class="pill warn">필수 열을 골라 주세요</span>') + "</div>";
+  }
+  function renderLink() {
+    $("lk-hp").innerHTML = lk.hp ? lkTableUI("hp", lk.hp, 0) : '<p class="fine">' + (state.link && state.link.hpFile ? "마지막 연결: " + esc(state.link.hpFile) + " (" + Object.keys(state.link.hp || {}).length + "건). 바뀌었을 때만 다시 올리세요." : "조회 결과 파일을 올리세요.") + "</p>";
+    $("lk-ob").innerHTML = lk.ob.length ? lk.ob.map(function (t, i) { return lkTableUI("ob", t, i); }).join("") : '<p class="fine">' + (state.link && state.link.obFiles ? "마지막 연결: " + esc(state.link.obFiles.join(", ")) + " (" + Object.keys(state.link.ob || {}).length + "건). 바뀌었을 때만 다시 올리세요." : "제공·수취 파일을 함께 올리세요 (여러 개 선택 가능).") + "</p>";
+    var calls = buildCalls(), ok = 0;
+    calls.forEach(function (c) { c.lm = masterOf(c.key); });
+    calls.sort(function (a, b) { return (!!a.lm.ob - !!b.lm.ob) || (a.key < b.key ? -1 : 1); }); // 연결 안 된 건 먼저
+    $("lk-body").innerHTML = calls.map(function (c) {
+      var m = c.lm; if (m.ob) ok++;
+      return "<tr><td>" + (m.ob ? "<span class='pill ok'>연결됨</span>" : "<span class='pill warn'>" + (m.miss || "없음") + "</span>") + "</td><td class='num nw'>" + esc(c.key) + "</td><td class='num'>" + esc(m.prod || "") +
+        "</td><td class='num'>" + esc(m.ob || "") + "</td><td>" + esc(m.obName || "") + "</td><td class='num'>" + esc(m.etf || "") + "</td><td class='muted'>" + esc(m.src) + "</td></tr>";
+    }).join("") || "<tr><td colspan='7' class='muted'>일일정산 결과를 먼저 올리세요.</td></tr>";
+    $("lk-count").textContent = calls.length ? ok + " / " + calls.length + "건 연결" : "";
+  }
+
   // ---------- 계산 ----------
   // 머리글 행(담보관리번호가 있는 행)을 찾아 항목별 열 번호를 정한다. 없으면 기본 위치.
   function dailyMap(rows) {
@@ -476,7 +632,6 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
   function buildCalls() {
     var s = state.settings, dm = dailyMap(state.daily), M = dm.map;
     var g = function (r, k) { var v = r[M[k].idx]; return v == null ? "" : String(v).trim(); };
-    var masterBy = {}; state.master.forEach(function (m) { masterBy[String(m.key).trim()] = m; });
     var seen = {}, calls = [];
     state.daily.forEach(function (r, ri) {
       if (ri <= dm.header) return;
@@ -491,7 +646,7 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
       var fund = dir === "제공" ? g(r, "holdFund") : g(r, "setFund");
       var fundName = dir === "제공" ? g(r, "holdFundName") : g(r, "setFundName");
       var U = T - s.buffer;
-      var m = masterBy[key] || {};
+      var m = masterOf(key);
       var lines = (state.alloc[key] || []).map(function (a) {
         var p = priceOf(a.code), x = hcOf(a.code), W = a.qty * unitOf(a.code, p), Y = W * x;
         return { a: a, price: p, W: W, X: x, Y: Y };
@@ -559,7 +714,7 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     render._shown = shown.map(function (c) { return c.key; });
     renderDetail(cur);
     buildLists();
-    renderDaily(); renderPrices(); renderMaster(); renderExport(calls); renderSettings();
+    renderDaily(); renderPrices(); renderMaster(); renderLink(); renderExport(calls); renderSettings();
   }
   function tile(k, v, c) { return '<div class="tile ' + (c || "") + '"><span class="k">' + k + '</span><span class="v">' + v + "</span></div>"; }
 
@@ -579,7 +734,7 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     el.innerHTML =
       '<div class="row between"><h2>' + esc(c.key) + " · " + esc(c.cp) + '</h2><span class="pill ' + c.st.c + '">' + c.st.t + "</span></div>" +
       '<div class="kv">' +
-        kv("ETF (상대방 펀드)", esc(c.fundName || "–"), esc(c.fund)) + kv("OB+코드", esc(c.m.ob || "–"), esc(c.m.obName || "계약 마스터에 없음")) +
+        kv("ETF (상대방 펀드)", esc(c.fundName || "–"), esc(c.fund)) + kv("OB+코드", esc(c.m.ob || "–"), esc(c.m.obName || c.m.miss || "계약 마스터에 없음")) +
         kv("예탁원 계좌", esc(c.acct || "–")) + kv("만기일", esc(c.end || "–")) +
         kv("현재담보가액", fmt(c.cur), "파일 K열") + kv("필요담보금액", fmt(c.req), "파일 L열") +
         kv("정산결과", esc(c.result || "–")) + kv("이행 상태", esc(c.status || "–")) +
@@ -877,11 +1032,26 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
   });
 
   $("p-q").addEventListener("input", renderPrices);
+  $("lk-hp-file").addEventListener("change", function () { var f = this.files[0]; this.value = ""; if (f) lkLoad("hp", f); });
+  $("lk-ob-file").addEventListener("change", function () { Array.prototype.forEach.call(this.files, function (f) { lkLoad("ob", f); }); this.value = ""; });
+  $("lk-apply").addEventListener("click", function () { lkApply(false); });
+  $("pane-cands").addEventListener("change", function (e) {
+    var el = e.target, kind = el.getAttribute("data-lk"); if (!kind) return;
+    var t = kind === "hp" ? lk.hp : lk.ob[+el.getAttribute("data-i")], act = el.getAttribute("data-act"); if (!t) return;
+    if (act === "sheet") lkSetSheet(kind, t, el.value);
+    else if (act === "hdr") { t.hdr = Math.max(0, (parseInt(el.value, 10) || 1) - 1); LK_F[kind].forEach(function (f) { t.map[f[0]] = -1; }); }
+    else if (act === "col") t.map[el.getAttribute("data-f")] = +el.value;
+    renderLink();
+  });
+  $("pane-cands").addEventListener("click", function (e) {
+    var b = e.target.closest('[data-act="del"]'); if (!b) return;
+    lk.ob.splice(+b.getAttribute("data-i"), 1); renderLink();
+  });
   $("m-apply").addEventListener("click", function () {
     var rows = parseTSV($("m-paste").value).filter(function (r) { return /\d{6,}/.test(String(r[0])); });
-    if (!rows.length) { $("m-msg").textContent = "담보번호로 시작하는 행이 없습니다."; return; }
+    if (!rows.length && $("m-paste").value.trim()) { $("m-msg").textContent = "담보번호로 시작하는 행이 없습니다."; return; }
     state.master = rows.map(function (r) { return { key: String(r[0]).trim(), ob: String(r[1] || "").trim(), obName: String(r[2] || "").trim(), etf: String(r[3] || "").trim() }; });
-    $("m-paste").value = ""; $("m-msg").textContent = rows.length + "건 반영"; commit();
+    $("m-paste").value = ""; $("m-msg").textContent = rows.length ? rows.length + "건 반영" : "수동 입력을 비웠습니다"; commit();
   });
 
   $("x-copy").addEventListener("click", function () {
@@ -979,7 +1149,7 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     var tab = state.tab;
     state = data.state;
     ["daily", "master", "cands"].forEach(function (k) { if (!Array.isArray(state[k])) state[k] = []; });
-    ["prices", "alloc", "names"].forEach(function (k) { if (!state[k] || typeof state[k] !== "object") state[k] = {}; });
+    ["prices", "alloc", "names", "link"].forEach(function (k) { if (!state[k] || typeof state[k] !== "object") state[k] = {}; });
     state.tab = tab || "calls"; state.isSample = false;
     state.baseSavedAt = data.savedAt;
     state.loadedFrom = { name: sourceName, savedAt: data.savedAt };
