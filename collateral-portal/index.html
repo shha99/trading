@@ -110,6 +110,9 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
 .formula { display: grid; gap: 4px; font-size: 0.82rem; }
 .toast { position: fixed; left: 50%; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: 6px; font-size: 0.85rem; z-index: 10; }
 .qty { width: 110px; }
+.dr input { width: 100%; }
+.dr .w-fund { width: 90px; } .dr .w-name { min-width: 140px; } .dr .w-code { width: 150px; } .dr .w-px { width: 120px; } .dr .w-qty { width: 110px; }
+.dr td { padding: 5px 6px; }
 .pickrow { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: end; }
 .pickrow .grow { flex: 1 1 360px; min-width: 0; }
 .pickrow select { width: 100%; font-size: 0.92rem; padding: 8px 10px; }
@@ -139,7 +142,7 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     <button type="button" role="tab" data-tab="calls" aria-selected="true">마진콜 현황</button>
     <button type="button" role="tab" data-tab="daily" aria-selected="false">일일정산결과 입력</button>
     <button type="button" role="tab" data-tab="prices" aria-selected="false">종가</button>
-    <button type="button" role="tab" data-tab="cands" aria-selected="false">담보 후보 · 계약 마스터</button>
+    <button type="button" role="tab" data-tab="cands" aria-selected="false">계약 마스터</button>
     <button type="button" role="tab" data-tab="export" aria-selected="false">처리내역 (엑셀 양식)</button>
     <button type="button" role="tab" data-tab="rules" aria-selected="false">계산 기준</button>
   </div>
@@ -225,7 +228,9 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
         <button type="button" class="btn primary" id="p-apply">붙여넣은 내용 반영</button>
         <span class="fine" id="p-msg"></span>
       </div>
-      <h3>담보 후보 종목 종가</h3>
+      <h3>종가 찾기 · 직접 입력</h3>
+      <p class="fine">종목명이나 코드로 찾아 종가를 확인·수정할 수 있습니다. 파일에 없는 종목(채권 등)은 배정 화면에서 종가를 직접 적으면 여기에 저장됩니다.</p>
+      <input id="p-q" placeholder="종목명 또는 코드 (예: 삼성전자, 005930)" style="max-width:360px">
       <div class="tablewrap"><table>
         <thead><tr><th>종목코드</th><th>종목명</th><th class="r">종가</th><th>상태</th></tr></thead>
         <tbody id="p-body"></tbody>
@@ -236,24 +241,7 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
 
   <!-- 후보·마스터 -->
   <div id="pane-cands" hidden>
-    <div class="grid2">
-      <section class="panel">
-        <h2>담보 후보 종목</h2>
-        <p class="fine">추가 담보로 넣을 수 있는 펀드·종목입니다. 종목코드만 넣으면 종가 파일의 종목명을 채웁니다. 가용 수량을 넣으면 필요 수량이 넘칠 때 표시합니다. 엑셀에서 “펀드코드, 종목코드, 종목명, 가용수량” 순서로 붙여넣어도 됩니다.</p>
-        <div class="tablewrap"><table>
-          <thead><tr><th>펀드코드</th><th>종목코드</th><th>종목명</th><th class="r">가용수량</th><th></th></tr></thead>
-          <tbody id="cand-body"></tbody>
-        </table></div>
-        <div class="row">
-          <input id="cn-fund" placeholder="펀드코드" style="width:90px">
-          <input id="cn-code" placeholder="005930" style="width:110px">
-          <input id="cn-name" placeholder="종목명" style="flex:1 1 120px">
-          <input id="cn-avail" class="r" placeholder="가용수량" style="width:100px">
-          <button type="button" class="btn primary" id="cn-add">추가</button>
-        </div>
-        <textarea id="cn-paste" style="min-height:70px" placeholder="여러 줄 붙여넣기: 펀드코드	종목코드	종목명	가용수량"></textarea>
-        <div class="row"><button type="button" class="btn" id="cn-bulk">붙여넣은 목록으로 교체</button></div>
-      </section>
+    <div>
       <section class="panel">
         <h2>계약 마스터 (OB+)</h2>
         <p class="fine">“하나플러스_4670”·“비고” 시트에서 가져오던 값입니다. 담보번호별 OB+코드, OB+코드명, ETF 종목코드를 붙여넣으세요 (담보번호, OB+코드, OB+코드명, ETF코드 순서). 계약이 바뀔 때만 갱신하면 됩니다.</p>
@@ -316,6 +304,8 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
   </div>
 </div>
 <div class="toast" id="toast" hidden></div>
+<datalist id="dl-names"></datalist>
+<datalist id="dl-codes"></datalist>
 
 <script>
 (function () {
@@ -568,7 +558,8 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     $("list-count").textContent = shown.length + "건";
     render._shown = shown.map(function (c) { return c.key; });
     renderDetail(cur);
-    renderDaily(); renderPrices(); renderCands(); renderMaster(); renderExport(calls); renderSettings();
+    buildLists();
+    renderDaily(); renderPrices(); renderMaster(); renderExport(calls); renderSettings();
   }
   function tile(k, v, c) { return '<div class="tile ' + (c || "") + '"><span class="k">' + k + '</span><span class="v">' + v + "</span></div>"; }
 
@@ -584,20 +575,7 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
 
     var gap = need ? -c.Z : c.Z; // 남은 설정 필요액 또는 남은 말소 가능액
     var dirDefault = need ? "설정" : "말소";
-    // 다른 담보번호까지 포함해 이미 설정으로 배정한 수량은 가용수량에서 뺀다
-    var used = {};
-    Object.keys(state.alloc).forEach(function (k) {
-      (state.alloc[k] || []).forEach(function (a) { if (a.dir === "설정") { var u = a.fund + "|" + normCode(a.code); used[u] = (used[u] || 0) + (+a.qty || 0); } });
-    });
-    var recs = state.cands.map(function (cd, i) {
-      var p = priceOf(cd.code), x = hcOf(cd.code), per = unitOf(cd.code, p) * x;
-      var q = per > 0 && gap > 0 ? (need ? Math.ceil(gap / per) : Math.floor(gap / per)) : 0;
-      var hasAvail = cd.avail !== "" && cd.avail != null && isFinite(num(cd.avail));
-      var left = hasAvail ? num(cd.avail) - (used[cd.fund + "|" + normCode(cd.code)] || 0) : NaN;
-      return { i: i, cd: cd, p: p, x: x, per: per, q: q, val: q * per, left: left, short: need && hasAvail && q > left };
-    });
-    recs.sort(function (a, b) { return (isFinite(b.p) - isFinite(a.p)) || (a.short - b.short) || (a.val - b.val); });
-
+    var drafts = draftsOf(c.key);
     el.innerHTML =
       '<div class="row between"><h2>' + esc(c.key) + " · " + esc(c.cp) + '</h2><span class="pill ' + c.st.c + '">' + c.st.t + "</span></div>" +
       '<div class="kv">' +
@@ -620,23 +598,61 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
           '<td class="r"><input class="r qty" type="number" min="0" step="1" data-lqty="' + i + '" value="' + l.a.qty + '" aria-label="처리수량"></td>' +
           '<td class="r">' + fmt(l.price) + '</td><td class="r">' + fmt(l.W) + '</td><td class="r">' + fmt(l.X * 100) + '%</td><td class="r">' + fmt(l.Y) + "</td>" +
           '<td class="r"><button type="button" class="btn x" data-ldel="' + i + '" aria-label="삭제">✕</button></td></tr>';
-      }).join("") : '<tr><td colspan="10" class="muted">아직 배정한 담보가 없습니다. 아래 후보에서 “배정”을 누르세요.</td></tr>') +
+      }).join("") : '<tr><td colspan="10" class="muted">아직 배정한 담보가 없습니다. 아래에 펀드·종목·수량을 적고 “배정 반영”을 누르세요.</td></tr>') +
       "</tbody></table></div>" +
-      "<h3>" + (need ? "추가 설정 후보 — 남은 " + fmt(Math.max(gap, 0)) + " 기준" : "말소 후보 — 여유 " + fmt(Math.max(gap, 0)) + " 기준") + "</h3>" +
-      '<p class="fine">“배정 수량”에 원하는 수량을 적고 그 행의 “배정”을 누르거나, 여러 종목에 수량을 적은 뒤 “입력한 수량 모두 배정”을 누르세요. 비워 두면 오른쪽에 회색으로 보이는 필요 수량으로 배정합니다.</p>' +
-      '<div class="tablewrap"><table><thead><tr><th>펀드</th><th>종목</th><th class="r">종가</th><th class="r">헤어컷</th><th class="r">1주당 인정액</th><th class="r">' + (need ? "단독 필요 수량" : "말소 최대 수량") + '</th><th class="r">배정 수량</th><th class="r">인정 평가액</th><th class="r">남은 가용수량</th><th></th></tr></thead><tbody>' +
-      recs.map(function (r) {
-        var noP = !isFinite(r.p);
-        return "<tr><td class='num'>" + esc(r.cd.fund) + "</td><td class='nw'>" + esc(r.cd.name) + " <span class='muted num'>" + esc(r.cd.code) + "</span></td>" +
-          "<td class='r'>" + (noP ? "<span class='pill warn'>종가 없음</span>" : fmt(r.p)) + "</td><td class='r'>" + fmt(r.x * 100) + "%</td>" +
-          "<td class='r'>" + fmt(r.per) + "</td><td class='r muted'>" + (noP || gap <= 0 ? "–" : fmt(r.q)) + "</td>" +
-          "<td class='r'><input class='r qty' type='number' min='0' step='1' inputmode='numeric' data-cq='" + r.i + "' data-per='" + (noP ? 0 : r.per) + "' placeholder='" + (noP || gap <= 0 ? "" : r.q) + "' aria-label='" + esc(r.cd.name) + " 배정 수량'" + (noP ? " disabled" : "") + "></td>" +
-          "<td class='r' data-cval='" + r.i + "'>" + (noP || gap <= 0 ? "–" : "<span class='muted'>" + fmt(r.val) + "</span>") + "</td>" +
-          "<td class='r'>" + (isFinite(r.left) ? fmt(r.left) : "–") + (r.short ? " <span class='pill call'>부족</span>" : "") + "</td>" +
-          "<td class='r'><button type='button' class='btn sm primary' data-add='" + r.i + "' data-q='" + r.q + "' data-dir='" + dirDefault + "'" + (noP ? " disabled" : "") + ">배정</button></td></tr>";
-      }).join("") + "</tbody></table></div>" +
-      '<div class="row between"><span class="fine" id="cq-sum" data-gap="' + gap + '" data-need="' + (need ? 1 : 0) + '">수량을 입력하면 합계와 남는 금액을 바로 보여줍니다.</span>' +
-      '<button type="button" class="btn primary" id="cq-all" data-dir="' + dirDefault + '">입력한 수량 모두 배정</button></div>';
+      "<h3>" + (need ? "추가 담보 입력 — 남은 " + fmt(Math.max(gap, 0)) + " 기준" : "말소 입력 — 여유 " + fmt(Math.max(gap, 0)) + " 기준") + "</h3>" +
+      '<p class="fine">펀드번호를 적고, 종목명이나 종목코드 중 하나를 넣으면 나머지와 전일 종가가 채워집니다. 수량을 넣으면 헤어컷 반영 인정액과 남은 부족액이 바로 계산됩니다. 다 적었으면 “배정 반영”을 누르세요.</p>' +
+      '<div class="tablewrap"><table class="dr"><thead><tr><th>펀드번호</th><th>종목명</th><th>종목코드</th><th class="r">종가</th><th class="r">헤어컷</th><th class="r">1주당 인정액</th><th class="r">수량</th><th class="r">인정 평가액</th><th></th></tr></thead><tbody id="dr-body">' +
+      drafts.map(draftRow).join("") + "</tbody></table></div>" +
+      '<div class="row between"><button type="button" class="btn" id="dr-add">+ 행 추가</button>' +
+      '<button type="button" class="btn primary" id="dr-commit" data-dir="' + dirDefault + '">배정 반영</button></div>' +
+      '<div class="fine" id="cq-sum" data-gap="' + gap + '" data-need="' + (need ? 1 : 0) + '"></div>';
+    refreshSum();
+  }
+  function blankDraft() { return { fund: "", name: "", code: "", price: "", manual: false, qty: "" }; }
+  function draftsOf(key) {
+    state.draft = state.draft || {};
+    if (!Array.isArray(state.draft[key]) || !state.draft[key].length) state.draft[key] = [blankDraft(), blankDraft(), blankDraft()];
+    return state.draft[key];
+  }
+  function draftCalc(r) {
+    var px = num(r.price), x = r.code ? hcOf(r.code) : NaN, per = isFinite(px) && r.code ? unitOf(r.code, px) * x : NaN;
+    var q = Math.floor(num(r.qty));
+    return { x: x, per: per, val: q > 0 && isFinite(per) ? q * per : NaN };
+  }
+  function draftRow(r, i) {
+    var k = draftCalc(r);
+    return '<tr data-dr="' + i + '">' +
+      '<td><input class="w-fund num" data-f="fund" value="' + esc(r.fund) + '" placeholder="펀드번호" aria-label="펀드번호"></td>' +
+      '<td><input class="w-name" data-f="name" list="dl-names" value="' + esc(r.name) + '" placeholder="종목명 입력" aria-label="종목명"></td>' +
+      '<td><input class="w-code num" data-f="code" list="dl-codes" value="' + esc(r.code) + '" placeholder="코드 입력" aria-label="종목코드"></td>' +
+      '<td class="r"><input class="w-px r" type="number" min="0" step="any" data-f="price" value="' + esc(r.price) + '" placeholder="종가" aria-label="종가"></td>' +
+      '<td class="r" data-c="x">' + (isFinite(k.x) ? fmt(k.x * 100) + "%" : "–") + "</td>" +
+      '<td class="r" data-c="per">' + fmt(k.per, k.per < 100 ? 4 : 0) + "</td>" +
+      '<td class="r"><input class="w-qty r" type="number" min="0" step="1" inputmode="numeric" data-f="qty" value="' + esc(r.qty) + '" aria-label="수량"></td>' +
+      '<td class="r" data-c="val"><b>' + fmt(k.val) + "</b></td>" +
+      '<td class="r"><button type="button" class="btn x" data-drdel="' + i + '" aria-label="행 삭제">✕</button></td></tr>';
+  }
+  function refreshSum() {
+    var sumEl = $("cq-sum"); if (!sumEl) return;
+    var total = 0, cnt = 0;
+    (state.draft[state.sel] || []).forEach(function (r) { var v = draftCalc(r).val; if (isFinite(v)) { total += v; cnt++; } });
+    var gap = +sumEl.getAttribute("data-gap"), need = sumEl.getAttribute("data-need") === "1";
+    if (!cnt) { sumEl.className = "fine"; sumEl.textContent = "수량을 입력하면 합계와 남는 금액을 바로 보여줍니다."; return; }
+    var rest = gap - total;
+    sumEl.className = "banner " + (need ? (rest <= 0 ? "ok" : "call") : (rest >= 0 ? "info" : "call"));
+    sumEl.innerHTML = cnt + "종목 입력 · 인정 평가액 합계 <b class='num'>" + fmt(total) + "</b> · " +
+      (need ? (rest <= 0 ? "충족, 여유 <b class='num'>" + fmt(-rest) + "</b>" : "아직 <b class='num'>" + fmt(rest) + "</b> 부족")
+            : (rest >= 0 ? "말소 후 여유 <b class='num'>" + fmt(rest) + "</b>" : "말소 한도 <b class='num'>" + fmt(-rest) + "</b> 초과"));
+  }
+  var dlCount = -1, nameToCode = {};
+  function buildLists() {
+    var names = state.names || {}, keys = Object.keys(names);
+    if (keys.length === dlCount) return;
+    dlCount = keys.length; nameToCode = {};
+    keys.forEach(function (c) { var n = String(names[c]).trim(); if (!nameToCode[n.toLowerCase()]) nameToCode[n.toLowerCase()] = c; });
+    $("dl-names").innerHTML = keys.map(function (c) { return '<option value="' + esc(names[c]) + '">'; }).join("");
+    $("dl-codes").innerHTML = keys.map(function (c) { return '<option value="A' + esc(c) + '" label="' + esc(names[c]) + '">'; }).join("");
   }
   function kv(k, v, fx) { return '<div><span class="k">' + k + '</span><span class="v">' + v + "</span>" + (fx ? '<span class="fx">' + fx + "</span>" : "") + "</div>"; }
 
@@ -657,22 +673,17 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     if (state.dailyDate) $("d-date").value = state.dailyDate;
   }
   function renderPrices() {
-    var seen = {};
-    $("p-body").innerHTML = state.cands.filter(function (c) { var k = normCode(c.code); if (seen[k]) return false; return (seen[k] = 1); }).map(function (c) {
-      var p = priceOf(c.code);
-      return "<tr><td class='num'>" + esc(c.code) + "</td><td>" + esc(c.name) + "</td><td class='r'>" +
-        '<input class="r" style="width:130px" type="number" min="0" step="any" data-pcode="' + esc(normCode(c.code)) + '" value="' + (isFinite(p) ? p : "") + '" aria-label="' + esc(c.name) + ' 종가">' +
+    var q = ($("p-q").value || "").trim().toLowerCase(), names = state.names || {};
+    var codes = Object.keys(state.prices);
+    var hits = q ? codes.filter(function (c) { return c.toLowerCase().indexOf(normCode(q).toLowerCase()) >= 0 || String(names[c] || "").toLowerCase().indexOf(q) >= 0; }) : [];
+    $("p-body").innerHTML = q ? (hits.slice(0, 30).map(function (c) {
+      var p = state.prices[c];
+      return "<tr><td class='num'>" + esc(/^\d{6}$/.test(c) ? "A" + c : c) + "</td><td>" + esc(names[c] || "") + "</td><td class='r'>" +
+        '<input class="r" style="width:130px" type="number" min="0" step="any" data-pcode="' + esc(c) + '" value="' + (isFinite(p) ? p : "") + '" aria-label="종가">' +
         "</td><td>" + (isFinite(p) ? "<span class='pill ok'>있음</span>" : "<span class='pill warn'>없음</span>") + "</td></tr>";
-    }).join("");
-    $("p-total").textContent = "저장된 종가 " + Object.keys(state.prices).length + "종목";
+    }).join("") || "<tr><td colspan='4' class='muted'>찾는 종목이 없습니다.</td></tr>") : "<tr><td colspan='4' class='muted'>위에 종목명이나 코드를 입력하세요.</td></tr>";
+    $("p-total").textContent = "저장된 종가 " + codes.length + "종목";
     if (state.pricesDate) $("p-date").value = state.pricesDate;
-  }
-  function renderCands() {
-    $("cand-body").innerHTML = state.cands.map(function (c, i) {
-      return "<tr><td class='num'>" + esc(c.fund) + "</td><td class='num'>" + esc(c.code) + "</td><td>" + esc(c.name) + "</td>" +
-        '<td class="r"><input class="r" style="width:100px" type="number" min="0" data-avail="' + i + '" value="' + (c.avail === "" || c.avail == null ? "" : c.avail) + '" aria-label="가용수량"></td>' +
-        '<td class="r"><button type="button" class="btn x" data-cdel="' + i + '" aria-label="삭제">✕</button></td></tr>';
-    }).join("") || '<tr><td colspan="5" class="muted">후보 종목이 없습니다.</td></tr>';
   }
   function renderMaster() {
     $("m-body").innerHTML = state.master.map(function (m) {
@@ -731,26 +742,32 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     $("picker").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
   });
   $("detail").addEventListener("click", function (e) {
-    var a = e.target.closest("[data-add]"), d = e.target.closest("[data-ldel]"), all = e.target.closest("#cq-all");
+    var d = e.target.closest("[data-ldel]"), dd = e.target.closest("[data-drdel]");
     var key = state.sel; if (!key) return;
-    if (a) {
-      var i = a.getAttribute("data-add"), cd = state.cands[+i]; if (!cd) return;
-      var inp = $("detail").querySelector('[data-cq="' + i + '"]');
-      var q = inp && inp.value.trim() !== "" ? Math.floor(num(inp.value)) : +a.getAttribute("data-q");
-      if (!(q > 0)) { toast("배정 수량을 입력하세요"); return; }
-      addAlloc(key, cd, q, a.getAttribute("data-dir"));
-      state.isSample = false; commit(); toast(cd.name + " " + fmt(q) + "주 배정됨");
-    } else if (all) {
-      var n = 0;
-      Array.prototype.forEach.call($("detail").querySelectorAll("[data-cq]"), function (inp) {
-        var q = Math.floor(num(inp.value)); if (!(q > 0)) return;
-        addAlloc(key, state.cands[+inp.getAttribute("data-cq")], q, all.getAttribute("data-dir")); n++;
+    if (e.target.closest("#dr-add")) { draftsOf(key).push(blankDraft()); commit(); return; }
+    if (dd) { var ds = draftsOf(key); ds.splice(+dd.getAttribute("data-drdel"), 1); if (!ds.length) ds.push(blankDraft()); commit(); return; }
+    var cm = e.target.closest("#dr-commit");
+    if (cm) {
+      var n = 0, skipped = [];
+      draftsOf(key).forEach(function (r, i) {
+        var q = Math.floor(num(r.qty)), px = num(r.price);
+        if (!r.code && !r.name && !(q > 0)) return; // 빈 행
+        if (!r.fund) { skipped.push((i + 1) + "행 펀드번호"); return; }
+        if (!r.code) { skipped.push((i + 1) + "행 종목"); return; }
+        if (!(px > 0)) { skipped.push((i + 1) + "행 종가"); return; }
+        if (!(q > 0)) { skipped.push((i + 1) + "행 수량"); return; }
+        var nc = normCode(r.code);
+        state.prices[nc] = px; // 직접 적은 종가도 종가표에 남긴다
+        if (r.name) { state.names = state.names || {}; if (!state.names[nc]) state.names[nc] = r.name; }
+        addAlloc(key, { fund: r.fund, code: r.code, name: r.name || r.code }, q, cm.getAttribute("data-dir"));
+        r.done = true; n++;
       });
-      if (!n) { toast("배정 수량을 입력한 종목이 없습니다"); return; }
-      state.isSample = false; commit(); toast(n + "종목 배정됨");
-    } else if (d) {
-      state.alloc[key].splice(+d.getAttribute("data-ldel"), 1); commit();
+      state.draft[key] = state.draft[key].filter(function (r) { return !r.done; });
+      if (n) { state.isSample = false; commit(); }
+      toast(n ? n + "종목 배정됨" + (skipped.length ? " · 확인 필요: " + skipped.join(", ") : "") : (skipped.length ? "확인 필요: " + skipped.join(", ") : "수량을 입력한 행이 없습니다"));
+      return;
     }
+    if (d) { state.alloc[key].splice(+d.getAttribute("data-ldel"), 1); commit(); }
   });
   // 같은 펀드·종목·방향이 이미 배정돼 있으면 수량을 더한다
   function addAlloc(key, cd, q, dir) {
@@ -759,23 +776,32 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     if (ex) ex.qty = (+ex.qty || 0) + q;
     else list.push({ fund: cd.fund, code: cd.code, name: cd.name, qty: q, dir: dir });
   }
-  // 배정 수량 입력 중: 행 평가액과 합계를 다시 그리지 않고 바로 갱신
+  // 입력 행: 종목명 ↔ 종목코드·종가를 채우고 인정액·합계를 다시 그리지 않고 갱신
   $("detail").addEventListener("input", function (e) {
-    var i = e.target.getAttribute("data-cq"); if (i == null) return;
-    var per = +e.target.getAttribute("data-per"), q = num(e.target.value);
-    var cell = $("detail").querySelector('[data-cval="' + i + '"]');
-    if (cell) cell.innerHTML = q > 0 ? "<b>" + fmt(Math.floor(q) * per) + "</b>" : "<span class='muted'>" + fmt(+e.target.placeholder * per) + "</span>";
-    var sumEl = $("cq-sum"), total = 0, cnt = 0;
-    Array.prototype.forEach.call($("detail").querySelectorAll("[data-cq]"), function (x) {
-      var v = Math.floor(num(x.value)); if (v > 0) { total += v * +x.getAttribute("data-per"); cnt++; }
-    });
-    var gap = +sumEl.getAttribute("data-gap"), need = sumEl.getAttribute("data-need") === "1";
-    if (!cnt) { sumEl.className = "fine"; sumEl.textContent = "수량을 입력하면 합계와 남는 금액을 바로 보여줍니다."; return; }
-    var rest = gap - total;
-    sumEl.className = "banner " + (need ? (rest <= 0 ? "ok" : "call") : (rest >= 0 ? "info" : "call"));
-    sumEl.innerHTML = cnt + "종목 입력 · 인정 평가액 합계 <b class='num'>" + fmt(total) + "</b> · " +
-      (need ? (rest <= 0 ? "충족, 여유 <b class='num'>" + fmt(-rest) + "</b>" : "아직 <b class='num'>" + fmt(rest) + "</b> 부족")
-            : (rest >= 0 ? "말소 후 여유 <b class='num'>" + fmt(rest) + "</b>" : "말소 한도 <b class='num'>" + fmt(-rest) + "</b> 초과"));
+    var f = e.target.getAttribute("data-f"); if (!f) return;
+    var tr = e.target.closest("tr[data-dr]"), i = +tr.getAttribute("data-dr"), r = draftsOf(state.sel)[i]; if (!r) return;
+    var v = e.target.value, set = function (ff, val) { var el = tr.querySelector('[data-f="' + ff + '"]'); if (el) el.value = val; r[ff] = val; };
+    r[f] = v.trim();
+    var fill = function () {
+      var p = priceOf(r.code);
+      if (!r.manual) set("price", isFinite(p) ? String(p) : "");
+    };
+    if (f === "name") {
+      var c = nameToCode[v.trim().toLowerCase()];
+      if (c) { set("code", "A" + c); r.manual = false; fill(); }
+    } else if (f === "code") {
+      var nc = normCode(v), nm = (state.names || {})[nc];
+      if (/^\d{6}$/.test(nc) && v.trim().length === 6) set("code", "A" + nc);
+      if (nm) set("name", nm);
+      r.manual = false; fill();
+    } else if (f === "price") {
+      r.manual = v.trim() !== "";
+    }
+    var k = draftCalc(r);
+    tr.querySelector('[data-c="x"]').textContent = isFinite(k.x) ? fmt(k.x * 100) + "%" : "–";
+    tr.querySelector('[data-c="per"]').textContent = fmt(k.per, k.per < 100 ? 4 : 0);
+    tr.querySelector('[data-c="val"]').innerHTML = "<b>" + fmt(k.val) + "</b>";
+    refreshSum(); save();
   });
   $("detail").addEventListener("change", function (e) {
     var key = state.sel, q = e.target.getAttribute("data-lqty"), dr = e.target.getAttribute("data-ldir");
@@ -850,28 +876,7 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     commit();
   });
 
-  $("cn-add").addEventListener("click", function () {
-    var code = $("cn-code").value.trim().toUpperCase(); if (!code) return;
-    if (/^\d{6}$/.test(code)) code = "A" + code;
-    var nm = $("cn-name").value.trim() || (state.names || {})[normCode(code)] || code;
-    state.cands.push({ fund: $("cn-fund").value.trim(), code: code, name: nm, avail: $("cn-avail").value.trim() === "" ? "" : num($("cn-avail").value) });
-    ["cn-fund", "cn-code", "cn-name", "cn-avail"].forEach(function (id) { $(id).value = ""; });
-    commit();
-  });
-  $("cn-code").addEventListener("input", function () {
-    var nm = (state.names || {})[normCode(this.value)]; if (nm && !$("cn-name").value) $("cn-name").placeholder = nm;
-  });
-  $("cn-bulk").addEventListener("click", function () {
-    var rows = parseTSV($("cn-paste").value).filter(function (r) { return r[1] && !/코드/.test(r[1]); });
-    if (!rows.length) return;
-    state.cands = rows.map(function (r) { return { fund: String(r[0] || "").trim(), code: String(r[1]).trim().toUpperCase(), name: String(r[2] || (state.names || {})[normCode(r[1])] || r[1]).trim(), avail: r[3] == null || String(r[3]).trim() === "" ? "" : num(r[3]) }; });
-    $("cn-paste").value = ""; commit(); toast("후보 " + rows.length + "종목으로 교체");
-  });
-  $("cand-body").addEventListener("click", function (e) { var d = e.target.closest("[data-cdel]"); if (d) { state.cands.splice(+d.getAttribute("data-cdel"), 1); commit(); } });
-  $("cand-body").addEventListener("change", function (e) {
-    var i = e.target.getAttribute("data-avail"); if (i == null) return;
-    state.cands[+i].avail = e.target.value.trim() === "" ? "" : num(e.target.value); commit();
-  });
+  $("p-q").addEventListener("input", renderPrices);
   $("m-apply").addEventListener("click", function () {
     var rows = parseTSV($("m-paste").value).filter(function (r) { return /\d{6,}/.test(String(r[0])); });
     if (!rows.length) { $("m-msg").textContent = "담보번호로 시작하는 행이 없습니다."; return; }
