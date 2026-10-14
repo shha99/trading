@@ -274,7 +274,7 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
   <div id="pane-cands" hidden style="display:grid;gap:14px;">
     <section class="panel">
       <h2>OB+ 코드 자동 연결</h2>
-      <p class="fine">엑셀에서 하던 순서 그대로 연결합니다: <b>담보번호</b> → (하나플러스_4670) → <b>관련상품</b> → (OB+_71006 제공·수취) → <b>OB+코드·코드명</b>. 조회 파일을 그대로 올리고 처음 한 번만 열을 골라 두면, 다음부터는 같은 머리글을 찾아 올리기만 해도 자동으로 연결됩니다. 파일 내용은 이 브라우저 안에서만 처리됩니다.</p>
+      <p class="fine">엑셀에서 하던 순서 그대로 연결합니다: 일일정산 <b>담보관리번호</b> = 하나플러스 <b>장파담보번호</b> → <b>관련상품</b> = OB+_71006 <b>관련상품코드</b> → OB+코드·코드명(관련상품명). ETF 종목코드는 코드명의 “ETF_481050” 부분으로 KR7481050003처럼 계산합니다. 조회 파일을 그대로 올리고 처음 한 번만 열을 골라 두면, 다음부터는 같은 머리글을 찾아 올리기만 해도 자동으로 연결됩니다. 파일 내용은 이 브라우저 안에서만 처리됩니다.</p>
       <div class="grid2">
         <div class="lk-box">
           <h3>① 하나플러스_4670 <span class="muted">(담보번호 ↔ 관련상품)</span></h3>
@@ -282,7 +282,7 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
           <div id="lk-hp"></div>
         </div>
         <div class="lk-box">
-          <h3>② OB+_71006 제공 · 수취 <span class="muted">(관련상품 ↔ OB+코드)</span></h3>
+          <h3>② OB+_71006 제공 · 수취 <span class="muted">(관련상품코드 = OB+코드, 관련상품명 = OB+코드명)</span></h3>
           <input type="file" id="lk-ob-file" accept=".xlsx,.xls,.csv,.txt" multiple>
           <div id="lk-ob"></div>
         </div>
@@ -526,10 +526,15 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
   }
 
   // ---------- OB+ 자동 연결 (담보번호 → 관련상품 → OB+코드) ----------
+  // 머리글 후보는 앞에서부터 우선 (하나플러스 / OB+_71006 제공·수취 조회 화면 머리글 기준)
   var LK_F = {
-    hp: [["key", "담보번호 열", true, /장파.*담보|담보관리번호|담보번호/], ["prod", "관련상품 열", true, /관련상품/]],
-    ob: [["prod", "관련상품 열", true, /관련상품|상품코드|상품번호/], ["ob", "OB+코드 열", true, /OB\+?\s*코드(?!명)|OB코드(?!명)/i],
-         ["obName", "OB+코드명 열 (선택)", false, /OB\+?\s*코드명|OB코드명|상품명/i], ["etf", "ETF 종목코드 열 (선택)", false, /ETF|기초자산.*코드|종목코드/i]]
+    hp: [["key", "장파담보번호 열", true, [/^장파담보번호$/, /장파.*담보/, /담보관리번호|담보번호/]],
+         ["prod", "관련상품 열", true, [/^관련상품$/, /관련상품(?!명)/]]],
+    ob: [["prod", "관련상품코드 열 (하나플러스 관련상품과 맞출 값)", true, [/^관련상품코드$/, /관련상품(?!명)/]],
+         ["ob", "OB+코드 열", true, [/^관련상품코드$/, /OB\+?코드(?!명)/i]],
+         ["obName", "OB+코드명 열", false, [/^관련상품명$/, /OB\+?코드명/i]],
+         ["mgmt", "담보관리번호 열 (보조 연결)", false, [/^담보관리번호$/]],
+         ["etf", "ETF 종목코드 열 (없으면 코드명에서 계산)", false, [/^ETF.*코드$/i]]]
   };
   var lk = { hp: null, ob: [] }; // 올린 표는 메모리에만 두고, 연결 결과만 저장한다
   function lkKey(v) { return String(v == null ? "" : v).replace(/\s/g, "").toUpperCase(); }
@@ -547,7 +552,7 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     var saved = (state.settings.lk || {})[kind] || {}, head = (rows[t.hdr] || []).map(function (c) { return String(c).replace(/\s/g, ""); });
     LK_F[kind].forEach(function (f) {
       var i = saved[f[0]] ? head.indexOf(saved[f[0]]) : -1;
-      if (i < 0) i = head.findIndex(function (h) { return f[3].test(h); });
+      for (var r = 0; i < 0 && r < f[3].length; r++) i = head.findIndex(function (h) { return f[3][r].test(h); });
       t.map[f[0]] = i;
     });
   }
@@ -583,17 +588,22 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     }
     var obs = lk.ob.filter(function (t) { return lkReq("ob", t); });
     if (obs.length) {
-      var ob = {};
+      var ob = {}, mgmt = {};
       obs.forEach(function (t) {
         var g = function (r, f) { return t.map[f] >= 0 ? String(r[t.map[f]] == null ? "" : r[t.map[f]]).trim() : ""; };
         t.sheets[t.sheet].slice(t.hdr + 1).forEach(function (r) {
           var pr = lkKey(r[t.map.prod]), code = g(r, "ob"); if (!pr || !code) return;
-          if (!ob[pr]) ob[pr] = { ob: code, obName: g(r, "obName"), etf: g(r, "etf") };
+          var rec = { ob: code, obName: g(r, "obName"), etf: g(r, "etf") };
+          if (!ob[pr]) ob[pr] = rec;
+          // 하나플러스 관련상품에 코드명이 들어 있어도 맞도록 코드명으로도 찾게 둔다
+          if (rec.obName && !ob[lkKey(rec.obName)]) ob[lkKey(rec.obName)] = rec;
+          // OB+ 쪽 담보관리번호가 장파담보번호와 같으면 하나플러스 없이도 연결 (보조)
+          var mg = lkKey(g(r, "mgmt")); if (mg && !mgmt[mg]) mgmt[mg] = rec;
         });
         remember("ob", t);
       });
-      state.link.ob = ob; state.link.obFiles = obs.map(function (t) { return t.name; });
-      msgs.push("관련상품↔OB+코드 " + Object.keys(ob).length + "건");
+      state.link.ob = ob; state.link.mgmt = mgmt; state.link.obFiles = obs.map(function (t) { return t.name; });
+      msgs.push("관련상품↔OB+코드 " + Object.keys(ob).filter(function (k) { return ob[k].ob && lkKey(ob[k].ob) === k; }).length + "건");
     }
     state.link.at = new Date().toISOString();
     $("lk-msg").textContent = msgs.length ? (auto ? "자동 연결: " : "연결 적용: ") + msgs.join(" · ") : "필수 열(담보번호·관련상품 또는 관련상품·OB+코드)을 골라 주세요.";
@@ -604,10 +614,19 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     var k = String(key).trim(), man = (state.master || []).find(function (m) { return String(m.key).trim() === k; });
     if (man) return { ob: man.ob, obName: man.obName, etf: man.etf, src: "수동" };
     var L = state.link || {}, pr = (L.hp || {})[lkKey(k)];
-    if (!pr) return { src: "", miss: "관련상품 없음" };
-    var o = (L.ob || {})[pr];
-    if (!o) return { prod: pr, src: "", miss: "OB+코드 없음" };
-    return { prod: pr, ob: o.ob, obName: o.obName, etf: o.etf, src: "자동" };
+    var o = pr ? (L.ob || {})[pr] : null, src = "자동";
+    if (!o && (L.mgmt || {})[lkKey(k)]) { o = L.mgmt[lkKey(k)]; src = "자동(담보관리번호)"; }
+    if (!o) return pr ? { prod: pr, src: "", miss: "OB+코드 없음" } : { src: "", miss: "관련상품 없음" };
+    return { prod: pr || "", ob: o.ob, obName: o.obName, etf: o.etf || etfFromName(o.obName), src: src };
+  }
+  // "TRS(ETF_481050)_..." → KR7481050003 (ISIN 검사숫자 계산)
+  function etfFromName(name) {
+    var m = String(name || "").match(/ETF[_\s-]?(\d{6})/i); if (!m) return "";
+    var base = "KR7" + m[1] + "00", d = "";
+    for (var i = 0; i < base.length; i++) { var ch = base[i]; d += /[A-Z]/.test(ch) ? String(ch.charCodeAt(0) - 55) : ch; }
+    var sum = 0;
+    for (var j = d.length - 1, p = 0; j >= 0; j--, p++) { var n = +d[j]; if (p % 2 === 0) { n *= 2; if (n > 9) n -= 9; } sum += n; }
+    return base + ((10 - sum % 10) % 10);
   }
   function lkTableUI(kind, t, idx) {
     var rows = t.sheets[t.sheet] || [], head = rows[t.hdr] || [], names = Object.keys(t.sheets);
