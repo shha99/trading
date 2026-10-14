@@ -1,0 +1,17 @@
+# Render 정적 사이트(무료, 슬립 없음) 설정. 서버가 없고 데이터는 각자 브라우저에만 저장된다.
+# Render 대시보드 New → Blueprint 에서 Blueprint 경로를 collateral-portal/render.yaml 로 지정하거나,
+# New → Static Site 에서 아래 값(Root Directory / Build Command / Publish Directory)을 그대로 넣으면 된다.
+services:
+  - type: web
+    name: trs-collateral-portal
+    runtime: static
+    rootDir: collateral-portal
+    buildCommand: sh build.sh
+    staticPublishPath: ./public
+    headers:
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+      - path: /*
+        name: Referrer-Policy
+        value: no-referrer
