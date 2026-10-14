@@ -11,7 +11,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
-/* Layout: 증권사 HTS 주문창 느낌의 2단 — 왼쪽 계산기, 오른쪽 증거금률 표. 폰에서는 1단. */
+/* Layout: 증권사 계좌 화면처럼 입력 5칸 → 큰 숫자 2개 → 세부 지표 표. 폰에서는 1단. */
 :root {
   --bg: #f3f5f8;
   --panel: #ffffff;
@@ -20,80 +20,58 @@
   --line: #d9dee6;
   --accent: #1d55b8;
   --accent-soft: #e5edfb;
-  --long: #c62f2f;
-  --short: #1d55b8;
+  --up: #c62f2f;
+  --down: #1d55b8;
   --warn: #b26a00;
   --warn-soft: #fbf1e0;
-  --danger-soft: #fbe7e7;
+  --bad-soft: #fbe7e7;
   --font-ui: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
   --font-num: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #0f141b; --panel: #171e28; --ink: #e6ebf2; --muted: #95a1b2; --line: #2a3442;
-    --accent: #6f9ef0; --accent-soft: #1d2a40; --long: #f07272; --short: #6f9ef0;
-    --warn: #e6a64a; --warn-soft: #33270f; --danger-soft: #3a1c1f; color-scheme: dark;
+    --accent: #6f9ef0; --accent-soft: #1d2a40; --up: #f07272; --down: #6f9ef0;
+    --warn: #e6a64a; --warn-soft: #33270f; --bad-soft: #3a1c1f; color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
   --bg: #0f141b; --panel: #171e28; --ink: #e6ebf2; --muted: #95a1b2; --line: #2a3442;
-  --accent: #6f9ef0; --accent-soft: #1d2a40; --long: #f07272; --short: #6f9ef0;
-  --warn: #e6a64a; --warn-soft: #33270f; --danger-soft: #3a1c1f; color-scheme: dark;
+  --accent: #6f9ef0; --accent-soft: #1d2a40; --up: #f07272; --down: #6f9ef0;
+  --warn: #e6a64a; --warn-soft: #33270f; --bad-soft: #3a1c1f; color-scheme: dark;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-ui); font-size: 14px; line-height: 1.5; }
-.wrap { max-width: 1120px; margin: 0 auto; padding-inline: 16px; padding-block: 20px 40px; display: grid; gap: 16px; }
+.wrap { max-width: 760px; margin: 0 auto; padding-inline: 16px; padding-block: 20px 40px; display: grid; gap: 16px; }
 header h1 { margin: 0; font-size: 1.45rem; font-weight: 700; letter-spacing: -0.01em; text-wrap: balance; }
 header p { margin: 4px 0 0; color: var(--muted); max-width: 65ch; }
-.grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); gap: 16px; align-items: start; }
-@media (max-width: 860px) { .grid { grid-template-columns: minmax(0, 1fr); } }
 section.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; display: grid; gap: 14px; min-width: 0; }
-h2 { margin: 0; font-size: 1rem; font-weight: 700; }
-.label { font-size: 0.72rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
 .fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; }
-.fields .full { grid-column: 1 / -1; }
-@media (max-width: 420px) { .fields { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 440px) { .fields { grid-template-columns: minmax(0, 1fr); } }
 label.f { display: grid; gap: 4px; font-size: 0.82rem; color: var(--muted); min-width: 0; }
-input, select { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; width: 100%; min-width: 0; }
-input[type="number"], .num { font-family: var(--font-num); font-variant-numeric: tabular-nums; }
-input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
-.seg button { font: inherit; border: 0; background: transparent; color: var(--muted); padding: 7px 16px; cursor: pointer; }
-.seg button[aria-pressed="true"].long { background: var(--long); color: #fff; }
-.seg button[aria-pressed="true"].short { background: var(--short); color: #fff; }
-.rate-strip { display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: baseline; padding: 12px 14px; background: var(--accent-soft); border-radius: 8px; }
-.rate-strip .big { font-family: var(--font-num); font-size: 1.8rem; font-weight: 500; color: var(--accent); font-variant-numeric: tabular-nums; }
-.rate-strip .sub { color: var(--muted); }
-.results { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
-.results div { background: var(--panel); padding: 10px 12px; display: grid; gap: 2px; min-width: 0; }
-.results dt { font-size: 0.78rem; color: var(--muted); }
-.results dd { margin: 0; font-family: var(--font-num); font-size: 1.05rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.results .liq dd { color: var(--long); }
+label.f small { font-size: 0.74rem; }
+input { font: inherit; font-family: var(--font-num); font-variant-numeric: tabular-nums; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 9px 10px; width: 100%; min-width: 0; text-align: right; }
+input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.toolbar { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.btn { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+.hero { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 440px) { .hero { grid-template-columns: minmax(0, 1fr); } }
+.hero div { background: var(--accent-soft); border-radius: 8px; padding: 12px 14px; display: grid; gap: 2px; min-width: 0; }
+.hero .k { font-size: 0.82rem; color: var(--muted); }
+.hero .v { font-family: var(--font-num); font-size: 1.9rem; font-weight: 500; color: var(--accent); font-variant-numeric: tabular-nums; line-height: 1.2; overflow-wrap: anywhere; }
+.hero .fx { font-size: 0.74rem; color: var(--muted); }
+.tablewrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+td { padding: 8px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }
+td.v { text-align: right; white-space: nowrap; font-family: var(--font-num); font-variant-numeric: tabular-nums; }
+td .fx { display: block; color: var(--muted); font-size: 0.74rem; }
+.pos { color: var(--up); }
+.neg { color: var(--down); }
 .status { padding: 9px 12px; border-radius: 6px; font-size: 0.85rem; }
 .status.ok { background: var(--accent-soft); color: var(--accent); }
 .status.warn { background: var(--warn-soft); color: var(--warn); }
-.status.bad { background: var(--danger-soft); color: var(--long); }
-.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
-.tabs button { font: inherit; background: none; border: 0; border-bottom: 2px solid transparent; color: var(--muted); padding: 6px 10px; cursor: pointer; margin-bottom: -1px; }
-.tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); font-weight: 500; }
-.tablewrap { overflow-x: auto; }
-table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
-th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
-th { font-weight: 500; color: var(--muted); font-size: 0.76rem; white-space: nowrap; }
-td.r, th.r { text-align: right; white-space: nowrap; font-family: var(--font-num); font-variant-numeric: tabular-nums; }
-td .note { display: block; color: var(--muted); font-size: 0.78rem; }
-tr.pick { cursor: pointer; }
-tr.pick:hover td { background: var(--accent-soft); }
-.tag { display: inline-block; font-size: 0.7rem; padding: 0 6px; border-radius: 4px; background: var(--warn-soft); color: var(--warn); margin-left: 4px; vertical-align: 1px; }
-.btn { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 6px; padding: 7px 12px; cursor: pointer; white-space: nowrap; }
-.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-.btn.x { border: 0; background: none; color: var(--muted); padding: 2px 6px; }
-.addrow { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 0.8fr) auto; gap: 8px; }
-.toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-.toolbar input { flex: 1 1 160px; }
+.status.bad { background: var(--bad-soft); color: var(--up); }
 .fine { color: var(--muted); font-size: 0.78rem; max-width: 70ch; margin: 0; }
-footer.fine { padding-top: 4px; }
-@media (prefers-reduced-motion: no-preference) { .rate-strip .big { transition: color .2s; } }
 </style>
 
 </head>
@@ -101,344 +79,137 @@ footer.fine { padding-top: 4px; }
 <div class="wrap">
   <header>
     <h1>CFD 증거금률 체커</h1>
-    <p>상품·종목별 증거금률을 확인하고, 진입 금액과 예수금으로 필요 증거금·최대 수량·로스컷 가격을 바로 계산합니다.</p>
+    <p>계좌 화면의 숫자 다섯 개를 넣으면 증거금률을 계산합니다.</p>
   </header>
 
-  <div class="grid">
-    <!-- 계산기 -->
-    <section class="panel" aria-labelledby="calc-h">
-      <h2 id="calc-h">증거금 계산</h2>
-
-      <div class="fields">
-        <label class="f full">상품 / 종목
-          <select id="pick"></select>
-        </label>
-        <label class="f">증거금률 (%)
-          <input id="rate" type="number" min="0.1" max="100" step="0.01" inputmode="decimal">
-        </label>
-        <div class="f" style="display:grid;gap:4px;">
-          <span style="font-size:.82rem;color:var(--muted)">방향</span>
-          <div class="seg" role="group" aria-label="포지션 방향">
-            <button type="button" id="dir-long" class="long" aria-pressed="true">매수 (롱)</button>
-            <button type="button" id="dir-short" class="short" aria-pressed="false">매도 (숏)</button>
-          </div>
-        </div>
-        <label class="f">진입 가격
-          <input id="price" type="number" min="0" step="any" inputmode="decimal">
-        </label>
-        <label class="f">수량 (계약·주)
-          <input id="qty" type="number" min="0" step="any" inputmode="decimal">
-        </label>
-        <label class="f">계약 단위 (1계약당 수량)
-          <input id="mult" type="number" min="0" step="any" inputmode="decimal">
-        </label>
-        <label class="f">예수금 (계좌 평가금)
-          <input id="cash" type="number" min="0" step="any" inputmode="decimal">
-        </label>
-        <label class="f full">로스컷 기준 — 유지율 (필요 증거금 대비 %)
-          <input id="stop" type="number" min="0" max="100" step="1" inputmode="decimal">
-        </label>
+  <section class="panel" aria-label="입력">
+    <div class="fields">
+      <label class="f">진입가격
+        <input id="price" type="number" min="0" step="any" inputmode="decimal">
+      </label>
+      <label class="f">매수 수량
+        <input id="qty" type="number" min="0" step="any" inputmode="decimal">
+      </label>
+      <label class="f">예탁금액 <small>(입금 원금)</small>
+        <input id="deposit" type="number" min="0" step="any" inputmode="decimal">
+      </label>
+      <label class="f">평가예탁총액 <small>(예탁금 + 평가손익)</small>
+        <input id="equity" type="number" step="any" inputmode="decimal">
+      </label>
+      <label class="f">매매증거금
+        <input id="margin" type="number" min="0" step="any" inputmode="decimal">
+      </label>
+      <div class="toolbar" style="align-self:end;">
+        <button type="button" class="btn" id="reset">비우기</button>
       </div>
+    </div>
+  </section>
 
-      <div class="rate-strip">
-        <span class="big num" id="out-rate">–</span>
-        <span class="sub">최대 레버리지 <b class="num" id="out-lev">–</b></span>
+  <section class="panel" aria-label="결과">
+    <div class="hero">
+      <div>
+        <span class="k">종목 증거금률</span>
+        <span class="v" id="o-rate">–</span>
+        <span class="fx">매매증거금 ÷ (진입가격 × 수량)</span>
       </div>
-
-      <dl class="results">
-        <div><dt>명목 금액 (가격×수량×단위)</dt><dd id="out-notional">–</dd></div>
-        <div><dt>필요 증거금</dt><dd id="out-margin">–</dd></div>
-        <div><dt>증거금 사용률</dt><dd id="out-usage">–</dd></div>
-        <div><dt>최대 진입 가능 수량</dt><dd id="out-maxqty">–</dd></div>
-        <div><dt>여유 증거금</dt><dd id="out-free">–</dd></div>
-        <div><dt>실효 레버리지 (명목÷예수금)</dt><dd id="out-efflev">–</dd></div>
-        <div class="liq"><dt>예상 로스컷 가격</dt><dd id="out-liq">–</dd></div>
-        <div class="liq"><dt>로스컷까지 가격 변동</dt><dd id="out-liqpct">–</dd></div>
-      </dl>
-      <div id="status" class="status ok">–</div>
-      <p class="fine">로스컷 가격은 “예수금 + 평가손익 = 필요 증거금 × 유지율”이 되는 가격으로 계산한 근사값입니다. 수수료, 금융비용(오버나이트 이자), 환율, 가격 변동에 따른 증거금 재계산은 반영하지 않습니다.</p>
-    </section>
-
-    <!-- 증거금률 표 -->
-    <section class="panel" aria-labelledby="tbl-h">
-      <h2 id="tbl-h">증거금률 표</h2>
-      <div class="tabs" role="tablist">
-        <button type="button" role="tab" id="tab-mine" aria-selected="true">내 종목</button>
-        <button type="button" role="tab" id="tab-kr" aria-selected="false">국내 CFD 규정</button>
-        <button type="button" role="tab" id="tab-esma" aria-selected="false">해외 CFD (ESMA)</button>
+      <div>
+        <span class="k">계좌 증거금률 (현재)</span>
+        <span class="v" id="o-acct">–</span>
+        <span class="fx">평가예탁총액 ÷ (진입가격 × 수량)</span>
       </div>
+    </div>
 
-      <div id="pane-mine" role="tabpanel" style="display:grid;gap:10px;">
-        <p class="fine">증권사 HTS/MTS의 “CFD 종목별 증거금률” 화면에서 본 값을 저장해 두는 목록입니다. 행을 누르면 계산기에 불러옵니다. 이 브라우저에만 저장됩니다.</p>
-        <form id="add" class="addrow" autocomplete="off">
-          <input id="add-name" placeholder="종목명 (예: 삼성전자)" aria-label="종목명" required>
-          <input id="add-rate" type="number" min="0.1" max="100" step="0.01" placeholder="증거금률 %" aria-label="증거금률" required>
-          <button class="btn primary" type="submit">추가</button>
-        </form>
-        <div class="toolbar">
-          <input id="filter" placeholder="종목 검색" aria-label="종목 검색">
-          <button type="button" class="btn" id="clear-ex">예시 지우기</button>
-        </div>
-        <div class="tablewrap">
-          <table>
-            <thead><tr><th>종목</th><th class="r">증거금률</th><th class="r">레버리지</th><th></th></tr></thead>
-            <tbody id="mine-body"></tbody>
-          </table>
-        </div>
-      </div>
+    <div id="status" class="status ok">–</div>
 
-      <div id="pane-kr" role="tabpanel" hidden>
-        <div class="tablewrap">
-          <table>
-            <thead><tr><th>구분</th><th class="r">증거금률</th><th class="r">레버리지</th></tr></thead>
-            <tbody id="kr-body"></tbody>
-          </table>
-        </div>
-        <p class="fine" style="margin-top:10px;">국내 증권사 CFD는 개인 전문투자자만 거래할 수 있고, 금융당국 규정상 최저 증거금률은 40%입니다. 실제 증거금률은 증권사가 종목 등급(유동성·변동성)에 따라 40~100%로 정하므로, 거래 전 반드시 해당 증권사 화면에서 확인하세요.</p>
-      </div>
+    <div class="tablewrap">
+      <table>
+        <tbody>
+          <tr><td>계약금액<span class="fx">진입가격 × 수량</span></td><td class="v" id="o-notional">–</td></tr>
+          <tr><td>증거금 유지비율<span class="fx">평가예탁총액 ÷ 매매증거금</span></td><td class="v" id="o-keep">–</td></tr>
+          <tr><td>여유 증거금 (부족분)<span class="fx">평가예탁총액 − 매매증거금</span></td><td class="v" id="o-free">–</td></tr>
+          <tr><td>평가손익<span class="fx">평가예탁총액 − 예탁금액</span></td><td class="v" id="o-pnl">–</td></tr>
+          <tr><td>수익률 (예탁금 대비)<span class="fx">평가손익 ÷ 예탁금액</span></td><td class="v" id="o-ret">–</td></tr>
+          <tr><td>추정 현재가<span class="fx">진입가격 + 평가손익 ÷ 수량</span></td><td class="v" id="o-now">–</td></tr>
+          <tr><td>증거금 부족 시작 가격<span class="fx">평가예탁총액이 매매증거금과 같아지는 가격</span></td><td class="v" id="o-call">–</td></tr>
+          <tr><td>최대 레버리지<span class="fx">100 ÷ 종목 증거금률</span></td><td class="v" id="o-lev">–</td></tr>
+          <tr><td>실효 레버리지<span class="fx">계약금액 ÷ 평가예탁총액</span></td><td class="v" id="o-efflev">–</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="fine">평가손익이 모두 이 종목에서 나왔다고 보고 추정 현재가와 증거금 부족 시작 가격을 계산합니다. 수수료, 금융비용(이자), 환율은 반영하지 않습니다. 반대매매 기준은 증권사마다 다르니 계좌 화면에서 확인하세요.</p>
+  </section>
 
-      <div id="pane-esma" role="tabpanel" hidden>
-        <div class="tablewrap">
-          <table>
-            <thead><tr><th>상품군</th><th class="r">최소 증거금률</th><th class="r">레버리지</th></tr></thead>
-            <tbody id="esma-body"></tbody>
-          </table>
-        </div>
-        <p class="fine" style="margin-top:10px;">EU(ESMA)·영국(FCA)·호주(ASIC) 리테일 고객 기준 최소 증거금률입니다. 프로 계좌나 다른 국가 규정을 따르는 브로커는 더 낮을 수 있고, 브로커가 이보다 높게 받을 수도 있습니다. 리테일 계좌는 유지율 50%에서 로스컷(마진 클로즈아웃)이 의무입니다.</p>
-      </div>
-    </section>
-  </div>
-
-  <footer class="fine">참고용 계산 도구입니다. 증거금률은 증권사·시점마다 다르며 변동성 확대 시 예고 없이 상향될 수 있습니다. 투자 권유가 아닙니다.</footer>
+  <footer class="fine">참고용 계산 도구입니다. 투자 권유가 아닙니다.</footer>
 </div>
 
 <script>
 (function () {
   "use strict";
-
-  var KR = [
-    { name: "국내 CFD 최저 증거금률 (규정)", rate: 40, note: "개인 전문투자자 대상, 레버리지 최대 2.5배" },
-    { name: "증권사 종목 등급 예: 우량 대형주", rate: 40, note: "증권사별로 등급 기준이 다름" },
-    { name: "증권사 종목 등급 예: 중간 등급", rate: 50, note: "" },
-    { name: "증권사 종목 등급 예: 변동성 높은 종목", rate: 60, note: "" },
-    { name: "증권사 종목 등급 예: 고위험·신규 종목", rate: 100, note: "레버리지 없음 (현금 100%)" }
-  ];
-  var ESMA = [
-    { name: "주요 통화쌍", rate: 3.33, note: "EUR/USD, USD/JPY, GBP/USD 등 G7 통화 조합" },
-    { name: "비주요 통화쌍 · 금 · 주요 지수", rate: 5, note: "S&P500, NASDAQ100, DAX, Nikkei225, FTSE100 등" },
-    { name: "금 외 원자재 · 비주요 지수", rate: 10, note: "원유, 은, 기타 주가지수" },
-    { name: "개별 주식 · 기타 기초자산", rate: 20, note: "해외 개별 주식 CFD" },
-    { name: "암호화폐", rate: 50, note: "BTC, ETH 등" }
-  ];
-  var EXAMPLES = [
-    { name: "삼성전자", rate: 40, ex: true },
-    { name: "SK하이닉스", rate: 40, ex: true },
-    { name: "카카오", rate: 50, ex: true },
-    { name: "Tesla (TSLA)", rate: 60, ex: true }
-  ];
-
-  var KEY = "cfd-margin-checker:v1";
-  function load() {
-    try { var s = JSON.parse(localStorage.getItem(KEY) || "null"); if (s && typeof s === "object") return s; } catch (e) {}
-    return null;
-  }
-  function save() {
-    try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {}
-  }
-
-  var state = load() || {
-    mine: EXAMPLES.slice(),
-    pick: "mine:0",
-    rate: 40, dir: "long", price: 72000, qty: 100, mult: 1, cash: 5000000, stop: 50, tab: "mine"
-  };
-  if (!Array.isArray(state.mine)) state.mine = EXAMPLES.slice();
-
+  var IDS = ["price", "qty", "deposit", "equity", "margin"];
+  var SAMPLE = { price: 72000, qty: 100, deposit: 5000000, equity: 4750000, margin: 2880000 };
+  var KEY = "cfd-margin-checker:v2";
   var $ = function (id) { return document.getElementById(id); };
-  var fmt = function (n, d) {
+
+  function fmt(n, d) {
     if (!isFinite(n)) return "–";
-    return n.toLocaleString("ko-KR", { maximumFractionDigits: d == null ? 2 : d, minimumFractionDigits: 0 });
-  };
-  var lev = function (r) { return r > 0 ? fmt(100 / r, 2) + "배" : "–"; };
-  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
+    return n.toLocaleString("ko-KR", { maximumFractionDigits: d == null ? 0 : d });
+  }
+  function signed(n, d) { return isFinite(n) ? (n > 0 ? "+" : "") + fmt(n, d) : "–"; }
+  function tone(el, n) { el.classList.toggle("pos", n > 0); el.classList.toggle("neg", n < 0); }
+  function val(id) { var v = parseFloat($(id).value); return isFinite(v) ? v : NaN; }
 
-  // ---------- 표 렌더링 ----------
-  function renderStatic(body, rows, prefix) {
-    body.innerHTML = rows.map(function (r, i) {
-      return '<tr class="pick" data-key="' + prefix + ':' + i + '" tabindex="0"><td>' + esc(r.name) +
-        (r.note ? '<span class="note">' + esc(r.note) + '</span>' : "") +
-        '</td><td class="r">' + fmt(r.rate) + '%</td><td class="r">' + lev(r.rate) + '</td></tr>';
-    }).join("");
-  }
-  function renderMine() {
-    var q = $("filter").value.trim().toLowerCase();
-    var rows = state.mine.map(function (r, i) { return { r: r, i: i }; })
-      .filter(function (x) { return !q || x.r.name.toLowerCase().indexOf(q) >= 0; });
-    $("mine-body").innerHTML = rows.length ? rows.map(function (x) {
-      return '<tr class="pick" data-key="mine:' + x.i + '" tabindex="0"><td>' + esc(x.r.name) +
-        (x.r.ex ? '<span class="tag">예시</span>' : "") +
-        '</td><td class="r">' + fmt(x.r.rate) + '%</td><td class="r">' + lev(x.r.rate) +
-        '</td><td class="r"><button type="button" class="btn x" data-del="' + x.i + '" aria-label="' + esc(x.r.name) + ' 삭제">✕</button></td></tr>';
-    }).join("") : '<tr><td colspan="4" class="note" style="color:var(--muted)">' +
-      (state.mine.length ? "검색 결과가 없습니다." : "저장된 종목이 없습니다. 위에서 종목명과 증거금률을 입력해 추가하세요.") + '</td></tr>';
-    $("clear-ex").hidden = !state.mine.some(function (r) { return r.ex; });
-  }
-  function renderPicker() {
-    var opt = function (key, r) {
-      return '<option value="' + key + '">' + esc(r.name) + " — " + fmt(r.rate) + "%</option>";
-    };
-    var html = '<option value="custom">직접 입력</option>';
-    if (state.mine.length) html += '<optgroup label="내 종목">' + state.mine.map(function (r, i) { return opt("mine:" + i, r); }).join("") + "</optgroup>";
-    html += '<optgroup label="국내 CFD 규정">' + KR.map(function (r, i) { return opt("kr:" + i, r); }).join("") + "</optgroup>";
-    html += '<optgroup label="해외 CFD (ESMA)">' + ESMA.map(function (r, i) { return opt("esma:" + i, r); }).join("") + "</optgroup>";
-    $("pick").innerHTML = html;
-    $("pick").value = lookup(state.pick) ? state.pick : "custom";
-  }
-  function lookup(key) {
-    if (!key || key === "custom") return null;
-    var p = key.split(":"), i = +p[1];
-    var src = p[0] === "mine" ? state.mine : p[0] === "kr" ? KR : p[0] === "esma" ? ESMA : null;
-    return src && src[i] ? src[i] : null;
-  }
-
-  // ---------- 계산 ----------
-  function num(id) { var v = parseFloat($(id).value); return isFinite(v) ? v : NaN; }
   function calc() {
-    var rate = num("rate"), price = num("price"), qty = num("qty"), mult = num("mult"), cash = num("cash"), stop = num("stop");
-    state.rate = rate; state.price = price; state.qty = qty; state.mult = mult; state.cash = cash; state.stop = stop;
-    save();
+    var p = val("price"), q = val("qty"), dep = val("deposit"), eq = val("equity"), m = val("margin");
+    var saved = {};
+    IDS.forEach(function (id) { saved[id] = $(id).value; });
+    try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch (e) {}
 
-    $("out-rate").textContent = rate > 0 ? fmt(rate) + "%" : "–";
-    $("out-lev").textContent = lev(rate);
+    var notional = p * q;
+    var okN = notional > 0;
+    var rate = okN ? m / notional * 100 : NaN;
+    var acct = okN ? eq / notional * 100 : NaN;
+    var keep = m > 0 ? eq / m * 100 : NaN;
+    var free = eq - m;
+    var pnl = eq - dep;
+    var ret = dep > 0 ? pnl / dep * 100 : NaN;
+    var now = q > 0 ? p + pnl / q : NaN;
+    var call = q > 0 ? now - free / q : NaN;
 
-    var unit = price * mult;
-    var notional = unit * qty;
-    var margin = notional * rate / 100;
-    $("out-notional").textContent = fmt(notional, 0);
-    $("out-margin").textContent = fmt(margin, 0);
+    $("o-rate").textContent = isFinite(rate) ? fmt(rate, 2) + "%" : "–";
+    $("o-acct").textContent = isFinite(acct) ? fmt(acct, 2) + "%" : "–";
+    $("o-notional").textContent = fmt(notional);
+    $("o-keep").textContent = isFinite(keep) ? fmt(keep, 1) + "%" : "–";
+    $("o-free").textContent = signed(free); tone($("o-free"), free);
+    $("o-pnl").textContent = signed(pnl); tone($("o-pnl"), pnl);
+    $("o-ret").textContent = isFinite(ret) ? signed(ret, 2) + "%" : "–"; tone($("o-ret"), ret);
+    $("o-now").textContent = fmt(now, 2);
+    $("o-call").textContent = isFinite(call) ? (call <= 0 ? "0 이하" : fmt(call, 2)) : "–";
+    $("o-lev").textContent = rate > 0 ? fmt(100 / rate, 2) + "배" : "–";
+    $("o-efflev").textContent = okN && eq > 0 ? fmt(notional / eq, 2) + "배" : "–";
 
-    var usage = cash > 0 ? margin / cash * 100 : NaN;
-    $("out-usage").textContent = isFinite(usage) ? fmt(usage, 1) + "%" : "–";
-    var maxq = unit > 0 && rate > 0 && cash >= 0 ? Math.floor(cash / (unit * rate / 100) * 1000) / 1000 : NaN;
-    $("out-maxqty").textContent = isFinite(maxq) ? fmt(maxq, 3) : "–";
-    $("out-free").textContent = fmt(cash - margin, 0);
-    $("out-efflev").textContent = cash > 0 ? fmt(notional / cash, 2) + "배" : "–";
-
-    // 예수금 + (P - P0)·q·m·sign = margin · stop%
-    var cushion = cash - margin * stop / 100;
-    var liq = NaN;
-    if (qty > 0 && mult > 0 && price > 0) {
-      var move = cushion / (qty * mult);
-      liq = state.dir === "long" ? price - move : price + move;
-    }
     var st = $("status");
-    if (!(price > 0 && qty > 0 && mult > 0 && rate > 0)) {
-      $("out-liq").textContent = "–"; $("out-liqpct").textContent = "–";
-      st.className = "status warn"; st.textContent = "증거금률, 가격, 수량, 계약 단위를 입력하세요.";
-      return;
-    }
-    if (cash < margin) {
-      $("out-liq").textContent = "–"; $("out-liqpct").textContent = "–";
-      st.className = "status bad";
-      st.textContent = "증거금 부족: " + fmt(margin - cash, 0) + " 더 필요합니다. 이 예수금으로는 최대 " + fmt(maxq, 3) + "까지 진입할 수 있습니다.";
-      return;
-    }
-    var liqShown = state.dir === "long" && liq <= 0 ? "0 이하 (로스컷 없음)" : fmt(liq, 4);
-    $("out-liq").textContent = liqShown;
-    var pct = (liq - price) / price * 100;
-    $("out-liqpct").textContent = state.dir === "long" && liq <= 0 ? "−100% 이상" : (pct > 0 ? "+" : "") + fmt(pct, 2) + "%";
-    if (usage > 80) {
+    if (!okN || !(m > 0) || !isFinite(eq)) {
       st.className = "status warn";
-      st.textContent = "증거금 사용률 " + fmt(usage, 1) + "%. 가격이 " + fmt(Math.abs(pct), 2) + "% 불리하게 움직이면 로스컷 기준에 닿습니다.";
+      st.textContent = "진입가격, 매수 수량, 평가예탁총액, 매매증거금을 입력하세요.";
+    } else if (free < 0) {
+      st.className = "status bad";
+      st.textContent = "증거금 부족: " + fmt(-free) + " 모자랍니다 (유지비율 " + fmt(keep, 1) + "%).";
     } else {
-      st.className = "status ok";
-      st.textContent = "진입 가능. 로스컷까지 가격 여유 " + (isFinite(pct) ? fmt(Math.abs(pct), 2) + "%" : "–") + ".";
+      var room = isFinite(now) && now > 0 ? (now - call) / now * 100 : NaN;
+      st.className = keep < 120 ? "status warn" : "status ok";
+      st.textContent = "여유 증거금 " + fmt(free) + (isFinite(room) ? ". 현재가에서 " + fmt(Math.min(room, 100), 2) + "% 더 내리면 증거금 부족이 시작됩니다." : ".");
     }
   }
 
-  // ---------- 이벤트 ----------
-  function applyPick(key) {
-    var r = lookup(key);
-    state.pick = r ? key : "custom";
-    $("pick").value = state.pick;
-    if (r) $("rate").value = r.rate;
-    calc();
-  }
-  $("pick").addEventListener("change", function () { applyPick(this.value); });
-  $("rate").addEventListener("input", function () {
-    var r = lookup(state.pick);
-    if (r && parseFloat(this.value) !== r.rate) { state.pick = "custom"; $("pick").value = "custom"; }
-    calc();
+  var saved = null;
+  try { saved = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) {}
+  IDS.forEach(function (id) {
+    var v = saved && typeof saved[id] === "string" ? saved[id] : String(SAMPLE[id]);
+    $(id).value = v;
+    $(id).addEventListener("input", calc);
   });
-  ["price", "qty", "mult", "cash", "stop"].forEach(function (id) { $(id).addEventListener("input", calc); });
-
-  function setDir(d) {
-    state.dir = d;
-    $("dir-long").setAttribute("aria-pressed", d === "long");
-    $("dir-short").setAttribute("aria-pressed", d === "short");
-    calc();
-  }
-  $("dir-long").addEventListener("click", function () { setDir("long"); });
-  $("dir-short").addEventListener("click", function () { setDir("short"); });
-
-  function onTablePick(e) {
-    var del = e.target.closest("[data-del]");
-    if (del) {
-      var i = +del.getAttribute("data-del");
-      var wasPicked = state.pick === "mine:" + i;
-      state.mine.splice(i, 1);
-      if (wasPicked) state.pick = "custom";
-      else if (state.pick.indexOf("mine:") === 0 && +state.pick.split(":")[1] > i) state.pick = "mine:" + (+state.pick.split(":")[1] - 1);
-      save(); renderMine(); renderPicker(); return;
-    }
-    var tr = e.target.closest("tr[data-key]");
-    if (tr) applyPick(tr.getAttribute("data-key"));
-  }
-  ["mine-body", "kr-body", "esma-body"].forEach(function (id) {
-    $(id).addEventListener("click", onTablePick);
-    $(id).addEventListener("keydown", function (e) { if (e.key === "Enter" && e.target.matches("tr[data-key]")) onTablePick(e); });
-  });
-
-  $("add").addEventListener("submit", function (e) {
-    e.preventDefault();
-    var name = $("add-name").value.trim(), rate = parseFloat($("add-rate").value);
-    if (!name || !(rate > 0 && rate <= 100)) return;
-    var idx = state.mine.findIndex(function (r) { return r.name === name; });
-    if (idx >= 0) state.mine[idx] = { name: name, rate: rate };
-    else { state.mine.push({ name: name, rate: rate }); idx = state.mine.length - 1; }
-    $("add-name").value = ""; $("add-rate").value = "";
-    save(); renderMine(); renderPicker(); applyPick("mine:" + idx);
-  });
-  $("filter").addEventListener("input", renderMine);
-  $("clear-ex").addEventListener("click", function () {
-    var picked = lookup(state.pick);
-    state.mine = state.mine.filter(function (r) { return !r.ex; });
-    var ni = picked ? state.mine.indexOf(picked) : -1;
-    state.pick = ni >= 0 ? "mine:" + ni : (state.pick.indexOf("mine:") === 0 ? "custom" : state.pick);
-    save(); renderMine(); renderPicker();
-  });
-
-  function setTab(t) {
-    state.tab = t; save();
-    ["mine", "kr", "esma"].forEach(function (k) {
-      $("tab-" + k).setAttribute("aria-selected", k === t);
-      $("pane-" + k).hidden = k !== t;
-    });
-  }
-  ["mine", "kr", "esma"].forEach(function (k) { $("tab-" + k).addEventListener("click", function () { setTab(k); }); });
-
-  // ---------- 시작 ----------
-  renderStatic($("kr-body"), KR, "kr");
-  renderStatic($("esma-body"), ESMA, "esma");
-  renderMine();
-  renderPicker();
-  $("rate").value = Number.isFinite(state.rate) ? state.rate : "";
-  $("price").value = Number.isFinite(state.price) ? state.price : "";
-  $("qty").value = Number.isFinite(state.qty) ? state.qty : "";
-  $("mult").value = Number.isFinite(state.mult) ? state.mult : 1;
-  $("cash").value = Number.isFinite(state.cash) ? state.cash : "";
-  $("stop").value = Number.isFinite(state.stop) ? state.stop : 50;
-  setTab(state.tab || "mine");
-  setDir(state.dir === "short" ? "short" : "long");
+  $("reset").addEventListener("click", function () { IDS.forEach(function (id) { $(id).value = ""; }); calc(); $("price").focus(); });
+  calc();
 })();
 </script>
 </body>
