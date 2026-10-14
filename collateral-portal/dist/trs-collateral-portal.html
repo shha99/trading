@@ -274,20 +274,26 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
   <div id="pane-cands" hidden style="display:grid;gap:14px;">
     <section class="panel">
       <h2>OB+ 코드 자동 연결</h2>
-      <p class="fine">엑셀에서 하던 순서 그대로 연결합니다: 일일정산 <b>담보관리번호</b> = 하나플러스 <b>장파담보번호</b> → <b>관련상품</b> = OB+_71006 <b>관련상품코드</b> → OB+코드·코드명(관련상품명). ETF 종목코드는 코드명의 “ETF_481050” 부분으로 KR7481050003처럼 계산합니다. 조회 파일을 그대로 올리고 처음 한 번만 열을 골라 두면, 다음부터는 같은 머리글을 찾아 올리기만 해도 자동으로 연결됩니다. 파일 내용은 이 브라우저 안에서만 처리됩니다.</p>
+      <p class="fine">엑셀에서 하던 순서 그대로 연결합니다: 일일정산 <b>담보관리번호</b> = 하나플러스 <b>장파담보번호</b> → <b>관련상품</b> = OB+_71006 <b>관련상품코드</b> → OB+코드·코드명(관련상품명). ETF 종목코드는 코드명의 “ETF_481050” 부분으로 KR7481050003처럼 계산합니다. 엑셀 조회 결과를 <b>머리글 행까지 포함해 복사 → 붙여넣기</b> 하면 됩니다. 한 번 넣은 연결은 저장돼 계속 쓰이고, 다시 붙여넣으면 기존 연결에 <b>추가·갱신</b>됩니다(제공과 수취를 따로 넣어도 됩니다). 내용은 이 브라우저 안에서만 처리됩니다.</p>
       <div class="grid2">
         <div class="lk-box">
           <h3>① 하나플러스_4670 <span class="muted">(담보번호 ↔ 관련상품)</span></h3>
-          <input type="file" id="lk-hp-file" accept=".xlsx,.xls,.csv,.txt">
+          <p class="fine" id="lk-hp-saved"></p>
+          <textarea id="lk-hp-paste" style="min-height:90px" placeholder="하나플러스_4670 조회 결과를 머리글(일자 · 처리구분 · …)부터 복사해 붙여넣기 (Ctrl+V)"></textarea>
+          <div class="row"><button type="button" class="btn primary" id="lk-hp-go">붙여넣은 내용 반영</button></div>
+          <details><summary class="fine">또는 파일로 올리기</summary><input type="file" id="lk-hp-file" accept=".xlsx,.xls,.csv,.txt"></details>
           <div id="lk-hp"></div>
         </div>
         <div class="lk-box">
           <h3>② OB+_71006 제공 · 수취 <span class="muted">(관련상품코드 = OB+코드, 관련상품명 = OB+코드명)</span></h3>
-          <input type="file" id="lk-ob-file" accept=".xlsx,.xls,.csv,.txt" multiple>
+          <p class="fine" id="lk-ob-saved"></p>
+          <textarea id="lk-ob-paste" style="min-height:90px" placeholder="OB+_71006 제공 또는 수취 조회 결과를 머리글(거래상대방 · 펀드코드 · …)부터 복사해 붙여넣기 (Ctrl+V)"></textarea>
+          <div class="row"><button type="button" class="btn primary" id="lk-ob-go">붙여넣은 내용 반영</button></div>
+          <details><summary class="fine">또는 파일로 올리기</summary><input type="file" id="lk-ob-file" accept=".xlsx,.xls,.csv,.txt" multiple></details>
           <div id="lk-ob"></div>
         </div>
       </div>
-      <div class="row"><button type="button" class="btn primary" id="lk-apply">연결 적용</button><span class="fine" id="lk-msg"></span></div>
+      <div class="row"><button type="button" class="btn" id="lk-apply">열 바꾼 뒤 다시 반영</button><button type="button" class="btn" id="lk-clear">저장된 연결 비우기</button><span class="fine" id="lk-msg"></span></div>
       <h3>③ 연결 결과 <span class="muted num" id="lk-count"></span></h3>
       <div class="tablewrap scrolllist"><table>
         <thead><tr><th>상태</th><th>담보번호</th><th>관련상품</th><th>OB+코드</th><th>OB+코드명</th><th>ETF 종목코드</th><th>출처</th></tr></thead>
@@ -546,6 +552,8 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     }
     return best;
   }
+  // 머리글 없이 붙여넣었을 때 쓸 기본 위치 (하나플러스 AB·S열 / OB+_71006 Z·AA·X열)
+  var LK_DEF = { hp: { key: 27, prod: 18 }, ob: { prod: 25, ob: 25, obName: 26, mgmt: 23 } };
   function lkSetSheet(kind, t, sheet) {
     t.sheet = sheet; var rows = t.sheets[sheet] || [];
     t.hdr = guessHeader(rows); t.map = {};
@@ -555,6 +563,21 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
       for (var r = 0; i < 0 && r < f[3].length; r++) i = head.findIndex(function (h) { return f[3][r].test(h); });
       t.map[f[0]] = i;
     });
+    if (!lkReq(kind, t) && (rows[0] || []).length > Math.max.apply(null, Object.values(LK_DEF[kind]))) {
+      t.hdr = -1; t.map = {};
+      LK_F[kind].forEach(function (f) { t.map[f[0]] = LK_DEF[kind][f[0]] != null ? LK_DEF[kind][f[0]] : -1; });
+      t.noHeader = true;
+    }
+  }
+  function lkPaste(kind) {
+    var ta = $(kind === "hp" ? "lk-hp-paste" : "lk-ob-paste"), rows = parseTSV(ta.value);
+    if (!rows.length) { $("lk-msg").textContent = "붙여넣은 내용이 없습니다."; return; }
+    var t = { name: "붙여넣기 " + localTime(new Date().toISOString()).slice(11) + " (" + rows.length + "줄)", sheets: { "붙여넣기": rows } };
+    lkSetSheet(kind, t, "붙여넣기");
+    if (kind === "hp") lk.hp = t; else lk.ob.push(t);
+    ta.value = "";
+    renderLink();
+    if (lkReq(kind, t)) lkApply(true); else $("lk-msg").textContent = "열을 찾지 못했습니다. 아래에서 필수 열을 고른 뒤 “열 바꾼 뒤 다시 반영”을 누르세요.";
   }
   function lkLoad(kind, file) {
     readBook(file, function (sheets, err) {
@@ -579,31 +602,31 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
       state.settings.lk[kind] = m;
     };
     if (lk.hp && lkReq("hp", lk.hp)) {
-      var t = lk.hp, hp = {};
+      var t = lk.hp, hp = Object.assign({}, state.link.hp || {}), n0 = 0;
       t.sheets[t.sheet].slice(t.hdr + 1).forEach(function (r) {
-        var k = lkKey(r[t.map.key]), pr = lkKey(r[t.map.prod]); if (k && pr) hp[k] = pr;
+        var k = lkKey(r[t.map.key]), pr = lkKey(r[t.map.prod]); if (k && pr) { hp[k] = pr; n0++; }
       });
-      state.link.hp = hp; state.link.hpFile = t.name; remember("hp", t);
-      msgs.push("담보번호↔관련상품 " + Object.keys(hp).length + "건");
+      state.link.hp = hp; state.link.hpFile = t.name; state.link.hpAt = new Date().toISOString(); if (!t.noHeader) remember("hp", t);
+      msgs.push("하나플러스 " + n0 + "건 반영 (저장 " + Object.keys(hp).length + "건)");
     }
     var obs = lk.ob.filter(function (t) { return lkReq("ob", t); });
     if (obs.length) {
-      var ob = {}, mgmt = {};
+      var ob = Object.assign({}, state.link.ob || {}), mgmt = Object.assign({}, state.link.mgmt || {}), n1 = 0;
       obs.forEach(function (t) {
         var g = function (r, f) { return t.map[f] >= 0 ? String(r[t.map[f]] == null ? "" : r[t.map[f]]).trim() : ""; };
         t.sheets[t.sheet].slice(t.hdr + 1).forEach(function (r) {
           var pr = lkKey(r[t.map.prod]), code = g(r, "ob"); if (!pr || !code) return;
           var rec = { ob: code, obName: g(r, "obName"), etf: g(r, "etf") };
-          if (!ob[pr]) ob[pr] = rec;
+          ob[pr] = rec; n1++;
           // 하나플러스 관련상품에 코드명이 들어 있어도 맞도록 코드명으로도 찾게 둔다
-          if (rec.obName && !ob[lkKey(rec.obName)]) ob[lkKey(rec.obName)] = rec;
+          if (rec.obName) ob[lkKey(rec.obName)] = rec;
           // OB+ 쪽 담보관리번호가 장파담보번호와 같으면 하나플러스 없이도 연결 (보조)
-          var mg = lkKey(g(r, "mgmt")); if (mg && !mgmt[mg]) mgmt[mg] = rec;
+          var mg = lkKey(g(r, "mgmt")); if (mg) mgmt[mg] = rec;
         });
-        remember("ob", t);
+        if (!t.noHeader) remember("ob", t);
       });
-      state.link.ob = ob; state.link.mgmt = mgmt; state.link.obFiles = obs.map(function (t) { return t.name; });
-      msgs.push("관련상품↔OB+코드 " + Object.keys(ob).filter(function (k) { return ob[k].ob && lkKey(ob[k].ob) === k; }).length + "건");
+      state.link.ob = ob; state.link.mgmt = mgmt; state.link.obAt = new Date().toISOString();
+      msgs.push("OB+_71006 " + n1 + "건 반영 (저장 " + Object.keys(ob).filter(function (k) { return ob[k].ob && lkKey(ob[k].ob) === k; }).length + "건)");
     }
     state.link.at = new Date().toISOString();
     $("lk-msg").textContent = msgs.length ? (auto ? "자동 연결: " : "연결 적용: ") + msgs.join(" · ") : "필수 열(담보번호·관련상품 또는 관련상품·OB+코드)을 골라 주세요.";
@@ -629,7 +652,7 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     return base + ((10 - sum % 10) % 10);
   }
   function lkTableUI(kind, t, idx) {
-    var rows = t.sheets[t.sheet] || [], head = rows[t.hdr] || [], names = Object.keys(t.sheets);
+    var rows = t.sheets[t.sheet] || [], head = t.hdr >= 0 ? (rows[t.hdr] || []) : (rows[0] || []).map(function (v) { return "(예: " + String(v).slice(0, 14) + ")"; }), names = Object.keys(t.sheets);
     var opts = function (sel) {
       return '<option value="-1">— 선택 —</option>' + head.map(function (h, i) {
         return '<option value="' + i + '"' + (i === sel ? " selected" : "") + ">" + colName(i) + ": " + esc(String(h).slice(0, 24)) + "</option>";
@@ -640,13 +663,16 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
       (kind === "ob" ? ' <button type="button" class="btn x" ' + a + ' data-act="del" aria-label="표 빼기">✕</button>' : "") + "</span></div>" +
       '<div class="fields">' +
       (names.length > 1 ? '<label class="f">시트<select ' + a + ' data-act="sheet">' + names.map(function (n) { return "<option" + (n === t.sheet ? " selected" : "") + ">" + esc(n) + "</option>"; }).join("") + "</select></label>" : "") +
-      '<label class="f">머리글 행<input type="number" min="1" ' + a + ' data-act="hdr" value="' + (t.hdr + 1) + '"></label>' +
+      '<label class="f">머리글 행 (0 = 없음)<input type="number" min="0" ' + a + ' data-act="hdr" value="' + (t.hdr + 1) + '"></label>' +
       LK_F[kind].map(function (f) { return '<label class="f">' + f[1] + "<select " + a + ' data-act="col" data-f="' + f[0] + '">' + opts(t.map[f[0]]) + "</select></label>"; }).join("") +
       "</div>" + (lkReq(kind, t) ? "" : '<span class="pill warn">필수 열을 골라 주세요</span>') + "</div>";
   }
   function renderLink() {
-    $("lk-hp").innerHTML = lk.hp ? lkTableUI("hp", lk.hp, 0) : '<p class="fine">' + (state.link && state.link.hpFile ? "마지막 연결: " + esc(state.link.hpFile) + " (" + Object.keys(state.link.hp || {}).length + "건). 바뀌었을 때만 다시 올리세요." : "조회 결과 파일을 올리세요.") + "</p>";
-    $("lk-ob").innerHTML = lk.ob.length ? lk.ob.map(function (t, i) { return lkTableUI("ob", t, i); }).join("") : '<p class="fine">' + (state.link && state.link.obFiles ? "마지막 연결: " + esc(state.link.obFiles.join(", ")) + " (" + Object.keys(state.link.ob || {}).length + "건). 바뀌었을 때만 다시 올리세요." : "제공·수취 파일을 함께 올리세요 (여러 개 선택 가능).") + "</p>";
+    var L = state.link || {}, nHp = Object.keys(L.hp || {}).length, nOb = Object.keys(L.ob || {}).filter(function (k) { return L.ob[k].ob && lkKey(L.ob[k].ob) === k; }).length;
+    $("lk-hp-saved").innerHTML = nHp ? "<span class='pill ok'>저장됨</span> 장파담보번호 <b class='num'>" + nHp + "</b>건 · 마지막 반영 " + localTime(L.hpAt || L.at) + " — 신규 거래가 생겼을 때만 추가로 붙여넣으세요." : "<span class='pill warn'>비어 있음</span> 처음 한 번 붙여넣으세요.";
+    $("lk-ob-saved").innerHTML = nOb ? "<span class='pill ok'>저장됨</span> 관련상품코드 <b class='num'>" + nOb + "</b>건 · 마지막 반영 " + localTime(L.obAt || L.at) + " — 제공·수취를 따로 붙여넣어도 합쳐집니다." : "<span class='pill warn'>비어 있음</span> 제공, 수취를 각각 붙여넣으세요.";
+    $("lk-hp").innerHTML = lk.hp ? lkTableUI("hp", lk.hp, 0) : "";
+    $("lk-ob").innerHTML = lk.ob.map(function (t, i) { return lkTableUI("ob", t, i); }).join("");
     var calls = buildCalls(), ok = 0;
     calls.forEach(function (c) { c.lm = masterOf(c.key); });
     calls.sort(function (a, b) { return (!!a.lm.ob - !!b.lm.ob) || (a.key < b.key ? -1 : 1); }); // 연결 안 된 건 먼저
@@ -1081,11 +1107,14 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
   $("lk-hp-file").addEventListener("change", function () { var f = this.files[0]; this.value = ""; if (f) lkLoad("hp", f); });
   $("lk-ob-file").addEventListener("change", function () { Array.prototype.forEach.call(this.files, function (f) { lkLoad("ob", f); }); this.value = ""; });
   $("lk-apply").addEventListener("click", function () { lkApply(false); });
+  $("lk-hp-go").addEventListener("click", function () { lkPaste("hp"); });
+  $("lk-ob-go").addEventListener("click", function () { lkPaste("ob"); });
+  twoStep("lk-clear", "저장된 연결 비우기", function () { state.link = { hp: {}, ob: {}, mgmt: {} }; lk = { hp: null, ob: [] }; commit(); toast("저장된 연결을 비웠습니다"); });
   $("pane-cands").addEventListener("change", function (e) {
     var el = e.target, kind = el.getAttribute("data-lk"); if (!kind) return;
     var t = kind === "hp" ? lk.hp : lk.ob[+el.getAttribute("data-i")], act = el.getAttribute("data-act"); if (!t) return;
     if (act === "sheet") lkSetSheet(kind, t, el.value);
-    else if (act === "hdr") { t.hdr = Math.max(0, (parseInt(el.value, 10) || 1) - 1); LK_F[kind].forEach(function (f) { t.map[f[0]] = -1; }); }
+    else if (act === "hdr") { t.hdr = Math.max(-1, (parseInt(el.value, 10) || 0) - 1); t.noHeader = t.hdr < 0; LK_F[kind].forEach(function (f) { t.map[f[0]] = -1; }); }
     else if (act === "col") t.map[el.getAttribute("data-f")] = +el.value;
     renderLink();
   });
