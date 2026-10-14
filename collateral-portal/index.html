@@ -607,16 +607,20 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
       }).join("") : '<tr><td colspan="10" class="muted">아직 배정한 담보가 없습니다. 아래 후보에서 “배정”을 누르세요.</td></tr>') +
       "</tbody></table></div>" +
       "<h3>" + (need ? "추가 설정 후보 — 남은 " + fmt(Math.max(gap, 0)) + " 기준" : "말소 후보 — 여유 " + fmt(Math.max(gap, 0)) + " 기준") + "</h3>" +
-      '<div class="tablewrap"><table><thead><tr><th>펀드</th><th>종목</th><th class="r">종가</th><th class="r">헤어컷</th><th class="r">1주당 인정액</th><th class="r">' + (need ? "필요 수량 (올림)" : "말소 최대 수량 (내림)") + '</th><th class="r">인정 평가액</th><th class="r">남은 가용수량</th><th></th></tr></thead><tbody>' +
+      '<p class="fine">“배정 수량”에 원하는 수량을 적고 그 행의 “배정”을 누르거나, 여러 종목에 수량을 적은 뒤 “입력한 수량 모두 배정”을 누르세요. 비워 두면 오른쪽에 회색으로 보이는 필요 수량으로 배정합니다.</p>' +
+      '<div class="tablewrap"><table><thead><tr><th>펀드</th><th>종목</th><th class="r">종가</th><th class="r">헤어컷</th><th class="r">1주당 인정액</th><th class="r">' + (need ? "단독 필요 수량" : "말소 최대 수량") + '</th><th class="r">배정 수량</th><th class="r">인정 평가액</th><th class="r">남은 가용수량</th><th></th></tr></thead><tbody>' +
       recs.map(function (r) {
         var noP = !isFinite(r.p);
         return "<tr><td class='num'>" + esc(r.cd.fund) + "</td><td class='nw'>" + esc(r.cd.name) + " <span class='muted num'>" + esc(r.cd.code) + "</span></td>" +
           "<td class='r'>" + (noP ? "<span class='pill warn'>종가 없음</span>" : fmt(r.p)) + "</td><td class='r'>" + fmt(r.x * 100) + "%</td>" +
-          "<td class='r'>" + fmt(r.per) + "</td><td class='r'><b>" + (noP || gap <= 0 ? "–" : fmt(r.q)) + "</b></td><td class='r'>" + (noP || gap <= 0 ? "–" : fmt(r.val)) + "</td>" +
+          "<td class='r'>" + fmt(r.per) + "</td><td class='r muted'>" + (noP || gap <= 0 ? "–" : fmt(r.q)) + "</td>" +
+          "<td class='r'><input class='r qty' type='number' min='0' step='1' inputmode='numeric' data-cq='" + r.i + "' data-per='" + (noP ? 0 : r.per) + "' placeholder='" + (noP || gap <= 0 ? "" : r.q) + "' aria-label='" + esc(r.cd.name) + " 배정 수량'" + (noP ? " disabled" : "") + "></td>" +
+          "<td class='r' data-cval='" + r.i + "'>" + (noP || gap <= 0 ? "–" : "<span class='muted'>" + fmt(r.val) + "</span>") + "</td>" +
           "<td class='r'>" + (isFinite(r.left) ? fmt(r.left) : "–") + (r.short ? " <span class='pill call'>부족</span>" : "") + "</td>" +
-          "<td class='r'><button type='button' class='btn sm" + (noP || gap <= 0 || !r.q ? "" : " primary") + "' data-add='" + r.i + "' data-q='" + r.q + "' data-dir='" + dirDefault + "'" + (noP ? " disabled" : "") + ">배정</button></td></tr>";
+          "<td class='r'><button type='button' class='btn sm primary' data-add='" + r.i + "' data-q='" + r.q + "' data-dir='" + dirDefault + "'" + (noP ? " disabled" : "") + ">배정</button></td></tr>";
       }).join("") + "</tbody></table></div>" +
-      '<p class="fine">“배정”은 표시된 수량을 처리수량으로 넣습니다. 수량은 배정 후 직접 고칠 수 있고, 같은 담보번호에 여러 종목을 섞어 넣으면 평가액을 합산합니다.</p>';
+      '<div class="row between"><span class="fine" id="cq-sum" data-gap="' + gap + '" data-need="' + (need ? 1 : 0) + '">수량을 입력하면 합계와 남는 금액을 바로 보여줍니다.</span>' +
+      '<button type="button" class="btn primary" id="cq-all" data-dir="' + dirDefault + '">입력한 수량 모두 배정</button></div>';
   }
   function kv(k, v, fx) { return '<div><span class="k">' + k + '</span><span class="v">' + v + "</span>" + (fx ? '<span class="fx">' + fx + "</span>" : "") + "</div>"; }
 
@@ -711,15 +715,51 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     $("picker").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
   });
   $("detail").addEventListener("click", function (e) {
-    var a = e.target.closest("[data-add]"), d = e.target.closest("[data-ldel]");
+    var a = e.target.closest("[data-add]"), d = e.target.closest("[data-ldel]"), all = e.target.closest("#cq-all");
     var key = state.sel; if (!key) return;
     if (a) {
-      var cd = state.cands[+a.getAttribute("data-add")]; if (!cd) return;
-      (state.alloc[key] = state.alloc[key] || []).push({ fund: cd.fund, code: cd.code, name: cd.name, qty: +a.getAttribute("data-q") || 0, dir: a.getAttribute("data-dir") });
-      state.isSample = false; commit(); toast(cd.name + " 배정됨");
+      var i = a.getAttribute("data-add"), cd = state.cands[+i]; if (!cd) return;
+      var inp = $("detail").querySelector('[data-cq="' + i + '"]');
+      var q = inp && inp.value.trim() !== "" ? Math.floor(num(inp.value)) : +a.getAttribute("data-q");
+      if (!(q > 0)) { toast("배정 수량을 입력하세요"); return; }
+      addAlloc(key, cd, q, a.getAttribute("data-dir"));
+      state.isSample = false; commit(); toast(cd.name + " " + fmt(q) + "주 배정됨");
+    } else if (all) {
+      var n = 0;
+      Array.prototype.forEach.call($("detail").querySelectorAll("[data-cq]"), function (inp) {
+        var q = Math.floor(num(inp.value)); if (!(q > 0)) return;
+        addAlloc(key, state.cands[+inp.getAttribute("data-cq")], q, all.getAttribute("data-dir")); n++;
+      });
+      if (!n) { toast("배정 수량을 입력한 종목이 없습니다"); return; }
+      state.isSample = false; commit(); toast(n + "종목 배정됨");
     } else if (d) {
       state.alloc[key].splice(+d.getAttribute("data-ldel"), 1); commit();
     }
+  });
+  // 같은 펀드·종목·방향이 이미 배정돼 있으면 수량을 더한다
+  function addAlloc(key, cd, q, dir) {
+    var list = (state.alloc[key] = state.alloc[key] || []);
+    var ex = list.find(function (x) { return x.fund === cd.fund && normCode(x.code) === normCode(cd.code) && x.dir === dir; });
+    if (ex) ex.qty = (+ex.qty || 0) + q;
+    else list.push({ fund: cd.fund, code: cd.code, name: cd.name, qty: q, dir: dir });
+  }
+  // 배정 수량 입력 중: 행 평가액과 합계를 다시 그리지 않고 바로 갱신
+  $("detail").addEventListener("input", function (e) {
+    var i = e.target.getAttribute("data-cq"); if (i == null) return;
+    var per = +e.target.getAttribute("data-per"), q = num(e.target.value);
+    var cell = $("detail").querySelector('[data-cval="' + i + '"]');
+    if (cell) cell.innerHTML = q > 0 ? "<b>" + fmt(Math.floor(q) * per) + "</b>" : "<span class='muted'>" + fmt(+e.target.placeholder * per) + "</span>";
+    var sumEl = $("cq-sum"), total = 0, cnt = 0;
+    Array.prototype.forEach.call($("detail").querySelectorAll("[data-cq]"), function (x) {
+      var v = Math.floor(num(x.value)); if (v > 0) { total += v * +x.getAttribute("data-per"); cnt++; }
+    });
+    var gap = +sumEl.getAttribute("data-gap"), need = sumEl.getAttribute("data-need") === "1";
+    if (!cnt) { sumEl.className = "fine"; sumEl.textContent = "수량을 입력하면 합계와 남는 금액을 바로 보여줍니다."; return; }
+    var rest = gap - total;
+    sumEl.className = "banner " + (need ? (rest <= 0 ? "ok" : "call") : (rest >= 0 ? "info" : "call"));
+    sumEl.innerHTML = cnt + "종목 입력 · 인정 평가액 합계 <b class='num'>" + fmt(total) + "</b> · " +
+      (need ? (rest <= 0 ? "충족, 여유 <b class='num'>" + fmt(-rest) + "</b>" : "아직 <b class='num'>" + fmt(rest) + "</b> 부족")
+            : (rest >= 0 ? "말소 후 여유 <b class='num'>" + fmt(rest) + "</b>" : "말소 한도 <b class='num'>" + fmt(-rest) + "</b> 초과"));
   });
   $("detail").addEventListener("change", function (e) {
     var key = state.sel, q = e.target.getAttribute("data-lqty"), dr = e.target.getAttribute("data-ldir");
