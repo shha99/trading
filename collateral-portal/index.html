@@ -268,6 +268,8 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
       </div>
       <div class="row"><button type="button" class="btn" id="lk-apply">열 바꾼 뒤 다시 반영</button><button type="button" class="btn" id="lk-clear">저장된 연결 비우기</button><span class="fine" id="lk-msg"></span></div>
       <h3>③ 연결 결과 <span class="muted num" id="lk-count"></span></h3>
+      <div class="row"><input id="lk-find" placeholder="안 붙는 담보번호를 넣어 보세요 (예: 202609150013)" style="flex:1 1 320px;max-width:420px"><span class="fine">방금 붙여넣은 하나플러스 표에서 그 번호가 어느 열에 어떻게 들어 있는지 보여줍니다.</span></div>
+      <div id="lk-find-out" class="fine"></div>
       <div class="tablewrap scrolllist"><table>
         <thead><tr><th>상태</th><th>담보번호</th><th>상품명 (하나플러스)</th><th>OB+코드</th><th>OB+코드명</th><th>ETF 종목코드</th><th>출처</th></tr></thead>
         <tbody id="lk-body"></tbody>
@@ -518,6 +520,20 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
   };
   var lk = { hp: null, ob: [] }; // 올린 표는 메모리에만 두고, 연결 결과만 저장한다
   function lkKey(v) { return String(v == null ? "" : v).replace(/\s/g, "").toUpperCase(); }
+  // 담보번호 비교용: 숫자 10자리 이상이면 하이픈·소수점(.0)·따옴표를 떼고 숫자만 비교
+  function noKey(v) {
+    var t = lkKey(v).replace(/^'/, "");
+    if (/^\d+\.0+$/.test(t)) t = t.replace(/\.0+$/, "");
+    var d = t.replace(/[^0-9]/g, "");
+    return d.length >= 10 && /^[0-9\-./]+$/.test(t) ? d : t;
+  }
+  // 2.02609E+11 같은 지수 표기가 담보번호 q와 같은 자릿수·앞자리인지 (정확히 구분은 안 됨)
+  function sciMatch(raw, q) {
+    var m = String(raw).trim().match(/^(\d)\.(\d+)E\+(\d+)$/i); if (!m) return false;
+    var digits = (m[1] + m[2]).replace(/0+$/, "");
+    return q.length === +m[3] + 1 && q.indexOf(digits) === 0;
+  }
+  function isSci(v) { return /^\d(\.\d+)?E\+\d+$/i.test(String(v == null ? "" : v).trim()); }
   function guessHeader(rows) {
     var best = 0, bestN = -1;
     for (var i = 0; i < Math.min(rows.length, 20); i++) {
@@ -577,9 +593,19 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     };
     if (lk.hp && lkReq("hp", lk.hp)) {
       var t = lk.hp, hp = Object.assign({}, state.link.hp || {}), n0 = 0;
+      var seen = Object.assign({}, state.link.hpSeen || {}), any = Object.assign({}, state.link.hpAny || {}), sci = 0, blank = 0;
       t.sheets[t.sheet].slice(t.hdr + 1).forEach(function (r) {
-        var pr = lkKey(r[t.map.prod]); if (!pr) return;
-        var k = lkKey(r[t.map.key]), k2 = t.map.key2 >= 0 ? lkKey(r[t.map.key2]) : "";
+        if (isSci(r[t.map.key])) sci++;
+        var pr = lkKey(r[t.map.prod]);
+        var k = noKey(r[t.map.key]), k2 = t.map.key2 >= 0 ? noKey(r[t.map.key2]) : "";
+        if (k) seen[k] = 1; if (k2) seen[k2] = 1;
+        if (!pr) { if (k) blank++; return; }
+        // 장파담보번호 칸이 아닌 다른 칸에 담보번호가 들어 있는 행도 찾을 수 있게 숫자 10자리 이상 값은 모두 색인
+        r.forEach(function (cell, ci) {
+          if (ci === t.map.key) return;
+          var ck = noKey(cell); if (!/^\d{10,}$/.test(ck)) return;
+          var a2 = toArr(any[ck]); if (a2.indexOf(pr) < 0) a2.push(pr); any[ck] = a2;
+        });
         // 담보번호 하나에 상품이 여러 개일 수 있어 목록으로 모은다
         [k, k2].forEach(function (kk) {
           if (!kk) return;
@@ -587,8 +613,11 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
         });
         if (k || k2) n0++;
       });
-      state.link.hp = hp; state.link.hpFile = t.name; state.link.hpAt = new Date().toISOString(); if (!t.noHeader) remember("hp", t);
+      state.link.hp = hp; state.link.hpSeen = seen; state.link.hpAny = any;
+      state.link.hpFile = t.name; state.link.hpAt = new Date().toISOString(); if (!t.noHeader) remember("hp", t);
       msgs.push("하나플러스 " + n0 + "건 반영 (저장 " + Object.keys(hp).length + "건)");
+      if (blank) msgs.push("상품명이 빈 행 " + blank + "건");
+      if (sci) msgs.push("⚠ 장파담보번호가 2.02609E+11처럼 지수로 복사된 행 " + sci + "건 — 엑셀에서 그 열을 넓히거나 표시 형식을 ‘텍스트/숫자(소수 0)’로 바꾼 뒤 다시 복사하세요");
     }
     var obs = lk.ob.filter(function (t) { return lkReq("ob", t); });
     if (obs.length) {
@@ -601,7 +630,7 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
           ob[pr] = rec; n1++;           // 관련상품명(= 하나플러스 상품명)으로 찾기
           ob[lkKey(code)] = rec;         // 혹시 상품명 자리에 코드가 들어 있어도 찾히게
           // OB+ 쪽 담보관리번호가 장파담보번호와 같으면 하나플러스 없이도 연결 (보조)
-          var mg = lkKey(g(r, "mgmt")); if (mg) mgmt[mg] = rec;
+          var mg = noKey(g(r, "mgmt")); if (mg) mgmt[mg] = rec;
         });
         if (!t.noHeader) remember("ob", t);
       });
@@ -618,17 +647,18 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
   function masterOf(key) {
     var k = String(key).trim(), man = (state.master || []).find(function (m) { return String(m.key).trim() === k; });
     if (man) { var one = { prod: man.obName, ob: man.ob, obName: man.obName, etf: man.etf || etfFromName(man.obName) }; return Object.assign({ list: [one], miss: [], src: "수동" }, one); }
-    var L = state.link || {}, prods = toArr((L.hp || {})[lkKey(k)]), list = [], miss = [], src = "자동";
+    var L = state.link || {}, nk = noKey(k), prods = toArr((L.hp || {})[nk] || (L.hp || {})[lkKey(k)]), list = [], miss = [], src = "자동";
+    if (!prods.length && (L.hpAny || {})[nk]) { prods = toArr(L.hpAny[nk]); src = "자동(다른 열에서 찾음)"; }
     prods.forEach(function (pr) {
       var o = (L.ob || {})[pr];
       if (o) { if (!list.some(function (x) { return x.ob === o.ob; })) list.push({ prod: pr, ob: o.ob, obName: o.obName, etf: o.etf || etfFromName(o.obName) }); }
       else miss.push(pr);
     });
-    if (!list.length && (L.mgmt || {})[lkKey(k)]) { var o2 = L.mgmt[lkKey(k)]; list.push({ prod: "", ob: o2.ob, obName: o2.obName, etf: o2.etf || etfFromName(o2.obName) }); src = "자동(담보관리번호)"; }
+    if (!list.length && (L.mgmt || {})[nk]) { var o2 = L.mgmt[nk]; list.push({ prod: "", ob: o2.ob, obName: o2.obName, etf: o2.etf || etfFromName(o2.obName) }); src = "자동(담보관리번호)"; }
     var first = list[0] || {};
     return { list: list, miss: miss, prods: prods, src: list.length ? src : "",
       prod: first.prod || prods[0] || "", ob: first.ob, obName: first.obName, etf: first.etf,
-      missText: list.length ? "" : prods.length ? "OB+에 상품명 없음" : "하나플러스에 담보번호 없음" };
+      missText: list.length ? "" : prods.length ? "OB+에 상품명 없음" : (L.hpSeen || {})[nk] ? "하나플러스에 있으나 상품명 빈칸" : "하나플러스에 담보번호 없음" };
   }
   // 배정 줄이 고른 OB+ 상품 (없으면 담보번호의 첫 상품)
   function lineOb(c, a) { return (c.m.list || []).find(function (x) { return x.ob === a.ob; }) || c.m; }
@@ -1112,6 +1142,25 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
   $("lk-ob-file").addEventListener("change", function () { Array.prototype.forEach.call(this.files, function (f) { lkLoad("ob", f); }); this.value = ""; });
   $("lk-apply").addEventListener("click", function () { lkApply(false); });
   $("lk-hp-go").addEventListener("click", function () { lkPaste("hp"); });
+  $("lk-find").addEventListener("input", function () {
+    var q = noKey(this.value), out = $("lk-find-out");
+    if (q.length < 6) { out.innerHTML = ""; return; }
+    if (!lk.hp) { out.innerHTML = "이 화면을 연 뒤 하나플러스를 붙여넣은 경우에만 원본 표에서 찾을 수 있습니다. ①에 다시 붙여넣고 찾아보세요."; return; }
+    var t = lk.hp, rows = t.sheets[t.sheet], head = t.hdr >= 0 ? rows[t.hdr] : [], hits = [];
+    rows.forEach(function (r, ri) {
+      if (ri <= t.hdr) return;
+      r.forEach(function (cell, ci) {
+        var raw = String(cell == null ? "" : cell);
+        if (noKey(raw) === q || raw.replace(/\s/g, "").indexOf(q) >= 0 || sciMatch(raw, q)) hits.push({ ri: ri, ci: ci, raw: raw, r: r });
+      });
+    });
+    if (!hits.length) { out.innerHTML = "<span class='pill warn'>없음</span> 붙여넣은 하나플러스 " + (rows.length - t.hdr - 1) + "행 어디에도 이 번호가 없습니다. 복사할 때 조회 기간·필터에 빠졌는지 확인하세요."; return; }
+    var col = function (i) { return colName(i) + (head[i] ? "(" + esc(head[i]) + ")" : ""); };
+    out.innerHTML = "<span class='pill ok'>" + hits.length + "곳</span> " + hits.slice(0, 6).map(function (h) {
+      return (h.ri + 1) + "행 " + col(h.ci) + " = <b>" + esc(h.raw) + "</b>" + (isSci(h.raw) ? " <span class='pill warn'>지수 표기 — 앞자리만 같아 정확히 구분 불가, 다시 복사 필요</span>" : "") +
+        " · 장파담보번호 칸 " + col(t.map.key) + " = <b>" + esc(h.r[t.map.key] == null ? "" : h.r[t.map.key]) + "</b> · 상품명 = <b>" + esc(h.r[t.map.prod] || "(빈칸)") + "</b>";
+    }).join("<br>");
+  });
   $("lk-ob-go").addEventListener("click", function () { lkPaste("ob"); });
   twoStep("lk-clear", "저장된 연결 비우기", function () { state.link = { hp: {}, ob: {}, mgmt: {} }; lk = { hp: null, ob: [] }; commit(); toast("저장된 연결을 비웠습니다"); });
   $("pane-cands").addEventListener("change", function (e) {
