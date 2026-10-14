@@ -6,7 +6,7 @@
 // 잔고/시세/백테스트 성적이 보일 수 있어 오히려 위험하다.
 const CACHE_NAME = "binance-futures-bot-shell-v1";
 const SHELL_ASSETS = [
-  "/", "/strategy", "/vf", "/lab",
+  "/", "/strategy", "/vf", "/lab", "/cfd",
   "/static/style.css", "/static/strategy.css", "/static/lab.css",
   "/static/app.js", "/static/strategy_page.js", "/static/lab.js",
   "/static/vendor/lightweight-charts.js",

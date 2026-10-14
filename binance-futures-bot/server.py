@@ -198,6 +198,13 @@ def validated_strategies_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "vf.html")
 
 
+@app.get("/cfd")
+def cfd_margin_page() -> FileResponse:
+    """CFD 증거금률 체커 - 서버 API를 쓰지 않는 단독 계산기 페이지
+    (원본은 저장소 루트의 cfd-margin/index.html)."""
+    return FileResponse(STATIC_DIR / "cfd.html")
+
+
 @app.get("/sw.js")
 def service_worker() -> FileResponse:
     """PWA 서비스워커 - 루트 경로("/sw.js")로 내려줘야 스코프가 사이트 전체가 된다
