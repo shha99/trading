@@ -247,10 +247,10 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
   <div id="pane-cands" hidden style="display:grid;gap:14px;">
     <section class="panel">
       <h2>OB+ 코드 자동 연결</h2>
-      <p class="fine">엑셀에서 하던 순서 그대로 연결합니다: 일일정산 <b>담보관리번호</b> = 하나플러스 <b>장파담보번호</b> → 하나플러스 <b>상품명</b>(TRS(ETF_…)) = OB+_71006 <b>관련상품명</b> → <b>관련상품코드</b>가 OB+코드입니다. ETF 종목코드는 코드명의 “ETF_481050” 부분으로 KR7481050003처럼 계산합니다. 엑셀 조회 결과를 <b>머리글 행까지 포함해 복사 → 붙여넣기</b> 하면 됩니다. 한 번 넣은 연결은 저장돼 계속 쓰이고, 다시 붙여넣으면 기존 연결에 <b>추가·갱신</b>됩니다(제공과 수취를 따로 넣어도 됩니다). 내용은 이 브라우저 안에서만 처리됩니다.</p>
+      <p class="fine">일일정산 <b>담보관리번호</b> = 하나플러스 <b>장파담보번호</b> → 같은 행의 <b>상품코드</b>가 OB+ 상품코드, <b>상품명</b>(TRS(ETF_…))이 OB+ 상품명입니다. 하나플러스만 붙여넣어도 연결되고, OB+_71006은 상품코드가 빈 행을 상품명으로 찾아 채울 때만 씁니다. ETF 종목코드는 코드명의 “ETF_481050” 부분으로 KR7481050003처럼 계산합니다. 엑셀 조회 결과를 <b>머리글 행까지 포함해 복사 → 붙여넣기</b> 하면 됩니다. 한 번 넣은 연결은 저장돼 계속 쓰이고, 다시 붙여넣으면 기존 연결에 <b>추가·갱신</b>됩니다(제공과 수취를 따로 넣어도 됩니다). 내용은 이 브라우저 안에서만 처리됩니다.</p>
       <div class="grid2">
         <div class="lk-box">
-          <h3>① 하나플러스_4670 <span class="muted">(장파담보번호 → 상품명)</span></h3>
+          <h3>① 하나플러스_4670 <span class="muted">(장파담보번호 → 상품코드·상품명)</span></h3>
           <p class="fine" id="lk-hp-saved"></p>
           <textarea id="lk-hp-paste" style="min-height:90px" placeholder="하나플러스_4670 조회 결과를 머리글(일자 · 처리구분 · …)부터 복사해 붙여넣기 (Ctrl+V)"></textarea>
           <div class="row"><button type="button" class="btn primary" id="lk-hp-go">붙여넣은 내용 반영</button></div>
@@ -258,7 +258,7 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
           <div id="lk-hp"></div>
         </div>
         <div class="lk-box">
-          <h3>② OB+_71006 제공 · 수취 <span class="muted">(관련상품명 → 관련상품코드 = OB+코드)</span></h3>
+          <h3>② OB+_71006 제공 · 수취 <span class="muted">(선택 — 상품코드가 빈 행 보완용)</span></h3>
           <p class="fine" id="lk-ob-saved"></p>
           <textarea id="lk-ob-paste" style="min-height:90px" placeholder="OB+_71006 제공 또는 수취 조회 결과를 머리글(거래상대방 · 펀드코드 · …)부터 복사해 붙여넣기 (Ctrl+V)"></textarea>
           <div class="row"><button type="button" class="btn primary" id="lk-ob-go">붙여넣은 내용 반영</button></div>
@@ -510,8 +510,9 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
   // 머리글 후보는 앞에서부터 우선 (하나플러스 / OB+_71006 제공·수취 조회 화면 머리글 기준)
   var LK_F = {
     hp: [["key", "장파담보번호 열", true, [/^장파담보번호$/, /장파.*담보/, /담보관리번호|담보번호/]],
-         ["key2", "계좌번호/관리번호 열 (보조 키)", false, [/^계좌번호\/관리번호$/]],
-         ["prod", "상품명 열 (TRS(ETF_…))", true, [/^상품명$/]]],
+         ["key2", "장외파생담보 열 (보조 키)", false, [/^장외파생담보$/, /^계좌번호\/관리번호$/]],
+         ["code", "상품코드 열 (= OB+ 상품코드)", false, [/^상품코드$/]],
+         ["prod", "상품명 열 (TRS(ETF_…))", false, [/^상품명$/]]],
     ob: [["prod", "관련상품명 열 (하나플러스 상품명과 맞출 값)", true, [/^관련상품명$/]],
          ["ob", "OB+코드 열 (관련상품코드)", true, [/^관련상품코드$/, /OB\+?코드(?!명)/i]],
          ["obName", "OB+코드명 열", false, [/^관련상품명$/, /OB\+?코드명/i]],
@@ -543,7 +544,8 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     return best;
   }
   // 머리글 없이 붙여넣었을 때 쓸 기본 위치 (하나플러스 AB·R·I열 / OB+_71006 AA·Z·X열)
-  var LK_DEF = { hp: { key: 27, key2: 17, prod: 8 }, ob: { prod: 26, ob: 25, obName: 26, mgmt: 23 } };
+  // 하나플러스: A 장외파생담보 · C 상품코드(OB+) · L 상품코드(원래 열) · M 상품명 · AF 장파담보번호
+  var LK_DEF = { hp: { key: 31, key2: 0, code: 2, code2: 11, prod: 12 }, ob: { prod: 26, ob: 25, obName: 26, mgmt: 23 } };
   function lkSetSheet(kind, t, sheet) {
     t.sheet = sheet; var rows = t.sheets[sheet] || [];
     t.hdr = guessHeader(rows); t.map = {};
@@ -553,9 +555,12 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
       for (var r = 0; i < 0 && r < f[3].length; r++) i = head.findIndex(function (h) { return f[3][r].test(h); });
       t.map[f[0]] = i;
     });
+    // 같은 이름(상품코드)이 두 번 나오면 두 번째 열을 그 행 값이 비었을 때 쓴다
+    if (kind === "hp") t.map.code2 = t.map.code >= 0 ? head.findIndex(function (h, j) { return j > t.map.code && h === head[t.map.code]; }) : -1;
     if (!lkReq(kind, t) && (rows[0] || []).length > Math.max.apply(null, Object.values(LK_DEF[kind]))) {
       t.hdr = -1; t.map = {};
       LK_F[kind].forEach(function (f) { t.map[f[0]] = LK_DEF[kind][f[0]] != null ? LK_DEF[kind][f[0]] : -1; });
+      if (kind === "hp") t.map.code2 = LK_DEF.hp.code2;
       t.noHeader = true;
     }
   }
@@ -580,7 +585,10 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
       if (lkReady()) lkApply(true);
     });
   }
-  function lkReq(kind, t) { return t && LK_F[kind].every(function (f) { return !f[2] || t.map[f[0]] >= 0; }); }
+  function lkReq(kind, t) {
+    if (!t || !LK_F[kind].every(function (f) { return !f[2] || t.map[f[0]] >= 0; })) return false;
+    return kind !== "hp" || t.map.code >= 0 || t.map.prod >= 0; // 하나플러스는 상품코드나 상품명 중 하나는 있어야 함
+  }
   function lkReady() { return (lk.hp ? lkReq("hp", lk.hp) : false) || lk.ob.some(function (t) { return lkReq("ob", t); }); }
   function lkApply(auto) {
     if (!state.link || state.link.ver !== 2) state.link = { hp: {}, ob: {}, mgmt: {}, ver: 2 };
@@ -594,12 +602,30 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     if (lk.hp && lkReq("hp", lk.hp)) {
       var t = lk.hp, hp = Object.assign({}, state.link.hp || {}), n0 = 0;
       var seen = Object.assign({}, state.link.hpSeen || {}), any = Object.assign({}, state.link.hpAny || {}), sci = 0, blank = 0;
+      var codes = Object.assign({}, state.link.hpCode || {}), anyC = Object.assign({}, state.link.hpAnyCode || {}), nCode = 0;
+      var cellOf = function (r, i) { return i >= 0 && r[i] != null ? String(r[i]).trim() : ""; };
+      var addCode = function (map, kk, rec) {
+        var arr = toArr(map[kk]), ex = arr.find(function (x) { return x.ob === rec.ob; });
+        if (ex) { if (!ex.name && rec.name) ex.name = rec.name; } else arr.push(rec);
+        map[kk] = arr;
+      };
       t.sheets[t.sheet].slice(t.hdr + 1).forEach(function (r) {
         if (isSci(r[t.map.key])) sci++;
         var pr = lkKey(r[t.map.prod]);
         var k = noKey(r[t.map.key]), k2 = t.map.key2 >= 0 ? noKey(r[t.map.key2]) : "";
         if (k) seen[k] = 1; if (k2) seen[k2] = 1;
-        if (!pr) { if (k) blank++; return; }
+        // 상품코드(= OB+ 상품코드)가 있으면 바로 연결
+        var code = cellOf(r, t.map.code) || cellOf(r, t.map.code2), nm = cellOf(r, t.map.prod);
+        if (code && (k || k2)) {
+          var rec = { ob: code, name: nm };
+          [k, k2].forEach(function (kk) { if (kk) addCode(codes, kk, rec); });
+          r.forEach(function (cell, ci) {
+            if (ci === t.map.key) return;
+            var ck = noKey(cell); if (/^\d{10,}$/.test(ck) && ck !== k && ck !== k2) addCode(anyC, ck, rec);
+          });
+          nCode++;
+        }
+        if (!pr) { if (k && !code) blank++; return; }
         // 장파담보번호 칸이 아닌 다른 칸에 담보번호가 들어 있는 행도 찾을 수 있게 숫자 10자리 이상 값은 모두 색인
         r.forEach(function (cell, ci) {
           if (ci === t.map.key) return;
@@ -613,10 +639,10 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
         });
         if (k || k2) n0++;
       });
-      state.link.hp = hp; state.link.hpSeen = seen; state.link.hpAny = any;
+      state.link.hp = hp; state.link.hpSeen = seen; state.link.hpAny = any; state.link.hpCode = codes; state.link.hpAnyCode = anyC;
       state.link.hpFile = t.name; state.link.hpAt = new Date().toISOString(); if (!t.noHeader) remember("hp", t);
-      msgs.push("하나플러스 " + n0 + "건 반영 (저장 " + Object.keys(hp).length + "건)");
-      if (blank) msgs.push("상품명이 빈 행 " + blank + "건");
+      msgs.push("하나플러스 " + Math.max(n0, nCode) + "행 반영 (담보번호 " + Object.keys(Object.assign({}, hp, codes)).length + "건" + (nCode ? ", 상품코드로 바로 연결 " + Object.keys(codes).length + "건" : "") + ")");
+      if (blank) msgs.push("상품코드·상품명이 모두 빈 행 " + blank + "건");
       if (sci) msgs.push("⚠ 장파담보번호가 2.02609E+11처럼 지수로 복사된 행 " + sci + "건 — 엑셀에서 그 열을 넓히거나 표시 형식을 ‘텍스트/숫자(소수 0)’로 바꾼 뒤 다시 복사하세요");
     }
     var obs = lk.ob.filter(function (t) { return lkReq("ob", t); });
@@ -638,7 +664,7 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
       msgs.push("OB+_71006 " + n1 + "건 반영 (저장 " + Object.keys(ob).filter(function (k) { return ob[k].ob && lkKey(ob[k].ob) !== k; }).length + "건)");
     }
     state.link.at = new Date().toISOString();
-    $("lk-msg").textContent = msgs.length ? (auto ? "자동 연결: " : "연결 적용: ") + msgs.join(" · ") : "필수 열(하나플러스: 장파담보번호·상품명 / OB+: 관련상품명·관련상품코드)을 골라 주세요.";
+    $("lk-msg").textContent = msgs.length ? (auto ? "자동 연결: " : "연결 적용: ") + msgs.join(" · ") : "필수 열(하나플러스: 장파담보번호 + 상품코드 또는 상품명 / OB+: 관련상품명·관련상품코드)을 골라 주세요.";
     commit();
   }
   // 담보번호의 OB+ 정보: 수동 입력 > 자동 연결
@@ -648,6 +674,16 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     var k = String(key).trim(), man = (state.master || []).find(function (m) { return String(m.key).trim() === k; });
     if (man) { var one = { prod: man.obName, ob: man.ob, obName: man.obName, etf: man.etf || etfFromName(man.obName) }; return Object.assign({ list: [one], miss: [], src: "수동" }, one); }
     var L = state.link || {}, nk = noKey(k), prods = toArr((L.hp || {})[nk] || (L.hp || {})[lkKey(k)]), list = [], miss = [], src = "자동";
+    // 1순위: 하나플러스 상품코드(= OB+ 상품코드) 직접 연결. 이름은 하나플러스 상품명, 없으면 OB+ 관련상품명
+    var direct = toArr((L.hpCode || {})[nk]);
+    if (!direct.length && (L.hpAnyCode || {})[nk]) { direct = toArr(L.hpAnyCode[nk]); src = "자동(다른 열에서 찾음)"; }
+    if (direct.length) {
+      direct.forEach(function (d) {
+        var o = (L.ob || {})[lkKey(d.ob)] || {}, nm = d.name || o.obName || "";
+        list.push({ prod: nm, ob: d.ob, obName: nm, etf: o.etf || etfFromName(nm) });
+      });
+      return { list: list, miss: [], prods: list.map(function (x) { return x.prod; }), src: src + "(상품코드)", prod: list[0].prod, ob: list[0].ob, obName: list[0].obName, etf: list[0].etf, missText: "" };
+    }
     if (!prods.length && (L.hpAny || {})[nk]) { prods = toArr(L.hpAny[nk]); src = "자동(다른 열에서 찾음)"; }
     prods.forEach(function (pr) {
       var o = (L.ob || {})[pr];
@@ -688,7 +724,7 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
       "</div>" + (lkReq(kind, t) ? "" : '<span class="pill warn">필수 열을 골라 주세요</span>') + "</div>";
   }
   function renderLink() {
-    var L = state.link || {}, nHp = Object.keys(L.hp || {}).length, nOb = Object.keys(L.ob || {}).filter(function (k) { return L.ob[k].ob && lkKey(L.ob[k].ob) !== k; }).length;
+    var L = state.link || {}, nHp = Object.keys(Object.assign({}, L.hp || {}, L.hpCode || {})).length, nOb = Object.keys(L.ob || {}).filter(function (k) { return L.ob[k].ob && lkKey(L.ob[k].ob) !== k; }).length;
     $("lk-hp-saved").innerHTML = nHp ? "<span class='pill ok'>저장됨</span> 장파담보번호 <b class='num'>" + nHp + "</b>건 · 마지막 반영 " + localTime(L.hpAt || L.at) + " — 신규 거래가 생겼을 때만 추가로 붙여넣으세요." : "<span class='pill warn'>비어 있음</span> 처음 한 번 붙여넣으세요.";
     $("lk-ob-saved").innerHTML = nOb ? "<span class='pill ok'>저장됨</span> 관련상품명 <b class='num'>" + nOb + "</b>건 · 마지막 반영 " + localTime(L.obAt || L.at) + " — 제공·수취를 따로 붙여넣어도 합쳐집니다." : "<span class='pill warn'>비어 있음</span> 제공, 수취를 각각 붙여넣으세요.";
     $("lk-hp").innerHTML = lk.hp ? lkTableUI("hp", lk.hp, 0) : "";
@@ -1158,7 +1194,7 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     var col = function (i) { return colName(i) + (head[i] ? "(" + esc(head[i]) + ")" : ""); };
     out.innerHTML = "<span class='pill ok'>" + hits.length + "곳</span> " + hits.slice(0, 6).map(function (h) {
       return (h.ri + 1) + "행 " + col(h.ci) + " = <b>" + esc(h.raw) + "</b>" + (isSci(h.raw) ? " <span class='pill warn'>지수 표기 — 앞자리만 같아 정확히 구분 불가, 다시 복사 필요</span>" : "") +
-        " · 장파담보번호 칸 " + col(t.map.key) + " = <b>" + esc(h.r[t.map.key] == null ? "" : h.r[t.map.key]) + "</b> · 상품명 = <b>" + esc(h.r[t.map.prod] || "(빈칸)") + "</b>";
+        " · 장파담보번호 칸 " + col(t.map.key) + " = <b>" + esc(h.r[t.map.key] == null ? "" : h.r[t.map.key]) + "</b> · 상품코드 = <b>" + esc((t.map.code >= 0 && h.r[t.map.code]) || (t.map.code2 >= 0 && h.r[t.map.code2]) || "(빈칸)") + "</b> · 상품명 = <b>" + esc((t.map.prod >= 0 && h.r[t.map.prod]) || "(빈칸)") + "</b>";
     }).join("<br>");
   });
   $("lk-ob-go").addEventListener("click", function () { lkPaste("ob"); });
