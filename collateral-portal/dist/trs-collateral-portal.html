@@ -68,6 +68,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   --info: #8ea4ea; --info-soft: #1c2440; color-scheme: dark;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-ui); font-size: 14px; line-height: 1.5; }
 .wrap { max-width: 1280px; margin: 0 auto; padding-inline: 16px; padding-block: 18px 40px; display: grid; gap: 14px; }
 header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 16px; }
@@ -718,6 +719,7 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
   // ---------- 이벤트 ----------
   $("tabs").addEventListener("click", function (e) {
     var b = e.target.closest("button[data-tab]"); if (!b) return; setTab(b.getAttribute("data-tab"));
+    if ($("tabs").getBoundingClientRect().top < 0) $("tabs").scrollIntoView({ block: "start" });
   });
   function setTab(t) {
     state.tab = t; save();
