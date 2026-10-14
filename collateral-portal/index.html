@@ -107,6 +107,13 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
 .formula { display: grid; gap: 4px; font-size: 0.82rem; }
 .toast { position: fixed; left: 50%; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: 6px; font-size: 0.85rem; z-index: 10; }
 .qty { width: 110px; }
+.pickrow { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: end; }
+.pickrow .grow { flex: 1 1 360px; min-width: 0; }
+.pickrow select { width: 100%; font-size: 0.92rem; padding: 8px 10px; }
+.pickrow .nav { flex-wrap: nowrap; }
+.picker { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; box-shadow: 0 4px 12px -8px rgba(0,0,0,.25); }
+.scrolllist { max-height: 360px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; }
+.scrolllist thead th { position: sticky; top: 0; z-index: 1; box-shadow: inset 0 -1px 0 var(--line); }
 </style>
 
 <div class="wrap">
@@ -126,21 +133,37 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     <button type="button" role="tab" data-tab="rules" aria-selected="false">계산 기준</button>
   </div>
 
-  <!-- 마진콜 현황 -->
+  <!-- 마진콜 현황: 위에서 한 건을 골라 바로 배정하고, 전체 목록은 아래 스크롤 상자 -->
   <div id="pane-calls" style="display:grid;gap:14px;">
-    <section class="panel">
-      <div class="row between">
-        <h2>담보번호별 현황</h2>
-        <div class="row">
+    <section class="panel picker" id="picker">
+      <div class="pickrow">
+        <label class="f grow">담보번호 선택
+          <select id="pick-call"></select>
+        </label>
+        <label class="f">보기
           <select id="flt" aria-label="상태 필터">
             <option value="all">전체</option>
             <option value="action">처리 필요만</option>
             <option value="call">마진콜</option>
             <option value="release">말소 가능</option>
           </select>
+        </label>
+        <div class="row nav">
+          <button type="button" class="btn" id="prev-call" aria-label="이전 건">◀ 이전</button>
+          <span class="num muted" id="pos-call">–</span>
+          <button type="button" class="btn" id="next-call" aria-label="다음 건">다음 ▶</button>
         </div>
       </div>
-      <div class="tablewrap">
+    </section>
+
+    <section class="panel" id="detail"></section>
+
+    <section class="panel">
+      <div class="row between">
+        <h2>담보번호별 현황 <span class="muted num" id="list-count"></span></h2>
+        <span class="fine">행을 누르면 위에서 바로 배정할 수 있습니다.</span>
+      </div>
+      <div class="tablewrap scrolllist">
         <table>
           <thead><tr>
             <th>상태</th><th>정산결과</th><th>담보번호</th><th>거래상대방</th><th>ETF / OB+코드명</th><th>제공/수취</th>
@@ -150,8 +173,6 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
         </table>
       </div>
     </section>
-
-    <section class="panel" id="detail"></section>
   </div>
 
   <!-- 일일정산결과 입력 -->
@@ -519,7 +540,17 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
         '<td class="r ' + cls(c.Z) + '">' + fmt(c.Z) + "</td></tr>";
     }).join("") : '<tr><td colspan="10" class="muted">표시할 건이 없습니다. “일일정산결과 입력” 탭에서 조회 결과를 붙여넣으세요.</td></tr>';
 
-    renderDetail(calls.find(function (c) { return c.key === state.sel; }) || shown[0] || null);
+    var cur = shown.find(function (c) { return c.key === state.sel; }) || shown[0] || null;
+    if (cur) state.sel = cur.key;
+    var ci = cur ? shown.indexOf(cur) : -1;
+    $("pick-call").innerHTML = shown.length ? shown.map(function (c) {
+      return '<option value="' + esc(c.key) + '"' + (c === cur ? " selected" : "") + ">[" + c.st.t + "] " + esc(c.key) + " · " + esc(c.cp) + " · 과부족 " + fmt(c.Z) + "</option>";
+    }).join("") : "<option>표시할 건이 없습니다</option>";
+    $("pos-call").textContent = shown.length ? (ci + 1) + " / " + shown.length : "0 / 0";
+    $("prev-call").disabled = ci <= 0; $("next-call").disabled = ci < 0 || ci >= shown.length - 1;
+    $("list-count").textContent = shown.length + "건";
+    render._shown = shown.map(function (c) { return c.key; });
+    renderDetail(cur);
     renderDaily(); renderPrices(); renderCands(); renderMaster(); renderExport(calls); renderSettings();
   }
   function tile(k, v, c) { return '<div class="tile ' + (c || "") + '"><span class="k">' + k + '</span><span class="v">' + v + "</span></div>"; }
@@ -665,10 +696,17 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     });
   }
   $("flt").addEventListener("change", render);
+  $("pick-call").addEventListener("change", function () { state.sel = this.value; commit(); });
+  function step(d) {
+    var list = render._shown || [], i = list.indexOf(state.sel) + d;
+    if (i >= 0 && i < list.length) { state.sel = list[i]; commit(); }
+  }
+  $("prev-call").addEventListener("click", function () { step(-1); });
+  $("next-call").addEventListener("click", function () { step(1); });
   $("calls-body").addEventListener("click", function (e) {
     var tr = e.target.closest("tr[data-key]"); if (!tr) return;
     state.sel = tr.getAttribute("data-key"); commit();
-    $("detail").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+    $("picker").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
   });
   $("detail").addEventListener("click", function (e) {
     var a = e.target.closest("[data-add]"), d = e.target.closest("[data-ldel]");
