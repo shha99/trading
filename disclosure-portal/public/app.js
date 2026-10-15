@@ -842,6 +842,7 @@
           const out = [];
           if (e.cert_start) out.push({ ...base, id: `cap:${x.corp_code}:${x.kind}:cert`, sub: "cert", kind: `증서상장·${x.kind}`, start: e.cert_start, end: e.cert_end || e.cert_start });
           if (e.listing) out.push({ ...base, id: `cap:${x.corp_code}:${x.kind}:list`, sub: "listing", kind: `신주상장·${x.kind}`, start: e.listing, end: e.listing });
+          if (e.record_date) out.push({ ...base, id: `cap:${x.corp_code}:${x.kind}:rec`, sub: "record", kind: `배정기준일·${x.kind}`, start: e.record_date, end: e.record_date });
           return out;
         }),
         ...c.deals.map((d) => async () => {
@@ -940,8 +941,9 @@
       for (const e of events) {
         if (activeOn(e, d)) active++;
         const w = isWatchedCode(e.code) ? "watched" : "";
-        if (e.sub === "listing") { // 신주 상장일은 하루짜리
-          if (e.start === d) chips.push(`<span class="ev capital end ${w}" title="${esc(e.name)} ${esc(e.kind)}">◆ ${esc(e.name)} 신주상장</span>`);
+        if (e.sub === "listing" || e.sub === "record") { // 신주 상장일·신주배정기준일은 하루짜리
+          const label = e.sub === "listing" ? "◆ " + esc(e.name) + " 신주상장" : "● " + esc(e.name) + " 배정기준일";
+          if (e.start === d) chips.push(`<span class="ev capital ${e.sub === "listing" ? "end" : ""} ${w}" title="${esc(e.name)} ${esc(e.kind)}">${label}</span>`);
           continue;
         }
         const tag = e.sub === "cert" ? " 증서" : "";
@@ -968,13 +970,14 @@
     const cur = q && q.price;
     const gap = e.price && cur ? ((e.price - cur) / cur) * 100 : null;
     const gapCls = gap === null ? "" : gap > 0 ? "up" : gap < 0 ? "down" : "";
-    const period = e.sub === "listing" ? `${fmtMD(e.start)} 상장` : e.start || e.end ? `${e.start ? fmtMD(e.start) : "?"} ~ ${e.end ? fmtMD(e.end) : "?"}${e.estimated ? ' <span class="est">(추정)</span>' : ""}` : "미정";
+    const period = e.sub === "listing" ? `${fmtMD(e.start)} 상장` : e.sub === "record" ? `${fmtMD(e.start)} 기준일` : e.start || e.end ? `${e.start ? fmtMD(e.start) : "?"} ~ ${e.end ? fmtMD(e.end) : "?"}${e.estimated ? ' <span class="est">(추정)</span>' : ""}` : "미정";
     const notes = [
       e.type === "tender" && e.offeror ? `공개매수자 ${esc(e.offeror)}` : "",
       e.partner ? `상대 ${esc(e.partner)}` : "",
       e.gm_date ? `주총 ${fmtMD(e.gm_date)}` : "",
       e.done ? "결과보고서 제출" : "",
-      e.record_date ? `배정기준일 ${fmtMD(e.record_date)}` : "",
+      e.record_date && e.sub !== "record" ? `배정기준일 ${fmtMD(e.record_date)}` : "",
+      e.sub === "record" ? "이날 주주명부 기준으로 신주 배정 — 권리락은 보통 하루 전 영업일" : "",
       e.sub === "cert" ? "신주인수권증서 상장(매매)기간" : "",
       e.withdrawn ? "결정 뒤 철회 공시 — 원문 확인" : "",
       e.source === "본문" ? "기간은 보고서 본문 기준" : "",
