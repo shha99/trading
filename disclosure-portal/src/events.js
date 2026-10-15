@@ -257,3 +257,64 @@ export function parseTenderText(text) {
 export async function fetchTender(apiKey, rceptNo, fetchImpl = fetch) {
   return { type: "tender", rcept_no: rceptNo, ...parseTenderText(await documentText(apiKey, rceptNo, fetchImpl)) };
 }
+
+// ---- 증자: 신주인수권증서 상장기간·신주 상장예정일 ----
+// 유상증자 중 주주배정·일반공모(증권신고서를 내는 공모)만 신주인수권증서가 상장된다. 제3자배정까지 다
+// 읽으면 너무 많아서, 같은 기간에 증권신고서(지분증권)를 낸 회사의 유상증자결정만 고른다. 무상·유무상증자는
+// 전부. 일정은 구조화 API에 없어서 결정 보고서 본문에서 읽는다.
+export const CAPITAL_KINDS = [
+  ["유무상증자결정", "유무상증자"],
+  ["무상증자결정", "무상증자"],
+  ["유상증자결정", "유상증자"],
+];
+
+export async function fetchCapitalCandidates(apiKey, today, fetchImpl = fetch) {
+  const bgn = addDays(today, -89);
+  const lists = await Promise.all([
+    ...[...SCOPE].map((cls) => listAll(apiKey, { bgn_de: bgn, end_de: today, corp_cls: cls, pblntf_ty: "B" }, fetchImpl)),
+    listAll(apiKey, { bgn_de: bgn, end_de: today, pblntf_detail_ty: "C001" }, fetchImpl), // 증권신고서(지분증권)
+  ]);
+  const rows = lists.flat().filter((r) => SCOPE.has(r.corp_cls));
+  rows.sort((a, b) => a.rcept_no.localeCompare(b.rcept_no));
+  const offering = new Set(rows.filter((r) => r.report_nm.replace(/\s/g, "").includes("증권신고서(지분증권)")).map((r) => r.corp_code));
+  const out = new Map();
+  for (const r of rows) {
+    const title = r.report_nm.replace(/\s/g, "");
+    if (!title.includes("주요사항보고서") || title.includes("철회") || title.includes("첨부정정")) continue;
+    const hit = CAPITAL_KINDS.find(([kw]) => title.includes(kw));
+    if (!hit) continue;
+    if (hit[1] === "유상증자" && !offering.has(r.corp_code)) continue; // 제3자배정 등 비공모는 건너뜀
+    const key = `${r.corp_code}:${hit[1]}`;
+    const prev = out.get(key);
+    out.set(key, {
+      corp_code: r.corp_code, corp_name: r.corp_name.trim(), stock_code: (r.stock_code || "").trim(), market: MARKET[r.corp_cls],
+      kind: hit[1], rcept_no: r.rcept_no, first_rcept_no: prev ? prev.first_rcept_no : r.rcept_no,
+    });
+  }
+  return [...out.values()];
+}
+
+// 정정 보고서 본문엔 정정 전·후가 다 들어 있고 정정 후(현재 일정)가 뒤에 나온다 — 마지막 값을 쓴다.
+function lastMatch(t, re) {
+  let m = null;
+  for (const x of t.matchAll(re)) m = x;
+  return m;
+}
+const ymdOf = (m, i) => `${m[i]}${m[i + 1].padStart(2, "0")}${m[i + 2].padStart(2, "0")}`;
+
+export function parseCapitalText(text) {
+  const t = text.replace(/<[^>]+>/g, " ").replace(/&nbsp;|&#160;/g, " ").replace(/\s+/g, " ");
+  const cert = lastMatch(t, new RegExp(`신주인수권\\s*증서\\s*(?:의\\s*)?상장\\s*(?:예정)?\\s*기간\\s*:?\\s*${DATE}\\s*[~\\-]\\s*${DATE}`, "g"));
+  const listing = lastMatch(t, new RegExp(`신주의\\s*상장\\s*예정일\\s*:?\\s*${DATE}`, "g"));
+  const record = lastMatch(t, new RegExp(`신주\\s*배정\\s*기준일\\s*:?\\s*\\(?\\s*${DATE}`, "g"));
+  return {
+    cert_start: cert ? ymdOf(cert, 1) : null,
+    cert_end: cert ? ymdOf(cert, 4) : null,
+    listing: listing ? ymdOf(listing, 1) : null,
+    record_date: record ? ymdOf(record, 1) : null,
+  };
+}
+
+export async function fetchCapital(apiKey, rceptNo, fetchImpl = fetch) {
+  return { rcept_no: rceptNo, ...parseCapitalText(await documentText(apiKey, rceptNo, fetchImpl)) };
+}

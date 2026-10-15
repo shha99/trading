@@ -173,7 +173,7 @@ test("/api/market: 네이버 목록을 코스피·코스닥 주식만 남기고 
 
 // ---- 캘린더 ----
 import { deflateRawSync } from "node:zlib";
-import { cleanName, fetchCandidates, fetchDeal, parseAppraisalText, parseKoDate, parseTenderText, unzipFirst } from "../src/events.js";
+import { cleanName, fetchCandidates, fetchCapitalCandidates, fetchDeal, parseAppraisalText, parseCapitalText, parseKoDate, parseTenderText, unzipFirst } from "../src/events.js";
 
 test("상대회사 이름 정리", () => {
   assert.equal(cleanName("(주)진에어 (JIN AIR CO., LTD.) (에어서울(주)에 대한 사항은 '18. 기타 투자판단과 관련한 중요사항'을 참고하시기 바랍니다.)"), "(주)진에어");
@@ -316,4 +316,28 @@ test("DART 5xx·연결 실패는 두 번까지 재시도, 그래도 안 되면 �
   let k = 0;
   await assert.rejects(fetchPage("k", "20261012", 1, async () => { k++; return new Response("", { status: 404 }); }), /HTTP 404/);
   assert.equal(k, 1); // 4xx는 재시도하지 않는다
+});
+
+test("증자 본문: 정정 전·후가 있으면 뒤(정정 후) 일정, 일정변경 표는 무시", () => {
+  const t = "16. 신주의 상장예정일 일정 변경 2026년 12월 23일 2027년 01월 14일 … (3) 신주인수권증서 상장예정기간 : 2026년 11월 06일 ~ 2026년 11월 12일 … 신주배정기준일( 2026년 10월 20일 예정) … " +
+    "16. 신주의 상장예정일 2027년 01월 14일 … (3) 신주인수권증서 상장예정기간 : 2026년 12월 03일 ~ 2026년 12월 09일 … 신주배정기준일( 2026년 11월 16일 예정)";
+  assert.deepEqual(parseCapitalText(t), { cert_start: "20261203", cert_end: "20261209", listing: "20270114", record_date: "20261116" });
+  assert.deepEqual(parseCapitalText("무상증자 … 신주의 상장예정일 2026년 11월 10일"), { cert_start: null, cert_end: null, listing: "20261110", record_date: null });
+});
+
+test("증자 후보: 유상증자는 증권신고서 낸 회사만, 무상은 전부", async () => {
+  const mk = (rcept_no, corp_code, corp_name, report_nm) => ({ rcept_no, corp_code, corp_name, stock_code: "000000", corp_cls: "K", report_nm, rcept_dt: rcept_no.slice(0, 8) });
+  const B = [
+    mk("20261015000277", "01344202", "뷰노", "[기재정정]주요사항보고서(유상증자결정)"),
+    mk("20261001000001", "00000009", "제3자배정회사", "주요사항보고서(유상증자결정)"),
+    mk("20261001000135", "00000010", "MH에탄올", "주요사항보고서(무상증자결정)"),
+  ];
+  const C = [mk("20261015000309", "01344202", "뷰노", "[기재정정]증권신고서(지분증권)")];
+  const fetchImpl = async (url) => {
+    const ty = url.searchParams.get("pblntf_ty") || url.searchParams.get("pblntf_detail_ty");
+    if (ty === "B") return listResp(url.searchParams.get("corp_cls") === "K" ? B : [])();
+    return listResp(C)();
+  };
+  const c = await fetchCapitalCandidates("k", "20261015", fetchImpl);
+  assert.deepEqual(c.map((x) => [x.corp_name, x.kind]).sort(), [["MH에탄올", "무상증자"], ["뷰노", "유상증자"]]);
 });

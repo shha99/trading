@@ -103,6 +103,7 @@
       <div class="cal-legend">
         <label class="chk"><input type="checkbox" id="calTender" checked /> <span class="sw tender"></span>공개매수</label>
         <label class="chk"><input type="checkbox" id="calBuyback" checked /> <span class="sw buyback"></span>매수청구</label>
+        <label class="chk" title="유상·무상증자의 신주인수권증서 상장기간과 신주 상장예정일"><input type="checkbox" id="calCapital" checked /> <span class="sw capital"></span>증자(증서·신주상장)</label>
         <label class="chk"><input type="checkbox" id="calHidePast" checked /> 끝난 일정 숨기기</label>
         <label class="chk"><input type="checkbox" id="calWatchOnly" /> 관심종목만</label>
       </div>
@@ -151,7 +152,7 @@
       </table>
       <p class="empty" id="calEmpty" hidden></p>
     </div>
-    <p class="hint mk-src">자동 수집: DART 최근 6개월 공시에서 공개매수신고서(정정 반영, 결과보고서 나오면 종료)와 합병·분할합병·주식교환이전·영업양수도 결정의 주식매수청구권 행사기간·매수예정가격을 읽습니다(코스피·코스닥). 영업양수도는 보고서에 기간 칸이 없어 주총일부터 20일로 추정합니다(추정 표시). 현재가는 네이버 증권, 1분 지연될 수 있습니다. 투자 판단 전 반드시 원문 공시를 확인하세요.</p>
+    <p class="hint mk-src">자동 수집: DART 최근 6개월 공시에서 공개매수신고서(정정 반영, 결과보고서 나오면 종료)와 합병·분할합병·주식교환이전·영업양수도 결정의 주식매수청구권 행사기간·매수예정가격을 읽습니다(코스피·코스닥). 영업양수도는 보고서에 기간 칸이 없어 주총일부터 20일로 추정합니다(추정 표시). 증자는 최근 3개월 유상증자(증권신고서를 낸 공모만)·무상·유무상증자 결정 보고서 본문에서 신주인수권증서 상장기간과 신주 상장예정일을 읽습니다. 현재가는 네이버 증권, 1분 지연될 수 있습니다. 투자 판단 전 반드시 원문 공시를 확인하세요.</p>
   </section>
 
   <main class="layout" id="discView">

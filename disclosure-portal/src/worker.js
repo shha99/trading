@@ -9,7 +9,7 @@
 //   PORTAL_PASSWORD  설정하면 접속할 때 비밀번호를 묻는다(아이디는 아무거나) — "나만 보기"
 import { DartError, TRADE_CATEGORIES, fetchDay, fetchPage } from "./dart.js";
 import { MARKET_KINDS, MarketError, fetchMarketList, fetchQuotes } from "./market.js";
-import { DEAL_APIS, fetchCandidates, fetchDeal, fetchTender } from "./events.js";
+import { DEAL_APIS, fetchCandidates, fetchCapital, fetchCapitalCandidates, fetchDeal, fetchTender } from "./events.js";
 
 const TODAY_TTL = 15; // 오늘 목록 캐시(초) — 탭 여러 개를 열어도 DART 호출이 늘지 않게
 const PAST_TTL = 600; // 지난 날짜는 거의 안 바뀐다
@@ -117,6 +117,15 @@ async function handleEvents(url, env, ctx, fetchImpl) {
   if (part === "candidates") {
     const today = todayKst();
     return cached(`events/candidates?d=${today}`, EVENTS_TTL, fresh, ctx, async () => ({ today, ...(await fetchCandidates(env.DART_API_KEY, today, fetchImpl)) }));
+  }
+  if (part === "capital-candidates") {
+    const today = todayKst();
+    return cached(`events/capital-candidates?d=${today}`, EVENTS_TTL, fresh, ctx, async () => ({ today, items: await fetchCapitalCandidates(env.DART_API_KEY, today, fetchImpl) }));
+  }
+  if (part === "capital") {
+    const rcept = url.searchParams.get("rcept_no") || "";
+    if (!/^\d{14}$/.test(rcept)) return json({ detail: "rcept_no가 잘못됐습니다." }, 400);
+    return cached(`events/capital?r=${rcept}`, DEAL_TTL, fresh, ctx, async () => ({ event: await fetchCapital(env.DART_API_KEY, rcept, fetchImpl) }));
   }
   if (part === "deal") {
     const api = url.searchParams.get("api") || "";

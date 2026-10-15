@@ -829,8 +829,21 @@
     renderCal();
     const q = fresh ? "&fresh=1" : "";
     try {
-      const c = await fetchJSON(`/api/events/candidates?x=1${q}`);
+      const [c, cap] = await Promise.all([
+        fetchJSON(`/api/events/candidates?x=1${q}`),
+        fetchJSON(`/api/events/capital-candidates?x=1${q}`).catch(() => ({ items: [] })), // 증자는 실패해도 나머지는 보여준다
+      ]);
       const jobs = [
+        // 증자: 신주인수권증서 상장기간, 신주 상장예정일 → 일정 두 개로 나눈다
+        ...cap.items.map((x) => async () => {
+          const r = await fetchJSON(`/api/events/capital?rcept_no=${x.rcept_no}${q}`);
+          const e = r.event;
+          const base = { type: "capital", name: x.corp_name, code: x.stock_code, market: x.market, rcept_no: x.rcept_no, announced: x.first_rcept_no.slice(0, 8), record_date: e.record_date };
+          const out = [];
+          if (e.cert_start) out.push({ ...base, id: `cap:${x.corp_code}:${x.kind}:cert`, sub: "cert", kind: `증서상장·${x.kind}`, start: e.cert_start, end: e.cert_end || e.cert_start });
+          if (e.listing) out.push({ ...base, id: `cap:${x.corp_code}:${x.kind}:list`, sub: "listing", kind: `신주상장·${x.kind}`, start: e.listing, end: e.listing });
+          return out;
+        }),
         ...c.deals.map((d) => async () => {
           const r = await fetchJSON(`/api/events/deal?api=${d.api}&corp_code=${d.corp_code}&rcept_no=${d.rcept_no}${q}`);
           const e = r.event;
@@ -849,7 +862,7 @@
       const run = async () => {
         while (next < jobs.length) {
           const job = jobs[next++];
-          try { const e = await job(); if (e) out.push(e); } catch { failed++; }
+          try { const e = await job(); if (Array.isArray(e)) out.push(...e); else if (e) out.push(e); } catch { failed++; }
           $("calMeta").textContent = `불러오는 중 ${++done}/${jobs.length}`;
         }
       };
@@ -859,7 +872,7 @@
         const before = new Set(cal.events.map((e) => e.id));
         const added = out.filter((e) => !before.has(e.id));
         for (const e of added) cal.newIds.add(e.id);
-        if (added.length) toast(`📅 캘린더에 새 일정 ${added.length}건: ${added.slice(0, 3).map((e) => `${e.name}(${e.type === "tender" ? "공개매수" : "매수청구"})`).join(", ")}`);
+        if (added.length) toast(`📅 캘린더에 새 일정 ${added.length}건: ${added.slice(0, 3).map((e) => `${e.name}(${e.type === "tender" ? "공개매수" : e.type === "capital" ? e.kind : "매수청구"})`).join(", ")}`);
       }
       cal.events = out;
       cal.failed = failed;
@@ -902,7 +915,7 @@
     const hidePast = $("calHidePast").checked;
     const watchOnly = $("calWatchOnly").checked;
     return allEvents().filter((e) =>
-      (e.type === "tender" ? tender : buyback) &&
+      (e.type === "tender" ? tender : e.type === "capital" ? $("calCapital").checked : buyback) &&
       (!hidePast || status(e).key !== "done") &&
       (!watchOnly || state.watch.some((w) => w.code === e.code)));
   }
@@ -927,8 +940,13 @@
       for (const e of events) {
         if (activeOn(e, d)) active++;
         const w = isWatchedCode(e.code) ? "watched" : "";
-        if (e.start === d) chips.push(`<span class="ev ${e.type} ${w}" title="${esc(e.name)} ${esc(e.kind)} 시작">▶ ${esc(e.name)}</span>`);
-        if (e.end === d) chips.push(`<span class="ev ${e.type} end ${w}" title="${esc(e.name)} ${esc(e.kind)} 마감">■ ${esc(e.name)} 마감</span>`);
+        if (e.sub === "listing") { // 신주 상장일은 하루짜리
+          if (e.start === d) chips.push(`<span class="ev capital end ${w}" title="${esc(e.name)} ${esc(e.kind)}">◆ ${esc(e.name)} 신주상장</span>`);
+          continue;
+        }
+        const tag = e.sub === "cert" ? " 증서" : "";
+        if (e.start === d) chips.push(`<span class="ev ${e.type} ${w}" title="${esc(e.name)} ${esc(e.kind)} 시작">▶ ${esc(e.name)}${tag}</span>`);
+        if (e.end === d) chips.push(`<span class="ev ${e.type} end ${w}" title="${esc(e.name)} ${esc(e.kind)} 마감">■ ${esc(e.name)}${tag} 마감</span>`);
       }
       const cls = ["day", d.slice(0, 6) !== m ? "other" : "", d === state.today ? "today" : "", d === state.cal.selected ? "sel" : "", dow === 0 ? "sun" : dow === 6 ? "sat" : ""].join(" ");
       cells.push(`<div class="${cls}" data-day="${d}">
@@ -950,18 +968,20 @@
     const cur = q && q.price;
     const gap = e.price && cur ? ((e.price - cur) / cur) * 100 : null;
     const gapCls = gap === null ? "" : gap > 0 ? "up" : gap < 0 ? "down" : "";
-    const period = e.start || e.end ? `${e.start ? fmtMD(e.start) : "?"} ~ ${e.end ? fmtMD(e.end) : "?"}${e.estimated ? ' <span class="est">(추정)</span>' : ""}` : "미정";
+    const period = e.sub === "listing" ? `${fmtMD(e.start)} 상장` : e.start || e.end ? `${e.start ? fmtMD(e.start) : "?"} ~ ${e.end ? fmtMD(e.end) : "?"}${e.estimated ? ' <span class="est">(추정)</span>' : ""}` : "미정";
     const notes = [
       e.type === "tender" && e.offeror ? `공개매수자 ${esc(e.offeror)}` : "",
       e.partner ? `상대 ${esc(e.partner)}` : "",
       e.gm_date ? `주총 ${fmtMD(e.gm_date)}` : "",
       e.done ? "결과보고서 제출" : "",
+      e.record_date ? `배정기준일 ${fmtMD(e.record_date)}` : "",
+      e.sub === "cert" ? "신주인수권증서 상장(매매)기간" : "",
       e.withdrawn ? "결정 뒤 철회 공시 — 원문 확인" : "",
       e.source === "본문" ? "기간은 보고서 본문 기준" : "",
       e.memo ? esc(e.memo) : "",
       e.manual ? "직접 추가" : "",
     ].filter(Boolean).join(" · ");
-    const kindLabel = e.type === "tender" ? "공개매수" : `매수청구·${e.kind || ""}`.replace(/·$/, "");
+    const kindLabel = e.type === "tender" ? "공개매수" : e.type === "capital" ? e.kind : `매수청구·${e.kind || ""}`.replace(/·$/, "");
     return `<tr class="${watched ? "watched" : ""} ${st.key === "done" && !pinned ? "past" : ""} ${pinned ? "pinned" : ""}">
       <td><span class="st ${st.key}">${st.label}</span>${pinned && e.announced ? `<div class="ann">공시 ${fmtMD(e.announced)}</div>` : ""}</td>
       <td class="kind-cell"><span class="kind ev ${e.type}">${esc(kindLabel)}</span></td>
@@ -1020,7 +1040,7 @@
     else empty.hidden = true;
     if (!cal.loading) {
       $("calMeta").textContent = cal.loadedAt
-        ? `공개매수 ${allEvents().filter((e) => e.type === "tender").length} · 매수청구 ${allEvents().filter((e) => e.type === "buyback").length}건 · ${cal.loadedAt} 업데이트${cal.failed ? ` · ${cal.failed}건 실패` : ""}`
+        ? `공개매수 ${allEvents().filter((e) => e.type === "tender").length} · 매수청구 ${allEvents().filter((e) => e.type === "buyback").length} · 증자 ${new Set(allEvents().filter((e) => e.type === "capital").map((e) => e.name)).size}건 · ${cal.loadedAt} 업데이트${cal.failed ? ` · ${cal.failed}건 실패` : ""}`
         : "";
     }
   }
@@ -1029,7 +1049,10 @@
     $("calPrev").addEventListener("click", () => { state.cal.month = shiftMonth(state.cal.month, -1); renderCal(); });
     $("calNext").addEventListener("click", () => { state.cal.month = shiftMonth(state.cal.month, 1); renderCal(); });
     $("calThisMonth").addEventListener("click", () => { state.cal.month = state.today.slice(0, 6); renderCal(); });
-    for (const id of ["calTender", "calBuyback", "calHidePast", "calWatchOnly"]) $(id).addEventListener("change", renderCal);
+    for (const id of ["calTender", "calBuyback", "calCapital", "calHidePast", "calWatchOnly"]) {
+      $(id).addEventListener("change", () => { saveCalPrefs(); renderCal(); });
+    }
+    loadCalPrefs();
     $("calRefresh").addEventListener("click", () => loadCalendar(true));
     $("calGrid").addEventListener("click", (e) => {
       const day = e.target.closest("[data-day]");
@@ -1083,6 +1106,19 @@
       if (start) state.cal.month = start.slice(0, 6);
       renderCal();
     });
+  }
+
+  // 체크박스 상태는 브라우저에 기억한다
+  const CAL_PREFS_KEY = "disclosure-portal.calendar-prefs.v1";
+  const CAL_PREF_IDS = ["calTender", "calBuyback", "calCapital", "calHidePast", "calWatchOnly"];
+  function saveCalPrefs() {
+    try { localStorage.setItem(CAL_PREFS_KEY, JSON.stringify(Object.fromEntries(CAL_PREF_IDS.map((id) => [id, $(id).checked])))); } catch { /* 무시 */ }
+  }
+  function loadCalPrefs() {
+    try {
+      const p = JSON.parse(localStorage.getItem(CAL_PREFS_KEY) || "{}");
+      for (const id of CAL_PREF_IDS) if (typeof p[id] === "boolean") $(id).checked = p[id];
+    } catch { /* 무시 */ }
   }
 
   function shiftMonth(m, n) {

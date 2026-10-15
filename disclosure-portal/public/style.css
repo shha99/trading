@@ -111,6 +111,7 @@ td.reason { font-size: 13px; color: var(--muted); }
 .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; }
 .sw.tender, .ev.tender { --c: #3182f6; --bg: #e8f3ff; }
 .sw.buyback, .ev.buyback { --c: #7c4ddb; --bg: #f3effe; }
+.sw.capital, .ev.capital { --c: #0c8a62; --bg: #e9f9f2; }
 .sw { background: var(--c); }
 .cal-head #calRefresh { margin-left: auto; }
 
