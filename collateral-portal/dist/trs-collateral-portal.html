@@ -142,6 +142,34 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
 .dr input { width: 100%; }
 .dr .w-fund { width: 90px; } .dr .w-name { min-width: 140px; } .dr .w-code { width: 150px; } .dr .w-px { width: 120px; } .dr .w-qty { width: 110px; }
 .dr td { padding: 5px 6px; }
+.dh-top { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 6px 16px; }
+.dh-id { min-width: 0; display: grid; gap: 2px; }
+.dh-id h2 { font-size: 1.1rem; }
+.dh-sub { display: flex; flex-wrap: wrap; gap: 4px 10px; color: var(--muted); font-size: 0.82rem; }
+.dh-st { display: grid; justify-items: end; gap: 2px; }
+.dh-meta { display: grid; grid-template-columns: 1fr 2fr 1fr 1fr; gap: 1px; margin: 0; background: var(--line); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+@media (max-width: 760px) { .dh-meta { grid-template-columns: 1fr 1fr; } }
+.dh-meta div { background: var(--panel); padding: 7px 10px; min-width: 0; }
+.dh-meta dt { font-size: 0.72rem; color: var(--muted); }
+.dh-meta dd { margin: 0; font-size: 0.86rem; overflow-wrap: anywhere; }
+.hero2 { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 24px; padding: 14px 16px; border-radius: 10px; border: 1px solid transparent; }
+.hero2 .h-l { display: grid; gap: 2px; min-width: 0; }
+.hero2 .h-k { font-size: 0.85rem; font-weight: 600; }
+.hero2 .h-v { font-size: 1.9rem; font-weight: 600; line-height: 1.15; letter-spacing: -0.01em; overflow-wrap: anywhere; }
+.hero2 .h-s { font-size: 0.78rem; opacity: .85; }
+.hero2 .h-r { display: grid; gap: 4px; flex: 0 1 260px; min-width: 180px; }
+.hero2 .bar { height: 10px; border-radius: 999px; background: var(--panel); overflow: hidden; border: 1px solid currentColor; opacity: .9; }
+.hero2 .bar i { display: block; height: 100%; background: currentColor; }
+.hero2.call { background: var(--call-soft); color: var(--call); border-color: color-mix(in srgb, var(--call) 25%, transparent); }
+.hero2.ok { background: var(--ok-soft); color: var(--ok); }
+.hero2.info { background: var(--info-soft); color: var(--info); }
+.hero2.warn { background: var(--warn-soft); color: var(--warn); }
+.flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 6px; }
+.flow .fc { display: grid; gap: 1px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); min-width: 0; }
+.flow .fc.last { border-color: currentColor; background: var(--panel); }
+.flow .fk { font-size: 0.7rem; color: var(--muted); white-space: nowrap; }
+.flow .fv { font-size: 0.88rem; white-space: nowrap; }
+.flow .op { align-self: center; color: var(--muted); font-weight: 600; }
 .mail-wrap { overflow-x: auto; background: #ffffff; border: 1px solid var(--line); border-radius: 6px; padding: 12px; }
 .lk-box { display: grid; gap: 8px; align-content: start; min-width: 0; padding: 12px; border: 1px dashed var(--line); border-radius: 8px; }
 .lk-t { display: grid; gap: 6px; padding: 10px; background: var(--bg); border-radius: 6px; }
@@ -929,18 +957,37 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     var gap = need ? -c.Z : c.Z; // 남은 설정 필요액 또는 남은 말소 가능액
     var dirDefault = need ? "설정" : "말소";
     var drafts = draftsOf(c.key);
+    // 한눈에: ① 얼마를 더 넣어야 하는지(큰 숫자) ② 계산 흐름 한 줄 ③ 계약 정보는 작게
+    var needAmt = -c.U, covered = need ? Math.max(0, Math.min(1, c.sumY / needAmt)) : 0;
+    var hero;
+    if (c.dir === "수취") hero = heroBox("warn", c.U < 0 ? "상대방에게 추가 납입 요청할 금액" : "추가 요청 대상 아님", c.U < 0 ? fmt(-c.U) : "–",
+      c.U < 0 ? "버퍼 포함 · 최소 " + fmt(Math.max(0, -c.T)) : "당사가 담보를 받는 계약입니다");
+    else if (need && c.Z < 0) hero = heroBox("call", "추가로 넣어야 할 금액 (헤어컷 반영)", fmt(-c.Z),
+      (c.T < 0 ? "버퍼 빼고 최소 " + fmt(Math.max(0, -(c.T + c.sumY))) + " · " : "") + "버퍼 " + fmt(state.settings.buffer) + " 포함", covered);
+    else if (need) hero = heroBox("ok", "충족 — 처리 후 여유", fmt(c.Z), "배정한 담보로 필요액을 채웠습니다", 1);
+    else hero = heroBox("info", c.lines.length ? "말소 반영 후 여유" : "말소 가능 금액", fmt(c.lines.length ? c.Z : c.U), "버퍼를 빼고도 남는 금액입니다");
+
+    var ob = c.m.ob ? esc(c.m.ob) + (c.m.list && c.m.list.length > 1 ? " 외 " + (c.m.list.length - 1) + "개" : "") : "<span class='neg'>" + esc(c.m.missText || "OB+ 연결 없음") + "</span>";
     el.innerHTML =
-      '<div class="row between"><h2>' + esc(c.key) + " · " + esc(c.cp) + '</h2><span class="pill ' + c.st.c + '">' + c.st.t + "</span></div>" +
-      '<div class="kv">' +
-        kv("ETF (상대방 펀드)", esc(c.fundName || "–"), esc(c.fund)) + kv("OB+코드", esc(c.m.ob || "–") + (c.m.list && c.m.list.length > 1 ? " <span class='pill dim'>외 " + (c.m.list.length - 1) + "개</span>" : ""), esc(c.m.obName || c.m.missText || "계약 마스터에 없음")) +
-        kv("예탁원 계좌", esc(c.acct || "–")) + kv("만기일", esc(c.end || "–")) +
-        kv("현재담보가액", fmt(c.cur), "파일 K열") + kv("필요담보금액", fmt(c.req), "파일 L열") +
-        kv("정산결과", esc(c.result || "–")) + kv("이행 상태", esc(c.status || "–")) +
-        kv("담보과부족 (T)", '<span class="' + cls(c.T) + '">' + fmt(c.T) + "</span>", "파일 M열 = K − L") +
-        kv("설정/말소 필요액 (U)", '<span class="' + cls(c.U) + '">' + fmt(c.U) + "</span>", "T − 버퍼 " + fmt(state.settings.buffer)) +
-        kv("배정 평가 합계 (ΣY)", sgn(c.sumY), "헤어컷 반영") +
-        kv("처리 후 과부족 (Z)", '<span class="' + cls(c.Z) + '">' + fmt(c.Z) + "</span>", "U + ΣY") +
-      "</div>" + banner +
+      '<div class="dh-top"><div class="dh-id"><h2>' + esc(c.key) + ' <span class="muted">·</span> ' + esc(c.cp) + "</h2>" +
+        '<div class="dh-sub"><span title="' + esc(c.fundName) + '">' + esc(c.fundName || "–") + '</span><span class="num">' + esc(c.fund || "") + "</span></div></div>" +
+        '<div class="dh-st"><span class="pill ' + c.st.c + '">' + c.st.t + '</span><span class="fine">' + esc(c.result || "") + (c.status ? " · " + esc(c.status) : "") + "</span></div></div>" +
+      '<dl class="dh-meta">' +
+        "<div><dt>OB+코드</dt><dd class='num'>" + ob + "</dd></div>" +
+        "<div><dt>OB+코드명</dt><dd>" + esc(c.m.obName || "–") + "</dd></div>" +
+        "<div><dt>예탁원 계좌</dt><dd class='num'>" + esc(c.acct || "–") + "</dd></div>" +
+        "<div><dt>만기일</dt><dd class='num'>" + esc(fmtDate(c.end)) + "</dd></div>" +
+      "</dl>" +
+      hero +
+      '<div class="flow" aria-label="계산 흐름">' +
+        flowCell("현재담보가액", fmt(c.cur), "") + '<span class="op">−</span>' +
+        flowCell("필요담보금액", fmt(c.req), "") + '<span class="op">=</span>' +
+        flowCell("담보과부족 T", fmt(c.T), cls(c.T)) + '<span class="op">−</span>' +
+        flowCell("버퍼", fmt(state.settings.buffer), "") + '<span class="op">=</span>' +
+        flowCell("설정/말소 필요액 U", fmt(c.U), cls(c.U)) + '<span class="op">+</span>' +
+        flowCell("배정 (헤어컷 반영) ΣY", sgn(c.sumY), "") + '<span class="op">=</span>' +
+        flowCell("처리 후 과부족 Z", fmt(c.Z), cls(c.Z), true) +
+      "</div>" +
       (c.badPrice ? '<div class="banner warn">종가가 없는 종목이 있어 평가금액을 계산하지 못했습니다. “종가” 탭에서 올려 주세요.</div>' : "") +
       (c.m.list && c.m.list.length > 1 ? "<h3>이 담보번호의 OB+ 상품 " + c.m.list.length + "개</h3>" +
         '<div class="tablewrap"><table><thead><tr><th>OB+코드</th><th>OB+코드명 (상품명)</th><th>ETF 종목코드</th></tr></thead><tbody>' +
@@ -1013,6 +1060,12 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     $("dl-names").innerHTML = keys.map(function (c) { return '<option value="' + esc(names[c]) + '">'; }).join("");
     $("dl-codes").innerHTML = keys.map(function (c) { return '<option value="A' + esc(c) + '" label="' + esc(names[c]) + '">'; }).join("");
   }
+  function heroBox(tone, label, value, sub, ratio) {
+    return '<div class="hero2 ' + tone + '"><div class="h-l"><span class="h-k">' + label + '</span><span class="h-v num">' + value + '</span><span class="h-s">' + sub + "</span></div>" +
+      (ratio != null ? '<div class="h-r"><div class="bar" role="img" aria-label="필요액 대비 배정 ' + Math.round(ratio * 100) + '%"><i style="width:' + (ratio * 100).toFixed(1) + '%"></i></div><span class="h-s">필요액 대비 배정 <b class="num">' + Math.round(ratio * 100) + "%</b></span></div>" : "") + "</div>";
+  }
+  function flowCell(k, v, c, last) { return '<div class="fc' + (last ? " last" : "") + '"><span class="fk">' + k + '</span><span class="fv num ' + (c || "") + '">' + v + "</span></div>"; }
+  function fmtDate(d) { var t = String(d || ""); return /^\d{8}$/.test(t) ? t.slice(0, 4) + "-" + t.slice(4, 6) + "-" + t.slice(6) : (t || "–"); }
   function kv(k, v, fx) { return '<div><span class="k">' + k + '</span><span class="v">' + v + "</span>" + (fx ? '<span class="fx">' + fx + "</span>" : "") + "</div>"; }
 
   function renderDaily() {
