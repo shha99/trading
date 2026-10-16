@@ -69,6 +69,10 @@ th { font-weight: 500; color: var(--muted); font-size: 0.74rem; white-space: now
 td.r, th.r { text-align: right; white-space: nowrap; }
 td.nw { white-space: nowrap; }
 tr.sel td { background: var(--accent-soft); }
+tr.done td { background: var(--ok-soft); }
+#pick-call.pk-done { background: var(--ok-soft); border-color: var(--ok); color: var(--ok); font-weight: 600; }
+#pick-call.pk-typing { background: var(--warn-soft); border-color: var(--warn); color: var(--warn); }
+#pick-legend .pill { font-size: 0.7rem; margin-left: 4px; }
 tbody.click tr { cursor: pointer; }
 tbody.click tr:hover td { background: var(--accent-soft); }
 .neg { color: var(--call); }
@@ -157,7 +161,7 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
   <div id="pane-calls" style="display:grid;gap:14px;">
     <section class="panel picker" id="picker">
       <div class="pickrow">
-        <label class="f grow">담보번호 선택
+        <label class="f grow"><span>담보번호 선택 <span id="pick-legend"></span></span>
           <select id="pick-call"></select>
         </label>
         <label class="f">보기
@@ -837,7 +841,7 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
       tile("말소 가능액", fmt(rel), "");
 
     var f = $("flt").value;
-    calls.sort(function (a, b) { return a.Z - b.Z; }); // 부족액 큰 순
+    calls.sort(function (a, b) { return (a.T - b.T) || (a.key < b.key ? -1 : 1); }); // 정산 파일 부족액 큰 순 (배정해도 순서가 안 바뀜)
     var shown = calls.filter(function (c) {
       if (f === "action") return (c.U < 0 && c.Z < 0) || (c.U > 0 && !c.lines.length);
       if (f === "call") return c.T < 0;
@@ -845,7 +849,7 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
       return true;
     });
     $("calls-body").innerHTML = shown.length ? shown.map(function (c) {
-      return '<tr data-key="' + esc(c.key) + '"' + (c.key === state.sel ? ' class="sel"' : "") + ">" +
+      return '<tr data-key="' + esc(c.key) + '"' + (c.key === state.sel ? ' class="sel"' : c.lines.length ? ' class="done"' : "") + ">" +
         '<td><span class="pill ' + c.st.c + '">' + c.st.t + "</span></td>" +
         '<td class="nw muted">' + esc(c.result) + (c.status ? " · " + esc(c.status) : "") + "</td>" +
         '<td class="nw num">' + esc(c.key) + "</td><td>" + esc(c.cp) + "</td>" +
@@ -860,9 +864,21 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     var cur = shown.find(function (c) { return c.key === state.sel; }) || shown[0] || null;
     if (cur) state.sel = cur.key;
     var ci = cur ? shown.indexOf(cur) : -1;
+    // 배정 반영한 건은 초록, 입력만 해 둔 건은 노랑으로 (윈도 크롬·엣지는 목록 색을 그대로 보여줌, 앞 표시는 어디서나 보임)
+    var markOf = function (c) {
+      if (c.lines.length) return "done";
+      var d = (state.draft || {})[c.key] || [];
+      return d.some(function (r) { return r.fund && r.code && Math.floor(num(r.qty)) > 0; }) ? "typing" : "";
+    };
     $("pick-call").innerHTML = shown.length ? shown.map(function (c) {
-      return '<option value="' + esc(c.key) + '"' + (c === cur ? " selected" : "") + ">[" + c.st.t + "] " + esc(c.key) + " · " + esc(c.cp) + " · 과부족 " + fmt(c.Z) + "</option>";
+      var mk = markOf(c);
+      var sty = mk === "done" ? ' style="background:#DFF2E3;color:#14532D;font-weight:600"' : mk === "typing" ? ' style="background:#FFF4D6;color:#7A4B00"' : "";
+      return '<option value="' + esc(c.key) + '"' + sty + (c === cur ? " selected" : "") + ">" + (mk === "done" ? "✔ 배정완료 " : mk === "typing" ? "✎ 입력중 " : "") + "[" + c.st.t + "] " + esc(c.key) + " · " + esc(c.cp) + " · 과부족 " + fmt(c.Z) + "</option>";
     }).join("") : "<option>표시할 건이 없습니다</option>";
+    var curMk = cur ? markOf(cur) : "";
+    $("pick-call").className = curMk === "done" ? "pk-done" : curMk === "typing" ? "pk-typing" : "";
+    var nDone = calls.filter(function (c) { return c.lines.length; }).length;
+    $("pick-legend").innerHTML = "<span class='pill ok'>✔ 배정완료 " + nDone + "건</span> <span class='pill warn'>✎ 입력중 " + calls.filter(function (c) { return markOf(c) === "typing"; }).length + "건</span>";
     $("pos-call").textContent = shown.length ? (ci + 1) + " / " + shown.length : "0 / 0";
     $("prev-call").disabled = ci <= 0; $("next-call").disabled = ci < 0 || ci >= shown.length - 1;
     $("list-count").textContent = shown.length + "건";
