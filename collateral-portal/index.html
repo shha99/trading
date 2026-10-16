@@ -308,7 +308,7 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
         <h2>메일 양식</h2>
         <button type="button" class="btn primary" id="ml-copy">메일에 붙여넣기용으로 복사</button>
       </div>
-      <p class="fine">배정한 담보로 메일 표를 만듭니다. “복사”를 누른 뒤 아웃룩 본문에 Ctrl+V 하면 표 서식 그대로 붙습니다. 거래상대방을 고르면 그 상대방 건만 담깁니다.</p>
+      <p class="fine">마진콜 현황에서 넣은 추가 담보(배정 반영한 것과, 펀드·종목·수량을 다 적어 둔 입력 줄)를 <b>넣은 순서대로</b> 아래에 이어 붙입니다. 마진콜 여러 건을 차례로 넣으면 한 표에 쭉 쌓입니다. “복사”를 누른 뒤 아웃룩 본문에 Ctrl+V 하면 표 서식 그대로 붙습니다. 거래상대방을 고르면 그 상대방 건만 담깁니다.</p>
       <div class="fields">
         <label class="f">처리일자 (VD)<input id="ml-date" type="date"></label>
         <label class="f">거래상대방<select id="ml-cp"></select></label>
@@ -1022,19 +1022,29 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
   var MAIL_HEAD = ["처리일자 (VD)", "담보번호", "거래상대방", "거래상대방 예탁원 계좌", "OB+코드", "OB+코드명", "ETF 종목코드", "제공/수취", "설정/말소", "펀드코드", "담보 구분", "담보 종목코드", "종목명", "처리수량"];
   var MAIL_RED = { "제공/수취": 1, "처리수량": 1 };
   function todayStr() { var d = new Date(), p = function (n) { return String(n).padStart(2, "0"); }; return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()); }
+  // 마진콜 현황에서 넣은 담보: “배정 반영”한 줄 + 입력만 해 두고 아직 반영 안 한 줄(펀드·종목·수량이 다 찬 것)
   function mailRows(calls) {
     var ms = state.settings.mail || {}, out = [];
-    calls.forEach(function (c) {
+    var seq = 0;
+    var push = function (c, a, pending) {
+      if (ms.dir && a.dir !== ms.dir) return;
+      seq++;
+      var lo = lineOb(c, a), k = kind(a.code, a.fund).split("-담보원천:");
+      out.push({ pending: pending, at: a.at || 0, seq: seq,
+        cells: [state.mailDate || todayStr(), c.key, c.cp, (c.acct || "") + (ms.suffix ? " " + ms.suffix : ""), lo.ob || "", lo.obName || "", lo.etf || "",
+          c.dir, a.dir, a.fund, k[0] + (k[1] ? "\n*담보원천:" + k[1] : ""), a.code, a.name || a.code, fmt(a.qty)] });
+    };
+    calls.slice().sort(function (x, y) { return x.key < y.key ? -1 : 1; }).forEach(function (c) {
       if (ms.cp && c.cp !== ms.cp) return;
-      c.lines.forEach(function (l) {
-        if (ms.dir && l.a.dir !== ms.dir) return;
-        var lo = lineOb(c, l.a), k = kind(l.a.code, l.a.fund).split("-담보원천:");
-        out.push({
-          cells: [state.mailDate || todayStr(), c.key, c.cp, (c.acct || "") + (ms.suffix ? " " + ms.suffix : ""), lo.ob || "", lo.obName || "", lo.etf || "",
-            c.dir, l.a.dir, l.a.fund, k[0] + (k[1] ? "\n*담보원천:" + k[1] : ""), l.a.code, l.a.name, fmt(l.a.qty)]
-        });
+      c.lines.forEach(function (l) { push(c, l.a, false); });
+      ((state.draft || {})[c.key] || []).forEach(function (r) {
+        var q = Math.floor(num(r.qty));
+        if (!r.fund || !r.code || !(q > 0)) return;
+        push(c, { fund: r.fund, code: r.code, name: r.name, qty: q, dir: c.U < 0 ? "설정" : "말소", ob: (c.m || {}).ob, at: r.at }, true);
       });
     });
+    // 넣은 순서대로 아래에 이어 붙인다
+    out.sort(function (x, y) { return (x.at - y.at) || (x.seq - y.seq); });
     return out;
   }
   function renderMail(calls) {
@@ -1055,11 +1065,12 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
       MAIL_HEAD.map(function (h) { return '<th style="' + th + "color:" + (MAIL_RED[h] ? "#C00000" : "#000000") + ';">' + h + "</th>"; }).join("") + "</tr></thead><tbody>" +
       (rows.length ? rows.map(function (r) {
         return "<tr>" + r.cells.map(function (v, i) { return '<td style="' + td + (i === 13 ? "text-align:right;" : "") + '">' + esc(v).replace(/\n/g, "<br>") + "</td>"; }).join("") + "</tr>";
-      }).join("") : '<tr><td colspan="14" style="' + td + 'color:#666666;">배정한 담보가 없습니다. 마진콜 현황에서 배정하면 여기에 표가 만들어집니다.</td></tr>') +
+      }).join("") : '<tr><td colspan="14" style="' + td + 'color:#666666;">넣은 담보가 없습니다. 마진콜 현황의 “추가 담보 입력”에 펀드·종목·수량을 적으면 여기에 줄이 생깁니다.</td></tr>') +
       "</tbody></table>";
     $("ml-preview").innerHTML = html;
     $("ml-preview")._rows = rows;
-    $("ml-count").textContent = rows.length ? rows.length + "줄 · " + (ms.cp || "전체 거래상대방") : "";
+    var nPend = rows.filter(function (r) { return r.pending; }).length;
+    $("ml-count").textContent = rows.length ? rows.length + "줄 · " + (ms.cp || "전체 거래상대방") + (nPend ? " · 이 중 " + nPend + "줄은 아직 “배정 반영” 전 입력값" : "") : "";
   }
   function copyMail() {
     var rows = $("ml-preview")._rows || [];
@@ -1096,7 +1107,9 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
 
   // ---------- 이벤트 ----------
   $("tabs").addEventListener("click", function (e) {
-    var b = e.target.closest("button[data-tab]"); if (!b) return; setTab(b.getAttribute("data-tab"));
+    var b = e.target.closest("button[data-tab]"); if (!b) return;
+    if (b.getAttribute("data-tab") === "mail" || b.getAttribute("data-tab") === "export") render(); // 방금 적은 입력값까지 반영
+    setTab(b.getAttribute("data-tab"));
     if ($("tabs").getBoundingClientRect().top < 0) $("tabs").scrollIntoView({ block: "start" });
   });
   function setTab(t) {
@@ -1136,7 +1149,7 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
         var nc = normCode(r.code);
         state.prices[nc] = px; // 직접 적은 종가도 종가표에 남긴다
         if (r.name) { state.names = state.names || {}; if (!state.names[nc]) state.names[nc] = r.name; }
-        addAlloc(key, { fund: r.fund, code: r.code, name: r.name || r.code }, q, cm.getAttribute("data-dir"));
+        addAlloc(key, { fund: r.fund, code: r.code, name: r.name || r.code, at: r.at }, q, cm.getAttribute("data-dir"));
         r.done = true; n++;
       });
       state.draft[key] = state.draft[key].filter(function (r) { return !r.done; });
@@ -1151,12 +1164,13 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     var list = (state.alloc[key] = state.alloc[key] || []);
     var ex = list.find(function (x) { return x.fund === cd.fund && normCode(x.code) === normCode(cd.code) && x.dir === dir; });
     if (ex) ex.qty = (+ex.qty || 0) + q;
-    else list.push({ fund: cd.fund, code: cd.code, name: cd.name, qty: q, dir: dir });
+    else list.push({ fund: cd.fund, code: cd.code, name: cd.name, qty: q, dir: dir, at: cd.at || Date.now() });
   }
   // 입력 행: 종목명 ↔ 종목코드·종가를 채우고 인정액·합계를 다시 그리지 않고 갱신
   $("detail").addEventListener("input", function (e) {
     var f = e.target.getAttribute("data-f"); if (!f) return;
     var tr = e.target.closest("tr[data-dr]"), i = +tr.getAttribute("data-dr"), r = draftsOf(state.sel)[i]; if (!r) return;
+    if (!r.at) r.at = Date.now(); // 메일 양식에 넣은 순서대로 쌓기 위한 입력 시각
     var v = e.target.value, set = function (ff, val) { var el = tr.querySelector('[data-f="' + ff + '"]'); if (el) el.value = val; r[ff] = val; };
     r[f] = v.trim();
     var fill = function () {
