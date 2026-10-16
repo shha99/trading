@@ -70,6 +70,8 @@ td.r, th.r { text-align: right; white-space: nowrap; }
 td.nw { white-space: nowrap; }
 tr.sel td { background: var(--accent-soft); }
 tr.done td { background: var(--ok-soft); }
+tr.partial td { background: var(--call-soft); }
+#pick-call.pk-partial { background: var(--call-soft); border-color: var(--call); color: var(--call); font-weight: 600; }
 #pick-call.pk-done { background: var(--ok-soft); border-color: var(--ok); color: var(--ok); font-weight: 600; }
 #pick-call.pk-typing { background: var(--warn-soft); border-color: var(--warn); color: var(--warn); }
 #pick-legend .pill { font-size: 0.7rem; margin-left: 4px; }
@@ -877,7 +879,7 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
       return true;
     });
     $("calls-body").innerHTML = shown.length ? shown.map(function (c) {
-      return '<tr data-key="' + esc(c.key) + '"' + (c.key === state.sel ? ' class="sel"' : c.lines.length ? ' class="done"' : "") + ">" +
+      return '<tr data-key="' + esc(c.key) + '"' + (c.key === state.sel ? ' class="sel"' : c.lines.length ? (c.Z >= 0 ? ' class="done"' : ' class="partial"') : "") + ">" +
         '<td><span class="pill ' + c.st.c + '">' + c.st.t + "</span></td>" +
         '<td class="nw muted">' + esc(c.result) + (c.status ? " · " + esc(c.status) : "") + "</td>" +
         '<td class="nw num">' + esc(c.key) + "</td><td>" + esc(c.cp) + "</td>" +
@@ -893,20 +895,22 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     if (cur) state.sel = cur.key;
     var ci = cur ? shown.indexOf(cur) : -1;
     // 배정 반영한 건은 초록, 입력만 해 둔 건은 노랑으로 (윈도 크롬·엣지는 목록 색을 그대로 보여줌, 앞 표시는 어디서나 보임)
+    // 배정완료는 처리 후 과부족(Z)이 0 이상일 때만. 넣었지만 모자라면 “일부배정”.
     var markOf = function (c) {
-      if (c.lines.length) return "done";
+      if (c.lines.length) return c.Z >= 0 ? "done" : "partial";
       var d = (state.draft || {})[c.key] || [];
       return d.some(function (r) { return r.fund && r.code && Math.floor(num(r.qty)) > 0; }) ? "typing" : "";
     };
     $("pick-call").innerHTML = shown.length ? shown.map(function (c) {
       var mk = markOf(c);
-      var sty = mk === "done" ? ' style="background:#DFF2E3;color:#14532D;font-weight:600"' : mk === "typing" ? ' style="background:#FFF4D6;color:#7A4B00"' : "";
-      return '<option value="' + esc(c.key) + '"' + sty + (c === cur ? " selected" : "") + ">" + (mk === "done" ? "✔ 배정완료 " : mk === "typing" ? "✎ 입력중 " : "") + "[" + c.st.t + "] " + esc(c.key) + " · " + esc(c.cp) + " · 과부족 " + fmt(c.Z) + "</option>";
+      var sty = mk === "done" ? ' style="background:#DFF2E3;color:#14532D;font-weight:600"' : mk === "partial" ? ' style="background:#FDE2E1;color:#9B1C1C;font-weight:600"' : mk === "typing" ? ' style="background:#FFF4D6;color:#7A4B00"' : "";
+      var tag = mk === "done" ? "✔ 배정완료 " : mk === "partial" ? "▲ 일부배정·부족 " + fmt(-c.Z) + " " : mk === "typing" ? "✎ 입력중 " : "";
+      return '<option value="' + esc(c.key) + '"' + sty + (c === cur ? " selected" : "") + ">" + tag + "[" + c.st.t + "] " + esc(c.key) + " · " + esc(c.cp) + " · 과부족 " + fmt(c.Z) + "</option>";
     }).join("") : "<option>표시할 건이 없습니다</option>";
     var curMk = cur ? markOf(cur) : "";
-    $("pick-call").className = curMk === "done" ? "pk-done" : curMk === "typing" ? "pk-typing" : "";
-    var nDone = calls.filter(function (c) { return c.lines.length; }).length;
-    $("pick-legend").innerHTML = "<span class='pill ok'>✔ 배정완료 " + nDone + "건</span> <span class='pill warn'>✎ 입력중 " + calls.filter(function (c) { return markOf(c) === "typing"; }).length + "건</span>";
+    $("pick-call").className = curMk ? "pk-" + curMk : "";
+    var cnt = function (m) { return calls.filter(function (c) { return markOf(c) === m; }).length; };
+    $("pick-legend").innerHTML = "<span class='pill ok'>✔ 배정완료 " + cnt("done") + "건</span> <span class='pill call'>▲ 일부배정 " + cnt("partial") + "건</span> <span class='pill warn'>✎ 입력중 " + cnt("typing") + "건</span>";
     $("pos-call").textContent = shown.length ? (ci + 1) + " / " + shown.length : "0 / 0";
     $("prev-call").disabled = ci <= 0; $("next-call").disabled = ci < 0 || ci >= shown.length - 1;
     $("list-count").textContent = shown.length + "건";
