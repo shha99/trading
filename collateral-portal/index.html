@@ -141,6 +141,9 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
 .hero2.ok { background: var(--ok-soft); color: var(--ok); }
 .hero2.info { background: var(--info-soft); color: var(--info); }
 .hero2.warn { background: var(--warn-soft); color: var(--warn); }
+.flow-d summary { cursor: pointer; font-size: 0.8rem; color: var(--muted); padding: 2px 0; width: fit-content; }
+.flow-d summary:hover { color: var(--ink); }
+.flow-d[open] summary { margin-bottom: 8px; }
 .flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 6px; }
 .flow .fc { display: grid; gap: 1px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); min-width: 0; }
 .flow .fc.last { border-color: currentColor; background: var(--panel); }
@@ -956,6 +959,7 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
         "<div><dt>만기일</dt><dd class='num'>" + esc(fmtDate(c.end)) + "</dd></div>" +
       "</dl>" +
       hero +
+      '<details class="flow-d" id="flow-d"' + (state.settings.flowOpen ? " open" : "") + '><summary>계산 상세 (현재담보가액 → 처리 후 과부족)</summary>' +
       '<div class="flow" aria-label="계산 흐름">' +
         flowCell("현재담보가액", fmt(c.cur), "") + '<span class="op">−</span>' +
         flowCell("필요담보금액", fmt(c.req), "") + '<span class="op">=</span>' +
@@ -964,7 +968,7 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
         flowCell("설정/말소 필요액 U", fmt(c.U), cls(c.U)) + '<span class="op">+</span>' +
         flowCell("배정 (헤어컷 반영) ΣY", sgn(c.sumY), "") + '<span class="op">=</span>' +
         flowCell("처리 후 과부족 Z", fmt(c.Z), cls(c.Z), true) +
-      "</div>" +
+      "</div></details>" +
       (c.badPrice ? '<div class="banner warn">종가가 없는 종목이 있어 평가금액을 계산하지 못했습니다. “종가” 탭에서 올려 주세요.</div>' : "") +
       (c.m.list && c.m.list.length > 1 ? "<h3>이 담보번호의 OB+ 상품 " + c.m.list.length + "개</h3>" +
         '<div class="tablewrap"><table><thead><tr><th>OB+코드</th><th>OB+코드명 (상품명)</th><th>ETF 종목코드</th></tr></thead><tbody>' +
@@ -1348,6 +1352,9 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
   $("lk-apply").addEventListener("click", function () { lkApply(false); });
   $("lk-hp-go").addEventListener("click", function () { lkPaste("hp"); });
   $("ml-copy").addEventListener("click", copyMail);
+  $("detail").addEventListener("toggle", function (e) {
+    if (e.target.id === "flow-d") { state.settings.flowOpen = e.target.open; save(); }
+  }, true);
   $("ml-date").addEventListener("change", function () { state.mailDate = this.value; commit(); });
   $("ml-cp").addEventListener("change", function () { state.settings.mail.cp = this.value; commit(); });
   $("ml-dir").addEventListener("change", function () { state.settings.mail.dir = this.value; commit(); });
