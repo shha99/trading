@@ -129,7 +129,7 @@ export function parseAppraisalText(text) {
   const gm = t.match(new RegExp(`주주\\s*총회\\s*(?:예정)?\\s*(?:일자|일)[^0-9]{0,10}?${DATE}`));
   let planned = null;
   // "1주당"의 1은 건너뛰고 숫자를 찾는다
-  for (const m of t.matchAll(/(?:매수\s*예정\s*가격|주식\s*매수\s*(?:청구\s*)?가격|매수\s*가격)(?:1\s*주\s*당|[^0-9]){0,80}?([\d,]{3,})\s*원/g)) {
+  for (const m of t.matchAll(/(?:매수\s*예정\s*가격|주식\s*매수\s*(?:청구\s*)?가격|매수\s*가격)(?:1\s*주\s*당|[^0-9]){0,80}?([\d,]{3,})\s*(?:원|(?=[\s(]|$))/g)) {
     const v = price(m[1]);
     if (v && v >= 100 && v <= 5_000_000) { planned = v; break; } // "100억원 초과 시 해제" 같은 조건 금액은 건너뜀
   }
@@ -317,4 +317,40 @@ export function parseCapitalText(text) {
 
 export async function fetchCapital(apiKey, rceptNo, fetchImpl = fetch) {
   return { rcept_no: rceptNo, ...parseCapitalText(await documentText(apiKey, rceptNo, fetchImpl)) };
+}
+
+// ---- 거래소(KIND) 공시로 먼저 뜬 결정 ----
+// 합병·영업양수도 같은 결정은 거래소 공시(접수번호 80/90번대)가 먼저 나오고 DART 주요사항보고서는
+// 며칠 뒤에 나오는 경우가 있다. 그 사이에도 캘린더에 보이도록 최근 14일 거래소 공시에서 같은 결정을
+// 찾아 본문("doc")으로 읽는다. 같은 회사·같은 종류의 주요사항보고서가 생기면 화면에서 그쪽을 쓴다.
+export const EXCHANGE_DEAL_TITLES = [
+  ["회사분할합병결정", "분할합병"],
+  ["회사합병결정", "합병"],
+  ["주식교환ㆍ이전결정", "주식교환·이전"],
+  ["주식교환·이전결정", "주식교환·이전"],
+  ["영업양수결정", "영업양수"],
+  ["영업양도결정", "영업양도"],
+  ["회사분할결정", "물적분할"],
+  ["중요한자산양수도결정", "중요자산양수도"],
+];
+
+export async function fetchExchangeCandidates(apiKey, today, fetchImpl = fetch) {
+  const bgn = addDays(today, -13);
+  const rows = (await Promise.all([...SCOPE].map((cls) =>
+    listAll(apiKey, { bgn_de: bgn, end_de: today, corp_cls: cls, pblntf_ty: "I" }, fetchImpl)))).flat();
+  rows.sort((a, b) => a.rcept_no.localeCompare(b.rcept_no));
+  const out = new Map();
+  for (const r of rows) {
+    const title = r.report_nm.replace(/\s/g, "");
+    if (title.includes("자회사") || title.includes("종속회사") || title.includes("철회")) continue; // 자회사 결정은 우리 주주 매수청구와 무관
+    const hit = EXCHANGE_DEAL_TITLES.find(([kw]) => title.includes(kw));
+    if (!hit) continue;
+    const key = `${r.corp_code}:${hit[1]}`;
+    const prev = out.get(key);
+    out.set(key, {
+      corp_code: r.corp_code, corp_name: r.corp_name.trim(), stock_code: (r.stock_code || "").trim(), market: MARKET[r.corp_cls],
+      api: "doc", kind: hit[1], rcept_no: r.rcept_no, rcept_dt: r.rcept_dt, first_rcept_no: prev ? prev.first_rcept_no : r.rcept_no, source: "거래소",
+    });
+  }
+  return [...out.values()];
 }

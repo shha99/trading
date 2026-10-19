@@ -829,10 +829,14 @@
     renderCal();
     const q = fresh ? "&fresh=1" : "";
     try {
-      const [c, cap] = await Promise.all([
+      const [c, cap, exch] = await Promise.all([
         fetchJSON(`/api/events/candidates?x=1${q}`),
+        fetchJSON(`/api/events/exchange-candidates?x=1${q}`).catch(() => ({ items: [] })),
         fetchJSON(`/api/events/capital-candidates?x=1${q}`).catch(() => ({ items: [] })), // 증자는 실패해도 나머지는 보여준다
       ]);
+      // 거래소 공시로 먼저 뜬 결정: 같은 회사·같은 종류의 DART 주요사항보고서가 이미 있으면 그쪽을 쓴다
+      const haveDeal = new Set(c.deals.map((d) => `${d.corp_code}:${d.kind}`));
+      const deals = [...c.deals, ...exch.items.filter((x) => !haveDeal.has(`${x.corp_code}:${x.kind}`))];
       const jobs = [
         // 증자: 신주인수권증서 상장기간, 신주 상장예정일 → 일정 두 개로 나눈다
         ...cap.items.map((x) => async () => {
@@ -845,11 +849,11 @@
           if (e.record_date) out.push({ ...base, id: `cap:${x.corp_code}:${x.kind}:rec`, sub: "record", kind: `배정기준일·${x.kind}`, start: e.record_date, end: e.record_date });
           return out;
         }),
-        ...c.deals.map((d) => async () => {
+        ...deals.map((d) => async () => {
           const r = await fetchJSON(`/api/events/deal?api=${d.api}&corp_code=${d.corp_code}&rcept_no=${d.rcept_no}${q}`);
           const e = r.event;
           if (!e || e.none) return null;
-          return { ...e, id: `deal:${d.corp_code}:${d.api}`, name: d.corp_name, code: d.stock_code, market: d.market, withdrawn: Boolean(d.withdrawn_rcept_no), announced: (d.first_rcept_no || d.rcept_no).slice(0, 8) };
+          return { ...e, kind: d.api === "doc" ? d.kind : e.kind, from_exchange: d.source === "거래소", id: `deal:${d.corp_code}:${d.api === "doc" ? d.kind : d.api}`, name: d.corp_name, code: d.stock_code, market: d.market, withdrawn: Boolean(d.withdrawn_rcept_no), announced: (d.first_rcept_no || d.rcept_no).slice(0, 8) };
         }),
         ...c.tenders.map((t) => async () => {
           const r = await fetchJSON(`/api/events/tender?rcept_no=${t.rcept_no}${q}`);
@@ -980,7 +984,7 @@
       e.sub === "record" ? "이날 주주명부 기준으로 신주 배정 — 권리락은 보통 하루 전 영업일" : "",
       e.sub === "cert" ? "신주인수권증서 상장(매매)기간" : "",
       e.withdrawn ? "결정 뒤 철회 공시 — 원문 확인" : "",
-      e.source === "본문" ? "기간은 보고서 본문 기준" : "",
+      e.from_exchange ? "거래소 공시 기준(DART 주요사항보고서 나오면 대체)" : e.source === "본문" ? "기간은 보고서 본문 기준" : "",
       e.memo ? esc(e.memo) : "",
       e.manual ? "직접 추가" : "",
     ].filter(Boolean).join(" · ");

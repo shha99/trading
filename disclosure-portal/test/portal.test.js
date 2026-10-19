@@ -173,6 +173,7 @@ test("/api/market: 네이버 목록을 코스피·코스닥 주식만 남기고 
 
 // ---- 캘린더 ----
 import { deflateRawSync } from "node:zlib";
+import { fetchExchangeCandidates } from "../src/events.js";
 import { cleanName, fetchCandidates, fetchCapitalCandidates, fetchDeal, parseAppraisalText, parseCapitalText, parseKoDate, parseTenderText, unzipFirst } from "../src/events.js";
 
 test("상대회사 이름 정리", () => {
@@ -340,4 +341,20 @@ test("증자 후보: 유상증자는 증권신고서 낸 회사만, 무상은 �
   };
   const c = await fetchCapitalCandidates("k", "20261015", fetchImpl);
   assert.deepEqual(c.map((x) => [x.corp_name, x.kind]).sort(), [["MH에탄올", "무상증자"], ["뷰노", "유상증자"]]);
+});
+
+test("거래소 공시로 먼저 뜬 영업양도결정도 후보로, 자회사 결정은 제외", async () => {
+  const mk = (rcept_no, corp_name, report_nm, corp_code = "00106623") => ({ rcept_no, corp_code, corp_name, stock_code: "011210", corp_cls: "Y", report_nm, rcept_dt: rcept_no.slice(0, 8) });
+  const rows = [
+    mk("20261019800137", "현대위아", "영업양도결정"),
+    mk("20261019800160", "현대위아", "주주총회소집결의"),
+    mk("20261018800001", "어떤지주", "회사합병결정(자회사의 주요경영사항)", "00000001"),
+  ];
+  const c = await fetchExchangeCandidates("k", "20261019", async (url) => listResp(url.searchParams.get("corp_cls") === "Y" ? rows : [])());
+  assert.deepEqual(c.map((x) => [x.corp_name, x.kind, x.api, x.rcept_no]), [["현대위아", "영업양도", "doc", "20261019800137"]]);
+});
+
+test("매수예정가격 뒤에 '원'이 없어도 읽는다", () => {
+  const t = parseAppraisalText("매수예정가격 51,811 행사절차, 방법 … (3) 행사기간: 2026년 11월 27일부터 2026년 12월 16일까지 … 금 일천사백억원(140,000,000,000원)을 초과");
+  assert.deepEqual([t.start, t.end, t.price], ["20261127", "20261216", 51811]);
 });
