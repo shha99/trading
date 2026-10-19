@@ -168,6 +168,29 @@ export async function handle(request, env, ctx, fetchImpl = fetch) {
   if (url.pathname === "/api/market" && request.method === "GET") return handleMarket(url, env, ctx, fetchImpl);
   if (url.pathname.startsWith("/api/events/") && request.method === "GET") return handleEvents(url, env, ctx, fetchImpl);
   if (url.pathname === "/api/quotes" && request.method === "GET") return handleQuotes(url, env, ctx, fetchImpl);
+  if (url.pathname === "/api/kind/probe") {
+    // 임시: Cloudflare에서 KIND(kind.krx.co.kr)에 접속되는지 확인
+    const ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
+    const tries = [
+      ["main", "https://kind.krx.co.kr/main.do", { headers: { "User-Agent": ua } }],
+      ["today", "https://kind.krx.co.kr/disclosure/todaydisclosure.do", {
+        method: "POST",
+        headers: { "User-Agent": ua, "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", Referer: "https://kind.krx.co.kr/disclosure/todaydisclosure.do?method=searchTodayDisclosureMain" },
+        body: "method=searchTodayDisclosureSub&currentPageSize=15&pageIndex=1&orderMode=0&orderStat=D&forward=todaydisclosure_sub&marketType=&searchMode=&searchCodeType=&chose=S&todayFlag=Y&repIsuSrtCd=&kosdaqSegment=&selDate=",
+      }],
+    ];
+    const out = {};
+    for (const [k, u, o] of tries) {
+      try {
+        const r = await fetchImpl(u, { ...o, redirect: "manual" });
+        const t = await r.text();
+        out[k] = { status: r.status, len: t.length, head: t.replace(/\s+/g, " ").slice(0, 300), colo: request.cf && request.cf.colo };
+      } catch (e) {
+        out[k] = { error: String(e.message).slice(0, 200) };
+      }
+    }
+    return json(out);
+  }
   if (url.pathname === "/api/status") {
     return json({ today: todayKst(), api_key_set: Boolean(env.DART_API_KEY), categories: TRADE_CATEGORIES.map(([name]) => name) });
   }
