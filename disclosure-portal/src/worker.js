@@ -176,7 +176,7 @@ export async function handle(request, env, ctx, fetchImpl = fetch) {
       ["today", "https://kind.krx.co.kr/disclosure/todaydisclosure.do", {
         method: "POST",
         headers: { "User-Agent": ua, "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", Referer: "https://kind.krx.co.kr/disclosure/todaydisclosure.do?method=searchTodayDisclosureMain" },
-        body: "method=searchTodayDisclosureSub&currentPageSize=15&pageIndex=1&orderMode=0&orderStat=D&forward=todaydisclosure_sub&marketType=&searchMode=&searchCodeType=&chose=S&todayFlag=Y&repIsuSrtCd=&kosdaqSegment=&selDate=",
+        body: "method=searchTodayDisclosureSub&currentPageSize=100&pageIndex=1&orderMode=0&orderStat=D&forward=todaydisclosure_sub&marketType=&searchMode=&searchCodeType=&chose=S&todayFlag=Y&repIsuSrtCd=&kosdaqSegment=&selDate=",
       }],
     ];
     const out = {};
@@ -184,7 +184,7 @@ export async function handle(request, env, ctx, fetchImpl = fetch) {
       try {
         const r = await fetchImpl(u, { ...o, redirect: "manual" });
         const t = await r.text();
-        out[k] = { status: r.status, len: t.length, head: t.replace(/\s+/g, " ").slice(0, 300), colo: request.cf && request.cf.colo };
+        out[k] = { status: r.status, len: t.length, head: url.searchParams.get("raw") === k ? t : t.replace(/\s+/g, " ").slice(0, 300), colo: request.cf && request.cf.colo };
       } catch (e) {
         out[k] = { error: String(e.message).slice(0, 200) };
       }

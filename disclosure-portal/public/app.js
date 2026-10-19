@@ -1380,7 +1380,9 @@
     }).join("<br>");
     const lines = [
       `<b>${match ? "✓ 일치" : "차이 있음 → DART 기준으로 맞춤"}</b> · ${res.checked_at} 대사 · ` +
-      `DART 원본(코스피·코스닥) <b class="num">${res.dart_count.toLocaleString()}</b>건 / ` +
+      `DART 원본(코스피·코스닥) <b class="num">${res.dart_count.toLocaleString()}</b>건` +
+      ` (그중 거래소·KIND 공시 ${scoped().filter((it) => it.is_exchange).length.toLocaleString()}건)` +
+      `${res.kind ? ` · KIND 직접 확인 ${res.kind}` : ""} / ` +
       `화면 <b class="num">${shown.toLocaleString()}</b>건 (새로고침 전 ${beforeCount.toLocaleString()}건)`,
     ];
     if (added.length) lines.push(`새로 채워진 공시 <b>${added.length}</b>건 (파란색 표시)<br>${names(added)}${added.length > 5 ? "<br>…" : ""}`);
