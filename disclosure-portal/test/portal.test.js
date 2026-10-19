@@ -358,3 +358,39 @@ test("매수예정가격 뒤에 '원'이 없어도 읽는다", () => {
   const t = parseAppraisalText("매수예정가격 51,811 행사절차, 방법 … (3) 행사기간: 2026년 11월 27일부터 2026년 12월 16일까지 … 금 일천사백억원(140,000,000,000원)을 초과");
   assert.deepEqual([t.start, t.end, t.price], ["20261127", "20261216", 51811]);
 });
+
+// ---- KIND ----
+import { parseKindList, toItem } from "../src/kind.js";
+
+const KIND_HTML = `<table><thead><tr><th>시간</th></tr></thead><tbody>
+<tr id="parkman" class="first"> <td class="first txc">17:01</td> <td><img src='/x.gif' class='vmiddle legend' alt='유가증권'> <a id="companysum" href="#companysum" onclick="companysummary_open('06435'); return false;" title='현대로템'> 현대로템</a> </td> <td><a href="#viewer" onclick="openDisclsViewer('20261019000576','')" title='자기주식 취득 결정'>자기주식 취득 결정</a></td> <td>현대로템</td> <td class="txc"></td> </tr>
+<tr id="parkman" > <td class="first txc">16:40</td> <td><img src='/x.gif' class='vmiddle legend' alt='유가증권'> <a id="companysum" href="#companysum" onclick="companysummary_open('01121'); return false;" title='현대위아'> 현대위아</a> </td> <td><a href="#viewer" onclick="openDisclsViewer('20261019800137','')" title='영업양도결정'>영업양도결정</a></td> <td>현대위아</td> <td></td> </tr>
+</tbody></table><div class="info type-00"> 전체 <em>2</em>건 : <strong>1</strong>/1 </div>`;
+
+test("KIND 오늘의 공시 HTML 읽기", () => {
+  const p = parseKindList(KIND_HTML);
+  assert.equal(p.total, 2);
+  assert.deepEqual(p.items.map((i) => [i.rcept_no, i.time, i.corp_name, i.report_nm, i.corp_cls, i.kind_code]), [
+    ["20261019000576", "17:01", "현대로템", "자기주식 취득 결정", "Y", "06435"],
+    ["20261019800137", "16:40", "현대위아", "영업양도결정", "Y", "01121"],
+  ]);
+  const ex = toItem(p.items[1]);
+  assert.equal(ex.market, "코스피");
+  assert.equal(ex.stock_code, "011210");
+  assert.equal(ex.is_exchange, true); // 거래소 공시(80번대)
+  assert.equal(ex.source, "KIND");
+  assert.match(ex.url, /kind\.krx\.co\.kr.*20261019800137/);
+  assert.ok(toItem(p.items[0]).tags.includes("자사주"));
+});
+
+test("/api/kind/today: KIND 페이지를 받아 DART 항목 모양으로", async () => {
+  let posted;
+  const r = await handle(req("/api/kind/today?fresh=1"), env(), ctx, async (url, o) => { posted = o; return new Response(KIND_HTML); });
+  assert.equal(r.status, 200);
+  const body = await r.json();
+  assert.equal(body.total, 2);
+  assert.equal(body.items.length, 2);
+  assert.equal(posted.method, "POST");
+  const bad = await handle(req("/api/kind/today?fresh=1"), env(), ctx, async () => new Response("<html>점검중</html>"));
+  assert.equal(bad.status, 502);
+});

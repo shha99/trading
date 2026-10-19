@@ -9,6 +9,7 @@
 //   PORTAL_PASSWORD  설정하면 접속할 때 비밀번호를 묻는다(아이디는 아무거나) — "나만 보기"
 import { DartError, TRADE_CATEGORIES, fetchDay, fetchPage } from "./dart.js";
 import { MARKET_KINDS, MarketError, fetchMarketList, fetchQuotes } from "./market.js";
+import { KindError, fetchKindToday } from "./kind.js";
 import { DEAL_APIS, fetchCandidates, fetchCapital, fetchCapitalCandidates, fetchDeal, fetchExchangeCandidates, fetchTender } from "./events.js";
 
 const TODAY_TTL = 15; // 오늘 목록 캐시(초) — 탭 여러 개를 열어도 DART 호출이 늘지 않게
@@ -70,7 +71,7 @@ async function cached(key, ttl, fresh, ctx, load) {
   try {
     body = await load();
   } catch (e) {
-    if (e instanceof DartError || e instanceof MarketError) return json({ detail: e.message }, 502);
+    if (e instanceof DartError || e instanceof MarketError || e instanceof KindError) return json({ detail: e.message }, 502);
     throw e;
   }
   if (cache) ctx.waitUntil(cache.put(cacheKey, json(body, 200, { "Cache-Control": `max-age=${ttl}` })));
@@ -168,28 +169,10 @@ export async function handle(request, env, ctx, fetchImpl = fetch) {
   if (url.pathname === "/api/market" && request.method === "GET") return handleMarket(url, env, ctx, fetchImpl);
   if (url.pathname.startsWith("/api/events/") && request.method === "GET") return handleEvents(url, env, ctx, fetchImpl);
   if (url.pathname === "/api/quotes" && request.method === "GET") return handleQuotes(url, env, ctx, fetchImpl);
-  if (url.pathname === "/api/kind/probe") {
-    // 임시: Cloudflare에서 KIND(kind.krx.co.kr)에 접속되는지 확인
-    const ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
-    const tries = [
-      ["main", "https://kind.krx.co.kr/main.do", { headers: { "User-Agent": ua } }],
-      ["today", "https://kind.krx.co.kr/disclosure/todaydisclosure.do", {
-        method: "POST",
-        headers: { "User-Agent": ua, "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", Referer: "https://kind.krx.co.kr/disclosure/todaydisclosure.do?method=searchTodayDisclosureMain" },
-        body: "method=searchTodayDisclosureSub&currentPageSize=100&pageIndex=1&orderMode=0&orderStat=D&forward=todaydisclosure_sub&marketType=&searchMode=&searchCodeType=&chose=S&todayFlag=Y&repIsuSrtCd=&kosdaqSegment=&selDate=",
-      }],
-    ];
-    const out = {};
-    for (const [k, u, o] of tries) {
-      try {
-        const r = await fetchImpl(u, { ...o, redirect: "manual" });
-        const t = await r.text();
-        out[k] = { status: r.status, len: t.length, head: url.searchParams.get("raw") === k ? t : t.replace(/\s+/g, " ").slice(0, 300), colo: request.cf && request.cf.colo };
-      } catch (e) {
-        out[k] = { error: String(e.message).slice(0, 200) };
-      }
-    }
-    return json(out);
+  if (url.pathname === "/api/kind/today" && request.method === "GET") {
+    // 오늘 KIND 공시 전체(새로고침 때 DART와 맞춰보기용). 1분 캐시, fresh=1이면 바로 받는다.
+    return cached(`kind/today?d=${todayKst()}`, 60, url.searchParams.get("fresh") === "1", ctx,
+      async () => ({ date: todayKst(), ...(await fetchKindToday(fetchImpl)), fetched_at: new Date().toISOString() }));
   }
   if (url.pathname === "/api/status") {
     return json({ today: todayKst(), api_key_set: Boolean(env.DART_API_KEY), categories: TRADE_CATEGORIES.map(([name]) => name) });

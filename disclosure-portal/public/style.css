@@ -339,6 +339,7 @@ td.flr { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: 
 .tag.imp { background: var(--danger-soft); color: #c4262c; }
 .tag.krx { background: #fff1e6; color: #c25400; }
 .tag.cat { background: #f3effe; color: #6b4fd8; }
+.tag.kindsrc { background: #fff1e6; color: #c25400; border: 1px solid #ffd8b5; }
 .tag.fix { background: var(--line-soft); color: var(--faint); }
 
 .empty { padding: 48px 16px; text-align: center; color: var(--faint); margin: 0; }

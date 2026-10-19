@@ -472,6 +472,7 @@
       ...it.categories.map((c) => `<span class="tag cat">${esc(c)}</span>`),
       ...it.tags.map((t) => `<span class="tag ${it.important ? "imp" : ""}">${esc(t)}</span>`),
       it.is_correction ? `<span class="tag fix">정정</span>` : "",
+      it.source === "KIND" ? `<span class="tag kindsrc" title="KIND에서 직접 확인, DART 반영 전">KIND</span>` : "",
     ].join("");
     return `<tr class="${cls}" data-id="${it.rcept_no}">
       <td class="time">${time}</td>
@@ -829,11 +830,14 @@
     renderCal();
     const q = fresh ? "&fresh=1" : "";
     try {
-      const [c, cap, exch] = await Promise.all([
+      // 순서 주의: 후보(합병 등·공개매수), 증자, 거래소 공시, KIND — 아래 구조분해와 같은 순서
+      const fetched = await Promise.all([
         fetchJSON(`/api/events/candidates?x=1${q}`),
-        fetchJSON(`/api/events/exchange-candidates?x=1${q}`).catch(() => ({ items: [] })),
         fetchJSON(`/api/events/capital-candidates?x=1${q}`).catch(() => ({ items: [] })), // 증자는 실패해도 나머지는 보여준다
+        fetchJSON(`/api/events/exchange-candidates?x=1${q}`).catch(() => ({ items: [] })),
+        fresh ? fetchJSON("/api/kind/today?fresh=1").catch((e) => ({ error: e.message })) : Promise.resolve(null),
       ]);
+      const [c, cap, exch, kindToday] = fetched;
       // 거래소 공시로 먼저 뜬 결정: 같은 회사·같은 종류의 DART 주요사항보고서가 이미 있으면 그쪽을 쓴다
       const haveDeal = new Set(c.deals.map((d) => `${d.corp_code}:${d.kind}`));
       const deals = [...c.deals, ...exch.items.filter((x) => !haveDeal.has(`${x.corp_code}:${x.kind}`))];
@@ -878,6 +882,32 @@
         const added = out.filter((e) => !before.has(e.id));
         for (const e of added) cal.newIds.add(e.id);
         if (added.length) toast(`📅 캘린더에 새 일정 ${added.length}건: ${added.slice(0, 3).map((e) => `${e.name}(${e.type === "tender" ? "공개매수" : e.type === "capital" ? e.kind : "매수청구"})`).join(", ")}`);
+      }
+      // 새로고침 때 KIND 오늘 공시에서 DART에 아직 안 들어온 공개매수·매수청구·무상증자 결정을 "미정"으로 먼저 표시
+      cal.kindNote = null;
+      if (kindToday) {
+        if (kindToday.error) cal.kindNote = `KIND 확인 실패`;
+        else {
+          const known = new Set([...c.deals, ...exch.items, ...cap.items, ...c.tenders].flatMap((x) => [x.rcept_no, x.first_rcept_no]).filter(Boolean));
+          const have = new Set(out.map((e) => `${e.name}|${e.type}`));
+          const pending = [];
+          for (const it of kindToday.items) {
+            if (!inScope(it) || known.has(it.rcept_no)) continue;
+            const title = it.report_nm.replace(/\s/g, "");
+            if (/자회사|종속회사|철회/.test(title)) continue;
+            const type = /공개매수신고서/.test(title) ? "tender"
+              : /(회사합병|회사분할합병|주식교환|영업양수|영업양도|회사분할|중요한자산양수도)[ㆍ·이전]*결정/.test(title) ? "buyback"
+              : /(무상증자|유무상증자)결정/.test(title) ? "capital" : null;
+            if (!type || have.has(`${it.corp_name}|${type}`)) continue;
+            have.add(`${it.corp_name}|${type}`);
+            pending.push({
+              type, id: `kind:${it.rcept_no}`, kind: `${it.report_nm} (KIND)`, name: it.corp_name, code: it.stock_code, market: it.market,
+              start: null, end: null, rcept_no: it.rcept_no, from_kind: true, announced: it.rcept_no.slice(0, 8), sub: type === "capital" ? "pending" : undefined,
+            });
+          }
+          out.push(...pending);
+          cal.kindNote = `KIND 확인 ${nowKst().slice(0, 5)}${pending.length ? ` · DART 반영 전 ${pending.length}건` : ""}`;
+        }
       }
       cal.events = out;
       cal.failed = failed;
@@ -984,6 +1014,7 @@
       e.sub === "record" ? "이날 주주명부 기준으로 신주 배정 — 권리락은 보통 하루 전 영업일" : "",
       e.sub === "cert" ? "신주인수권증서 상장(매매)기간" : "",
       e.withdrawn ? "결정 뒤 철회 공시 — 원문 확인" : "",
+      e.from_kind ? "KIND 공시 — DART 반영 전이라 일정 확인 중" :
       e.from_exchange ? "거래소 공시 기준(DART 주요사항보고서 나오면 대체)" : e.source === "본문" ? "기간은 보고서 본문 기준" : "",
       e.memo ? esc(e.memo) : "",
       e.manual ? "직접 추가" : "",
@@ -1003,7 +1034,7 @@
       <td class="note">${notes}</td>
       <td>${e.manual
         ? `<button class="linkbtn del" data-caldel="${esc(e.id)}">삭제</button>`
-        : `<a class="linkbtn" href="https://dart.fss.or.kr/dsaf001/main.do?rcpNo=${esc(e.rcept_no)}" target="_blank" rel="noopener">원문</a>`}</td>
+        : `<a class="linkbtn" href="${e.from_kind ? "https://kind.krx.co.kr/common/disclsviewer.do?method=search&acptno=" : "https://dart.fss.or.kr/dsaf001/main.do?rcpNo="}${esc(e.rcept_no)}" target="_blank" rel="noopener">원문</a>`}</td>
     </tr>`;
   }
 
@@ -1047,7 +1078,7 @@
     else empty.hidden = true;
     if (!cal.loading) {
       $("calMeta").textContent = cal.loadedAt
-        ? `공개매수 ${allEvents().filter((e) => e.type === "tender").length} · 매수청구 ${allEvents().filter((e) => e.type === "buyback").length} · 증자 ${new Set(allEvents().filter((e) => e.type === "capital").map((e) => e.name)).size}건 · ${cal.loadedAt} 업데이트${cal.failed ? ` · ${cal.failed}건 실패` : ""}`
+        ? `공개매수 ${allEvents().filter((e) => e.type === "tender").length} · 매수청구 ${allEvents().filter((e) => e.type === "buyback").length} · 증자 ${new Set(allEvents().filter((e) => e.type === "capital").map((e) => e.name)).size}건 · ${cal.loadedAt} 업데이트${cal.kindNote ? ` · ${cal.kindNote}` : ""}${cal.failed ? ` · ${cal.failed}건 실패` : ""}`
         : "";
     }
   }
@@ -1335,23 +1366,33 @@
     btn.classList.add("busy");
     $("refreshText").textContent = "대사 중…";
     try {
-      const list = isRange
-        ? await fetchRange(range.from, range.to, true, (d, t) => { $("refreshText").textContent = `대사 중 ${Math.round((d / t) * 100)}%`; })
-        : await fetchAll(date, true);
+      // 오늘이 포함되면 KIND 오늘 공시도 같이 받아 DART에 아직 안 올라온 공시를 채운다(접수번호가 같다)
+      const withKind = isRange ? range.to >= state.today : date === state.today;
+      const [dart, kind] = await Promise.all([
+        isRange
+          ? fetchRange(range.from, range.to, true, (d, t) => { $("refreshText").textContent = `대사 중 ${Math.round((d / t) * 100)}%`; })
+          : fetchAll(date, true),
+        withKind ? fetchJSON("/api/kind/today?fresh=1").catch((e) => ({ error: e.message })) : Promise.resolve(null),
+      ]);
       if (token !== loadToken) return;
       const t = nowKst();
+      const dartOnlyIds = new Set(dart.map((it) => it.rcept_no));
+      const kindOnly = kind && kind.items ? kind.items.filter((it) => !dartOnlyIds.has(it.rcept_no)) : [];
+      const list = [...kindOnly, ...dart]; // KIND에만 있는 건 가장 최근 것이라 맨 앞
       const dartIds = new Set(list.map((it) => it.rcept_no));
       const added = list.filter((it) => inScope(it) && !before.has(it.rcept_no)).map((it) => it.rcept_no);
       const gone = [...before.values()].filter((it) => inScope(it) && !dartIds.has(it.rcept_no));
       const beforeScoped = [...before.values()].filter(inScope).length;
       const markNew = before.size > 0;
-      setAll(list, (it) => (before.has(it.rcept_no) ? before.get(it.rcept_no).first_seen : markNew && !isRange && date === state.today ? t : null));
+      setAll(list, (it) => (before.has(it.rcept_no) ? before.get(it.rcept_no).first_seen : it.kind_time ? `${it.kind_time}:00` : markNew && !isRange && date === state.today ? t : null));
       if (isRange) $("rangeProgress").textContent = `${list.length.toLocaleString()}건`;
       state.freshIds = new Set(markNew ? added : []);
       state.lastChecked = t;
       state.error = null;
       render();
-      showRecon({ dart_count: list.filter(inScope).length, checked_at: t }, added, gone, null, beforeScoped);
+      const kindNote = !kind ? "" : kind.error ? `실패 (${kind.error})`
+        : `${kind.items.filter(inScope).length.toLocaleString()}건 · DART에 아직 없는 공시 ${kindOnly.filter(inScope).length}건${kindOnly.filter(inScope).length ? " 추가" : ""}`;
+      showRecon({ dart_count: dart.filter(inScope).length, checked_at: t, kind: kindNote || null, kind_skipped: !kind }, added, gone, null, beforeScoped);
     } catch (e) {
       if (token === loadToken) showRecon(null, [], [], e.message);
     } finally {
@@ -1382,7 +1423,7 @@
       `<b>${match ? "✓ 일치" : "차이 있음 → DART 기준으로 맞춤"}</b> · ${res.checked_at} 대사 · ` +
       `DART 원본(코스피·코스닥) <b class="num">${res.dart_count.toLocaleString()}</b>건` +
       ` (그중 거래소·KIND 공시 ${scoped().filter((it) => it.is_exchange).length.toLocaleString()}건)` +
-      `${res.kind ? ` · KIND 직접 확인 ${res.kind}` : ""} / ` +
+      `${res.kind ? ` · KIND 직접 확인(코스피·코스닥 오늘) ${res.kind}` : res.kind_skipped ? " · KIND는 오늘 공시만 확인" : ""} / ` +
       `화면 <b class="num">${shown.toLocaleString()}</b>건 (새로고침 전 ${beforeCount.toLocaleString()}건)`,
     ];
     if (added.length) lines.push(`새로 채워진 공시 <b>${added.length}</b>건 (파란색 표시)<br>${names(added)}${added.length > 5 ? "<br>…" : ""}`);
