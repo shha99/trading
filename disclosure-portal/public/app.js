@@ -545,12 +545,21 @@
     }
     $("watchCount").textContent = state.watch.length;
     $("watchEmpty").hidden = state.watch.length > 0;
+    // 접혔을 때 바에 보이는 칩(이름 + 오늘 건수). 누르면 그 종목 공시만 본다
+    const chips = state.watch.slice(0, 8).map((w) => {
+      const k = watchKey(w);
+      const n = counts.get(k) || 0;
+      return `<span class="wchip ${state.selected === k ? "sel" : ""}" data-chip="${esc(k)}">${esc(w.name || w.code)}${n ? ` <b>${n}</b>` : ""}</span>`;
+    });
+    if (state.watch.length > 8) chips.push(`<span class="wchip more">+${state.watch.length - 8}</span>`);
+    $("watchChips").innerHTML = state.watch.length ? chips.join("") : '<span class="wchip more">눌러서 종목 추가</span>';
+
     $("watchList").innerHTML = state.watch.map((w) => {
       const k = watchKey(w);
       const n = counts.get(k) || 0;
       return `<li data-key="${esc(k)}" class="${state.selected === k ? "sel" : ""}">
         <span class="nm">${esc(w.name || w.code)}</span>
-        ${w.code ? `<span class="cd">${esc(w.code)}</span>` : ""}
+        ${w.code && w.name ? `<span class="cd">${esc(w.code)}</span>` : ""}
         <span class="n ${n ? "has" : ""}">${n}건</span>
         <button class="x" data-remove="${esc(k)}" title="삭제">×</button>
       </li>`;
@@ -1200,6 +1209,17 @@
       if (it) toggleWatchFor(it);
     });
 
+    $("watchToggle").addEventListener("click", (e) => {
+      const chip = e.target.closest("[data-chip]");
+      if (chip) { // 칩을 누르면 펼치지 않고 그 종목만 본다
+        state.selected = state.selected === chip.dataset.chip ? null : chip.dataset.chip;
+        setTab(state.selected ? "watch" : state.tab);
+        return;
+      }
+      setWatchOpen(!$("watchPanel").classList.contains("open"));
+      if ($("watchPanel").classList.contains("open")) $("addInput").focus();
+    });
+
     $("watchList").addEventListener("click", (e) => {
       const rm = e.target.closest("[data-remove]");
       if (rm) { removeWatch(rm.dataset.remove); render(); return; }
@@ -1276,6 +1296,7 @@
     $("todayBtn").addEventListener("click", () => loadDate(state.today));
 
     bindCalendar();
+    initWatchOpen();
     $("viewNav").addEventListener("click", (e) => {
       const b = e.target.closest("button[data-view]");
       if (b && b.dataset.view !== state.view) setView(b.dataset.view);
@@ -1432,6 +1453,20 @@
         gone.slice(0, 5).map((it) => `${esc(it.corp_name)} – ${esc(it.report_nm)}`).join("<br>"));
     }
     $("reconBody").innerHTML = lines.join("<br>");
+  }
+
+  // 관심종목 패널 펼침/접힘 — 브라우저에 기억(기본은 접힘)
+  const WATCH_OPEN_KEY = "disclosure-portal.watch-open.v1";
+  function setWatchOpen(open) {
+    $("watchPanel").classList.toggle("open", open);
+    $("watchToggle").setAttribute("aria-expanded", String(open));
+    document.querySelector(".layout").classList.toggle("watch-collapsed", !open);
+    try { localStorage.setItem(WATCH_OPEN_KEY, open ? "1" : "0"); } catch { /* 무시 */ }
+  }
+  function initWatchOpen() {
+    let open = false;
+    try { open = localStorage.getItem(WATCH_OPEN_KEY) === "1"; } catch { /* 무시 */ }
+    setWatchOpen(open);
   }
 
   function setTab(tab) {

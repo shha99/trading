@@ -156,20 +156,24 @@
   </section>
 
   <main class="layout" id="discView">
-    <aside class="watch">
-      <div class="watch-head">
-        <h2>관심종목 <span class="count" id="watchCount">0</span></h2>
-      </div>
-      <form id="addForm" class="add">
-        <input id="addInput" list="corpList" placeholder="종목코드 또는 회사명" autocomplete="off" />
-        <button type="submit">추가</button>
-        <datalist id="corpList"></datalist>
-      </form>
-      <ul id="watchList" class="watch-list"></ul>
-      <p class="watch-empty" id="watchEmpty">목록의 ☆를 누르거나 위에서 추가하세요.</p>
-      <div class="watch-foot">
-        <button id="exportBtn" class="ghost small">링크로 내보내기</button>
-        <p class="hint">관심종목은 이 브라우저에 저장돼 사이트를 다시 배포해도 유지됩니다. 다른 기기로 옮길 때는 링크를 복사해 열면 됩니다.</p>
+    <aside class="watch" id="watchPanel">
+      <button type="button" class="watch-toggle" id="watchToggle" aria-expanded="false" title="관심종목 펼치기/접기">
+        <span class="wt-title">관심종목 <span class="count" id="watchCount">0</span></span>
+        <span class="wt-chips" id="watchChips"></span>
+        <span class="caret" aria-hidden="true"></span>
+      </button>
+      <div class="watch-body" id="watchBody">
+        <form id="addForm" class="add">
+          <input id="addInput" list="corpList" placeholder="종목코드 또는 회사명" autocomplete="off" />
+          <button type="submit">추가</button>
+          <datalist id="corpList"></datalist>
+        </form>
+        <ul id="watchList" class="watch-list"></ul>
+        <p class="watch-empty" id="watchEmpty">목록의 ☆를 누르거나 위에서 추가하세요.</p>
+        <div class="watch-foot">
+          <button id="exportBtn" class="ghost small">링크로 내보내기</button>
+          <p class="hint">관심종목은 이 브라우저에 저장돼 사이트를 다시 배포해도 유지됩니다. 다른 기기로 옮길 때는 링크를 복사해 열면 됩니다.</p>
+        </div>
       </div>
     </aside>
 

@@ -35,7 +35,7 @@ button { cursor: pointer; }
 /* ---- 상단 ---- */
 .topbar {
   position: sticky; top: 0; z-index: 5;
-  display: flex; align-items: center; gap: 24px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 20px;
   padding: 14px 28px;
   background: rgba(255, 255, 255, 0.96);
   backdrop-filter: blur(6px);
@@ -48,7 +48,7 @@ button { cursor: pointer; }
   background: var(--accent); color: #fff; font-weight: 700; font-size: 13px;
 }
 h1 { margin: 0; font-size: 18px; font-weight: 700; letter-spacing: -0.2px; }
-.sub { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+.sub { margin: 2px 0 0; color: var(--muted); font-size: 12px; white-space: nowrap; }
 
 .views { display: inline-flex; gap: 2px; padding: 3px; border-radius: 10px; background: var(--line-soft); }
 .views button { border: 0; background: none; padding: 7px 14px; border-radius: 8px; font-weight: 600; color: var(--muted); white-space: nowrap; }
@@ -197,7 +197,7 @@ td.note { font-size: 12.5px; color: var(--muted); }
 .recon .num { font-variant-numeric: tabular-nums; }
 
 .datenav { display: flex; align-items: center; gap: 6px; }
-.datenav input, .datenav button {
+.datenav input, .datenav button { white-space: nowrap; flex: none;
   height: 34px; border: 1px solid var(--line); background: #fff; border-radius: 8px; padding: 0 10px;
 }
 .datenav button:hover { background: var(--line-soft); }
@@ -238,7 +238,28 @@ td.note { font-size: 12.5px; color: var(--muted); }
   align-self: start; position: sticky; top: 86px;
   border: 1px solid var(--line); border-radius: 14px; padding: 18px; background: var(--panel);
 }
-.watch-head h2 { margin: 0 0 12px; font-size: 15px; font-weight: 700; }
+.watch-toggle {
+  display: flex; align-items: center; gap: 10px; width: 100%; padding: 0; border: 0; background: none; text-align: left;
+}
+.watch-toggle .wt-title { font-size: 15px; font-weight: 700; white-space: nowrap; }
+.watch-toggle .wt-chips { display: none; flex: 1; min-width: 0; gap: 6px; overflow: hidden; }
+.watch-toggle .caret { margin-left: auto; flex: none; color: var(--muted); font-size: 12px; font-weight: 600; padding: 3px 8px; border: 1px solid var(--line); border-radius: 6px; }
+.watch-toggle .caret::before { content: "펼치기 ▾"; }
+.watch.open .watch-toggle .caret::before { content: "접기 ▴"; }
+.watch-body { margin-top: 12px; }
+.watch:not(.open) .watch-body { display: none; }
+
+/* 접힌 상태: 공시 목록 위에 한 줄짜리 바 */
+.layout.watch-collapsed { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.watch:not(.open) { position: static; padding: 8px 14px; border-radius: 10px; }
+.watch:not(.open) .watch-toggle .wt-chips { display: flex; }
+.wchip {
+  flex: none; display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 999px;
+  background: var(--line-soft); font-size: 12px; color: var(--text); white-space: nowrap; cursor: pointer;
+}
+.wchip b { color: var(--accent); font-weight: 700; }
+.wchip.sel { background: var(--accent-soft); }
+.wchip.more { color: var(--muted); cursor: default; }
 .count {
   display: inline-block; min-width: 22px; padding: 1px 7px; margin-left: 4px; border-radius: 999px;
   background: var(--accent-soft); color: var(--accent); font-size: 12px; text-align: center;
@@ -275,7 +296,7 @@ td.note { font-size: 12.5px; color: var(--muted); }
 
 .filters { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 14px 0; }
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
-.seg button { border: 0; background: #fff; padding: 6px 12px; color: var(--muted); }
+.seg button { white-space: nowrap; border: 0; background: #fff; padding: 6px 12px; color: var(--muted); }
 .seg button + button { border-left: 1px solid var(--line); }
 .seg button.on { background: var(--text); color: #fff; }
 .chk { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); cursor: pointer; user-select: none; }
