@@ -10,7 +10,7 @@
 import { DartError, TRADE_CATEGORIES, fetchDay, fetchPage } from "./dart.js";
 import { MARKET_KINDS, MarketError, fetchMarketList, fetchQuotes } from "./market.js";
 import { KindError, fetchKindToday } from "./kind.js";
-import { DEAL_APIS, fetchCandidates, fetchCapital, fetchCapitalCandidates, fetchDeal, fetchExchangeCandidates, fetchTender } from "./events.js";
+import { DEAL_APIS, fetchCandidates, fetchCapital, fetchCapitalCandidates, fetchDeal, fetchExchangeCandidates, fetchSplit, fetchSplitCandidates, fetchTender } from "./events.js";
 
 const TODAY_TTL = 15; // 오늘 목록 캐시(초) — 탭 여러 개를 열어도 DART 호출이 늘지 않게
 const PAST_TTL = 600; // 지난 날짜는 거의 안 바뀐다
@@ -122,6 +122,18 @@ async function handleEvents(url, env, ctx, fetchImpl) {
   if (part === "exchange-candidates") {
     const today = todayKst();
     return cached(`events/exchange-candidates?d=${today}`, EVENTS_TTL, fresh, ctx, async () => ({ today, items: await fetchExchangeCandidates(env.DART_API_KEY, today, fetchImpl) }));
+  }
+  if (part === "split-candidates") {
+    const today = todayKst();
+    const w = Number(url.searchParams.get("w") || "0");
+    if (![0, 1, 2].includes(w)) return json({ detail: "w는 0, 1, 2 중 하나여야 합니다." }, 400);
+    return cached(`events/split-candidates?d=${today}&w=${w}`, w === 0 ? EVENTS_TTL : DEAL_TTL, fresh, ctx,
+      async () => ({ today, items: await fetchSplitCandidates(env.DART_API_KEY, today, w, fetchImpl) }));
+  }
+  if (part === "split") {
+    const rcept = url.searchParams.get("rcept_no") || "";
+    if (!/^\d{14}$/.test(rcept)) return json({ detail: "rcept_no가 잘못됐습니다." }, 400);
+    return cached(`events/split?r=${rcept}`, DEAL_TTL, fresh, ctx, async () => ({ event: await fetchSplit(env.DART_API_KEY, rcept, fetchImpl) }));
   }
   if (part === "capital-candidates") {
     const today = todayKst();

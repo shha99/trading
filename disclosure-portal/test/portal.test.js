@@ -394,3 +394,11 @@ test("/api/kind/today: KIND 페이지를 받아 DART 항목 모양으로", async
   const bad = await handle(req("/api/kind/today?fresh=1"), env(), ctx, async () => new Response("<html>점검중</html>"));
   assert.equal(bad.status, 502);
 });
+
+import { parseSplitText } from "../src/events.js";
+test("액면변경(병합·분할) 본문 일정 — 유가(매매거래정지기간)·코스닥(매매거래정지예정기간) 둘 다", () => {
+  const y = parseSplitText("1주당 가액(원) 339 1,017 발행주식총수 … 주주총회예정일 2026-11-10 구주권제출기간 시작일 - 종료일 - 신주의 효력발생일 2026-11-26 매매거래정지기간 시작일 2026-11-24 종료일 2027-01-12 명의개서정지기간 시작일 - 종료일 - 신주권상장예정일 2027-01-13");
+  assert.deepEqual(y, { gm_date: "20261110", effective: "20261126", halt_start: "20261124", halt_end: "20270112", listing: "20270113", par_before: 339, par_after: 1017 });
+  const k = parseSplitText("1주당 가액(원) 500 2,500 … 신주의 효력발생일 2026-12-29 매매거래정지예정기간 시작일 2026-12-24 종료일 2027-01-18 명의개서정지기간 - 신주권교부예정일 - 신주권상장예정일 2027-01-19");
+  assert.deepEqual([k.halt_start, k.halt_end, k.listing, k.par_after], ["20261224", "20270118", "20270119", 2500]);
+});

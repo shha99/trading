@@ -847,10 +847,25 @@
         fresh ? fetchJSON("/api/kind/today?fresh=1").catch((e) => ({ error: e.message })) : Promise.resolve(null),
       ]);
       const [c, cap, exch, kindToday] = fetched;
+      // 액면변경(분할·병합): 거래소 공시가 많아 30일씩 세 번 나눠 받고, 회사별 최신 결정만 남긴다
+      const splitLists = await Promise.all([0, 1, 2].map((w) => fetchJSON(`/api/events/split-candidates?w=${w}${q}`).catch(() => ({ items: [] }))));
+      const splits = new Map();
+      for (const list of [...splitLists].reverse()) for (const x of list.items) splits.set(x.corp_code, { ...(splits.get(x.corp_code) || {}), ...x, first_rcept_no: (splits.get(x.corp_code) || x).first_rcept_no });
       // 거래소 공시로 먼저 뜬 결정: 같은 회사·같은 종류의 DART 주요사항보고서가 이미 있으면 그쪽을 쓴다
       const haveDeal = new Set(c.deals.map((d) => `${d.corp_code}:${d.kind}`));
       const deals = [...c.deals, ...exch.items.filter((x) => !haveDeal.has(`${x.corp_code}:${x.kind}`))];
       const jobs = [
+        // 액면변경: 신주 효력발생일(기준일), 매매거래정지 기간, 신주권 상장예정일
+        ...[...splits.values()].filter((x) => !x.withdrawn).map((x) => async () => {
+          const e = (await fetchJSON(`/api/events/split?rcept_no=${x.rcept_no}${q}`)).event;
+          const par = e.par_before && e.par_after ? `액면 ${e.par_before.toLocaleString()}→${e.par_after.toLocaleString()}원` : "";
+          const base = { type: "split", name: x.corp_name, code: x.stock_code, market: x.market, rcept_no: x.rcept_no, announced: x.first_rcept_no.slice(0, 8), par, gm_date: e.gm_date, split_kind: x.kind };
+          const out = [];
+          if (e.effective) out.push({ ...base, id: `split:${x.corp_code}:eff`, sub: "effective", kind: `효력발생일·${x.kind}`, start: e.effective, end: e.effective });
+          if (e.halt_start) out.push({ ...base, id: `split:${x.corp_code}:halt`, sub: "halt", kind: `거래정지·${x.kind}`, start: e.halt_start, end: e.halt_end || e.halt_start });
+          if (e.listing) out.push({ ...base, id: `split:${x.corp_code}:list`, sub: "relist", kind: `변경상장·${x.kind}`, start: e.listing, end: e.listing });
+          return out;
+        }),
         // 증자: 신주인수권증서 상장기간, 신주 상장예정일 → 일정 두 개로 나눈다
         ...cap.items.map((x) => async () => {
           const r = await fetchJSON(`/api/events/capital?rcept_no=${x.rcept_no}${q}`);
@@ -959,7 +974,7 @@
     const hidePast = $("calHidePast").checked;
     const watchOnly = $("calWatchOnly").checked;
     return allEvents().filter((e) =>
-      (e.type === "tender" ? tender : e.type === "capital" ? $("calCapital").checked : buyback) &&
+      (e.type === "tender" ? tender : e.type === "capital" ? $("calCapital").checked : e.type === "split" ? $("calSplit").checked : buyback) &&
       (!hidePast || status(e).key !== "done") &&
       (!watchOnly || state.watch.some((w) => w.code === e.code)));
   }
@@ -984,12 +999,13 @@
       for (const e of events) {
         if (activeOn(e, d)) active++;
         const w = isWatchedCode(e.code) ? "watched" : "";
-        if (e.sub === "listing" || e.sub === "record") { // 신주 상장일·신주배정기준일은 하루짜리
-          const label = e.sub === "listing" ? "◆ " + esc(e.name) + " 신주상장" : "● " + esc(e.name) + " 배정기준일";
-          if (e.start === d) chips.push(`<span class="ev capital ${e.sub === "listing" ? "end" : ""} ${w}" title="${esc(e.name)} ${esc(e.kind)}">${label}</span>`);
+        if (e.sub === "listing" || e.sub === "record" || e.sub === "effective" || e.sub === "relist") { // 하루짜리 일정
+          const label = { listing: "◆ {n} 신주상장", record: "● {n} 배정기준일", effective: "● {n} 액면변경 기준일", relist: "◆ {n} 변경상장" }[e.sub].replace("{n}", esc(e.name));
+          const solid = e.sub === "listing" || e.sub === "relist";
+          if (e.start === d) chips.push(`<span class="ev ${e.type} ${solid ? "end" : ""} ${w}" title="${esc(e.name)} ${esc(e.kind)}">${label}</span>`);
           continue;
         }
-        const tag = e.sub === "cert" ? " 증서" : "";
+        const tag = e.sub === "cert" ? " 증서" : e.sub === "halt" ? " 거래정지" : "";
         if (e.start === d) chips.push(`<span class="ev ${e.type} ${w}" title="${esc(e.name)} ${esc(e.kind)} 시작">▶ ${esc(e.name)}${tag}</span>`);
         if (e.end === d) chips.push(`<span class="ev ${e.type} end ${w}" title="${esc(e.name)} ${esc(e.kind)} 마감">■ ${esc(e.name)}${tag} 마감</span>`);
       }
@@ -1013,7 +1029,7 @@
     const cur = q && q.price;
     const gap = e.price && cur ? ((e.price - cur) / cur) * 100 : null;
     const gapCls = gap === null ? "" : gap > 0 ? "up" : gap < 0 ? "down" : "";
-    const period = e.sub === "listing" ? `${fmtMD(e.start)} 상장` : e.sub === "record" ? `${fmtMD(e.start)} 기준일` : e.start || e.end ? `${e.start ? fmtMD(e.start) : "?"} ~ ${e.end ? fmtMD(e.end) : "?"}${e.estimated ? ' <span class="est">(추정)</span>' : ""}` : "미정";
+    const period = e.sub === "listing" || e.sub === "relist" ? `${fmtMD(e.start)} 상장` : e.sub === "record" || e.sub === "effective" ? `${fmtMD(e.start)} 기준일` : e.start || e.end ? `${e.start ? fmtMD(e.start) : "?"} ~ ${e.end ? fmtMD(e.end) : "?"}${e.estimated ? ' <span class="est">(추정)</span>' : ""}` : "미정";
     const notes = [
       e.type === "tender" && e.offeror ? `공개매수자 ${esc(e.offeror)}` : "",
       e.partner ? `상대 ${esc(e.partner)}` : "",
@@ -1022,13 +1038,16 @@
       e.record_date && e.sub !== "record" ? `배정기준일 ${fmtMD(e.record_date)}` : "",
       e.sub === "record" ? "이날 주주명부 기준으로 신주 배정 — 권리락은 보통 하루 전 영업일" : "",
       e.sub === "cert" ? "신주인수권증서 상장(매매)기간" : "",
+      e.par || "",
+      e.sub === "effective" ? "신주 효력발생일 — 이날 기준으로 주식 수가 바뀜" : "",
+      e.sub === "halt" ? "매매거래정지 기간" : "",
       e.withdrawn ? "결정 뒤 철회 공시 — 원문 확인" : "",
       e.from_kind ? "KIND 공시 — DART 반영 전이라 일정 확인 중" :
       e.from_exchange ? "거래소 공시 기준(DART 주요사항보고서 나오면 대체)" : e.source === "본문" ? "기간은 보고서 본문 기준" : "",
       e.memo ? esc(e.memo) : "",
       e.manual ? "직접 추가" : "",
     ].filter(Boolean).join(" · ");
-    const kindLabel = e.type === "tender" ? "공개매수" : e.type === "capital" ? e.kind : `매수청구·${e.kind || ""}`.replace(/·$/, "");
+    const kindLabel = e.type === "tender" ? "공개매수" : e.type === "capital" || e.type === "split" ? e.kind : `매수청구·${e.kind || ""}`.replace(/·$/, "");
     return `<tr class="${watched ? "watched" : ""} ${st.key === "done" && !pinned ? "past" : ""} ${pinned ? "pinned" : ""}">
       <td><span class="st ${st.key}">${st.label}</span>${pinned && e.announced ? `<div class="ann">공시 ${fmtMD(e.announced)}</div>` : ""}</td>
       <td class="kind-cell"><span class="kind ev ${e.type}">${esc(kindLabel)}</span></td>
@@ -1087,7 +1106,7 @@
     else empty.hidden = true;
     if (!cal.loading) {
       $("calMeta").textContent = cal.loadedAt
-        ? `공개매수 ${allEvents().filter((e) => e.type === "tender").length} · 매수청구 ${allEvents().filter((e) => e.type === "buyback").length} · 증자 ${new Set(allEvents().filter((e) => e.type === "capital").map((e) => e.name)).size}건 · ${cal.loadedAt} 업데이트${cal.kindNote ? ` · ${cal.kindNote}` : ""}${cal.failed ? ` · ${cal.failed}건 실패` : ""}`
+        ? `공개매수 ${allEvents().filter((e) => e.type === "tender").length} · 매수청구 ${allEvents().filter((e) => e.type === "buyback").length} · 증자 ${new Set(allEvents().filter((e) => e.type === "capital").map((e) => e.name)).size} · 액면변경 ${new Set(allEvents().filter((e) => e.type === "split").map((e) => e.name)).size}건 · ${cal.loadedAt} 업데이트${cal.kindNote ? ` · ${cal.kindNote}` : ""}${cal.failed ? ` · ${cal.failed}건 실패` : ""}`
         : "";
     }
   }
@@ -1096,7 +1115,7 @@
     $("calPrev").addEventListener("click", () => { state.cal.month = shiftMonth(state.cal.month, -1); renderCal(); });
     $("calNext").addEventListener("click", () => { state.cal.month = shiftMonth(state.cal.month, 1); renderCal(); });
     $("calThisMonth").addEventListener("click", () => { state.cal.month = state.today.slice(0, 6); renderCal(); });
-    for (const id of ["calTender", "calBuyback", "calCapital", "calHidePast", "calWatchOnly"]) {
+    for (const id of CAL_PREF_IDS) {
       $(id).addEventListener("change", () => { saveCalPrefs(); renderCal(); });
     }
     loadCalPrefs();
@@ -1157,7 +1176,7 @@
 
   // 체크박스 상태는 브라우저에 기억한다
   const CAL_PREFS_KEY = "disclosure-portal.calendar-prefs.v1";
-  const CAL_PREF_IDS = ["calTender", "calBuyback", "calCapital", "calHidePast", "calWatchOnly"];
+  const CAL_PREF_IDS = ["calTender", "calBuyback", "calCapital", "calSplit", "calHidePast", "calWatchOnly"];
   function saveCalPrefs() {
     try { localStorage.setItem(CAL_PREFS_KEY, JSON.stringify(Object.fromEntries(CAL_PREF_IDS.map((id) => [id, $(id).checked])))); } catch { /* 무시 */ }
   }

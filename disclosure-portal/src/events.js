@@ -354,3 +354,53 @@ export async function fetchExchangeCandidates(apiKey, today, fetchImpl = fetch) 
   }
   return [...out.values()];
 }
+
+// ---- 액면변경(주식분할·병합) ----
+// 거래소 공시(수시공시 I001) "주식분할결정"/"주식병합결정"에 일정이 있다. 거래소 공시는 양이 많아 30일씩
+// 창을 나눠(w=0: 최근 30일, 1: 31~60일 전, 2: 61~90일 전) 따로 부른다 — 요청당 외부 호출 한도 때문.
+// 철회 공시가 나오면 그 회사 건은 철회로 본다.
+export async function fetchSplitCandidates(apiKey, today, w = 0, fetchImpl = fetch) {
+  const end = addDays(today, -30 * w);
+  const bgn = addDays(end, -29);
+  const rows = (await Promise.all([...SCOPE].map((cls) =>
+    listAll(apiKey, { bgn_de: bgn, end_de: end, corp_cls: cls, pblntf_detail_ty: "I001" }, fetchImpl)))).flat();
+  rows.sort((a, b) => a.rcept_no.localeCompare(b.rcept_no));
+  const out = new Map();
+  for (const r of rows) {
+    const title = r.report_nm.replace(/\s/g, "");
+    const m = title.match(/주식(분할|병합)결정|액면(분할|병합)/);
+    if (!m || title.includes("자회사") || title.includes("종속회사")) continue;
+    const kind = (m[1] || m[2]) === "분할" ? "액면분할" : "액면병합";
+    const prev = out.get(r.corp_code);
+    out.set(r.corp_code, {
+      corp_code: r.corp_code, corp_name: r.corp_name.trim(), stock_code: (r.stock_code || "").trim(), market: MARKET[r.corp_cls],
+      kind, rcept_no: title.includes("철회") && prev ? prev.rcept_no : r.rcept_no,
+      first_rcept_no: prev ? prev.first_rcept_no : r.rcept_no,
+      withdrawn: title.includes("철회") || Boolean(prev && prev.withdrawn && !title.includes("결정")),
+    });
+  }
+  return [...out.values()];
+}
+
+export function parseSplitText(text) {
+  const t = text.replace(/<[^>]+>/g, " ").replace(/&nbsp;|&#160;/g, " ").replace(/\s+/g, " ");
+  const one = (label) => {
+    const m = lastMatch(t, new RegExp(`${label}\\s*:?\\s*${DATE}`, "g"));
+    return m ? ymdOf(m, 1) : null;
+  };
+  const halt = lastMatch(t, new RegExp(`매매\\s*거래\\s*정지\\s*(?:예정)?\\s*기간\\s*시작일\\s*${DATE}\\s*종료일\\s*${DATE}`, "g"));
+  const par = lastMatch(t, /1주당\s*가액\s*\(원\)\s*([\d,.]+)\s+([\d,.]+)/g);
+  return {
+    gm_date: one("주주\\s*총회\\s*예정일"),
+    effective: one("신주의\\s*효력\\s*발생일"),
+    halt_start: halt ? ymdOf(halt, 1) : null,
+    halt_end: halt ? ymdOf(halt, 4) : null,
+    listing: one("신주권\\s*상장\\s*예정일"),
+    par_before: par ? price(par[1]) : null,
+    par_after: par ? price(par[2]) : null,
+  };
+}
+
+export async function fetchSplit(apiKey, rceptNo, fetchImpl = fetch) {
+  return { rcept_no: rceptNo, ...parseSplitText(await documentText(apiKey, rceptNo, fetchImpl)) };
+}
