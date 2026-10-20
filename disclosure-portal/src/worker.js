@@ -10,6 +10,7 @@
 import { DartError, TRADE_CATEGORIES, fetchDay, fetchPage } from "./dart.js";
 import { MARKET_KINDS, MarketError, fetchMarketList, fetchQuotes } from "./market.js";
 import { KindError, fetchKindToday } from "./kind.js";
+import { checkLogin, clearCookie, loginPage, makeSession, readSession, safeNext, sessionCookie, timingSafeEqual } from "./auth.js";
 import { DEAL_APIS, fetchCandidates, fetchCapital, fetchCapitalCandidates, fetchDeal, fetchExchangeCandidates, fetchSplit, fetchSplitCandidates, fetchTender } from "./events.js";
 
 const TODAY_TTL = 15; // 오늘 목록 캐시(초) — 탭 여러 개를 열어도 DART 호출이 늘지 않게
@@ -32,14 +33,6 @@ const json = (body, status = 200, extra = {}) =>
     headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", ...extra },
   });
 
-function timingSafeEqual(a, b) {
-  const enc = new TextEncoder();
-  const x = enc.encode(a);
-  const y = enc.encode(b);
-  let diff = x.length ^ y.length;
-  for (let i = 0; i < Math.max(x.length, y.length); i++) diff |= (x[i] || 0) ^ (y[i] || 0);
-  return diff === 0;
-}
 
 function authorized(request, password) {
   if (!password) return true;
@@ -170,7 +163,34 @@ async function handleQuotes(url, env, ctx, fetchImpl) {
 export async function handle(request, env, ctx, fetchImpl = fetch) {
   const url = new URL(request.url);
   if (url.pathname === "/healthz") return json({ ok: true });
-  if (!authorized(request, env.PORTAL_PASSWORD)) {
+
+  // 사람별 로그인(PORTAL_USERS가 있으면). 없으면 예전 방식(PORTAL_PASSWORD 하나, 브라우저 팝업)으로.
+  let user = null;
+  if (env.PORTAL_USERS) {
+    const html = (body, status = 200, headers = {}) => new Response(body, { status, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", ...headers } });
+    if (url.pathname === "/login" && request.method === "GET") {
+      if (await readSession(request, env.PORTAL_USERS)) return Response.redirect(new URL(safeNext(url.searchParams.get("next")), url), 302);
+      return html(loginPage({ next: safeNext(url.searchParams.get("next")) }));
+    }
+    if (url.pathname === "/login" && request.method === "POST") {
+      const form = await request.formData().catch(() => new FormData());
+      const id = String(form.get("id") || "").trim();
+      const next = safeNext(String(form.get("next") || "/"));
+      if (!checkLogin(env.PORTAL_USERS, id, form.get("pw"))) {
+        await new Promise((r) => setTimeout(r, 600)); // 무작위 대입을 느리게
+        return html(loginPage({ error: "아이디 또는 비밀번호가 맞지 않습니다.", next, id }), 401);
+      }
+      return new Response(null, { status: 302, headers: { Location: next, "Set-Cookie": sessionCookie(await makeSession(env.PORTAL_USERS, id)), "Cache-Control": "no-store" } });
+    }
+    if (url.pathname === "/logout") {
+      return new Response(null, { status: 302, headers: { Location: "/login", "Set-Cookie": clearCookie(), "Cache-Control": "no-store" } });
+    }
+    user = await readSession(request, env.PORTAL_USERS);
+    if (!user) {
+      if (url.pathname.startsWith("/api/")) return json({ detail: "로그인이 필요합니다.", login: true }, 401);
+      return Response.redirect(new URL(`/login?next=${encodeURIComponent(url.pathname + url.search)}`, url), 302);
+    }
+  } else if (!authorized(request, env.PORTAL_PASSWORD)) {
     return new Response("비밀번호가 필요합니다.", {
       status: 401,
       headers: { "WWW-Authenticate": 'Basic realm="disclosure-portal", charset="UTF-8"', "Content-Type": "text/plain; charset=utf-8" },
@@ -187,7 +207,7 @@ export async function handle(request, env, ctx, fetchImpl = fetch) {
       async () => ({ date: todayKst(), ...(await fetchKindToday(fetchImpl)), fetched_at: new Date().toISOString() }));
   }
   if (url.pathname === "/api/status") {
-    return json({ today: todayKst(), api_key_set: Boolean(env.DART_API_KEY), categories: TRADE_CATEGORIES.map(([name]) => name) });
+    return json({ today: todayKst(), user, api_key_set: Boolean(env.DART_API_KEY), categories: TRADE_CATEGORIES.map(([name]) => name) });
   }
   if (url.pathname.startsWith("/api/")) return json({ detail: "not found" }, 404);
   return env.ASSETS.fetch(request);

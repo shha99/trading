@@ -402,3 +402,56 @@ test("액면변경(병합·분할) 본문 일정 — 유가(매매거래정지�
   const k = parseSplitText("1주당 가액(원) 500 2,500 … 신주의 효력발생일 2026-12-29 매매거래정지예정기간 시작일 2026-12-24 종료일 2027-01-18 명의개서정지기간 - 신주권교부예정일 - 신주권상장예정일 2027-01-19");
   assert.deepEqual([k.halt_start, k.halt_end, k.listing, k.par_after], ["20261224", "20270118", "20270119", 2500]);
 });
+
+// ---- 사람별 로그인 ----
+import { parseUsers } from "../src/auth.js";
+
+test("PORTAL_USERS 파싱", () => {
+  const u = parseUsers("hyun:Abc:123!, kim:qwer\nlee:pw3, broken, :nopw");
+  assert.deepEqual([...u.entries()], [["hyun", "Abc:123!"], ["kim", "qwer"], ["lee", "pw3"]]);
+});
+
+test("로그인: 화면·API 막고, 맞는 계정이면 쿠키로 통과, 목록에서 빼면 바로 거절", async () => {
+  const users = "hyun:Abc123!,kim:qwer5678";
+  const e = env({ PORTAL_USERS: users });
+  const get = (path, cookie) => handle(new Request(`https://portal.example${path}`, { headers: cookie ? { Cookie: cookie } : {} }), e, ctx);
+
+  let r = await get("/");
+  assert.equal(r.status, 302);
+  assert.match(r.headers.get("Location"), /\/login\?next=%2F$/);
+  r = await get("/api/status");
+  assert.equal(r.status, 401);
+  assert.equal((await r.json()).login, true);
+  assert.equal((await get("/healthz")).status, 200);
+  assert.match(await (await get("/login")).text(), /로그인/);
+
+  const post = (id, pw, next = "/") => handle(new Request("https://portal.example/login", {
+    method: "POST", body: new URLSearchParams({ id, pw, next }), headers: { "Content-Type": "application/x-www-form-urlencoded" },
+  }), e, ctx);
+  r = await post("hyun", "wrong");
+  assert.equal(r.status, 401);
+  assert.match(await r.text(), /맞지 않습니다/);
+  r = await post("nobody", "Abc123!");
+  assert.equal(r.status, 401);
+
+  r = await post("hyun", "Abc123!", "//evil.example/x"); // 외부로 튕기는 next는 무시
+  assert.equal(r.status, 302);
+  assert.equal(r.headers.get("Location"), "/");
+  const setCookie = r.headers.get("Set-Cookie");
+  assert.match(setCookie, /dp_session=.+HttpOnly; Secure/);
+  const cookie = setCookie.split(";")[0];
+
+  r = await get("/api/status", cookie);
+  assert.equal(r.status, 200);
+  assert.equal((await r.json()).user, "hyun");
+  assert.equal((await get("/", cookie)).status, 200);
+
+  // 위조 쿠키 거절
+  assert.equal((await get("/api/status", cookie.replace(/.$/, (c) => (c === "A" ? "B" : "A")))).status, 401);
+  // 목록을 바꾸면(사람 삭제) 기존 쿠키는 무효
+  const e2 = env({ PORTAL_USERS: "kim:qwer5678" });
+  assert.equal((await handle(new Request("https://portal.example/api/status", { headers: { Cookie: cookie } }), e2, ctx)).status, 401);
+  // 로그아웃은 쿠키를 지운다
+  r = await get("/logout", cookie);
+  assert.match(r.headers.get("Set-Cookie"), /Max-Age=0/);
+});

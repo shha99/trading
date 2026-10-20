@@ -105,6 +105,10 @@
   async function fetchJSON(url) {
     const r = await fetch(url, { cache: "no-store" });
     const body = await r.json().catch(() => ({}));
+    if (r.status === 401 && body.login) { // 로그인이 풀렸으면 로그인 화면으로
+      location.href = `/login?next=${encodeURIComponent(location.pathname + location.search)}`;
+      throw new Error("로그인이 필요합니다.");
+    }
     if (!r.ok) throw new Error(body.detail || `HTTP ${r.status}`);
     return body;
   }
@@ -1504,6 +1508,7 @@
     try {
       const st = await fetchJSON("/api/status");
       state.apiKeySet = st.api_key_set;
+      if (st.user) { $("userName").textContent = st.user; $("userBox").hidden = false; }
       buildCatBar(st.categories || []);
     } catch (e) {
       state.error = `서버 연결 실패 · ${e.message}`;
