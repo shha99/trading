@@ -10,7 +10,7 @@
 // 키는 환경변수로만 받는다 — 저장소에 넣지 말 것. 이 스크립트는 Worker에 배포되지 않는다.
 import fs from "node:fs";
 import path from "node:path";
-import { blockOf, fetchAiHistory, fetchChart, fetchRightsKind, stockMetrics } from "../src/ai.js";
+import { DILUTION_API, DILUTION_BUCKETS, blockOf, bucketOf, fetchAiHistory, fetchChart, fetchDilution, stockMetrics } from "../src/ai.js";
 
 const KEY = process.env.DART_API_KEY;
 if (!KEY) { console.error("DART_API_KEY 환경변수가 필요합니다."); process.exit(1); }
@@ -62,22 +62,23 @@ for (const e of all) {
   events.push(e);
 }
 const ipo = new Map(hist.flatMap((h) => h.ipo).map((x) => [x.c, x]));
-// 유상증자 중 RCPS·우선주(기타주식) 발행을 따로
+// 메자닌(CB·BW·EB)·유상증자 발행 규모(희석률). 유상증자 중 RCPS·우선주(기타주식) 발행은 따로 분류.
 done = 0;
-const rights = events.filter((e) => e.t === "rights" && e.cc);
-await pool(rights, 4, async (e) => {
-  const k = await cachedJson(`piic-${e.r}.json`, async () => {
+const sized = events.filter((e) => DILUTION_API[e.t] && e.cc);
+await pool(sized, 4, async (e) => {
+  const k = await cachedJson(`dil-${e.t}-${e.r}.json`, async () => {
     for (let attempt = 0; ; attempt++) {
-      try { return await fetchRightsKind(KEY, e.cc, e.r); } catch (err) {
-        if (attempt >= 2) return { rcps: false, error: err.message };
+      try { return await fetchDilution(KEY, e.t, e.cc, e.r); } catch (err) {
+        if (attempt >= 2) return { pct: null, error: err.message };
         await new Promise((r) => setTimeout(r, 3000));
       }
     }
   });
+  e.pct = k.pct;
   if (k.rcps) e.t = "rcps";
-  if (++done % 300 === 0) log(`유상증자 종류 ${done}/${rights.length}`);
+  if (++done % 500 === 0) log(`발행 규모 ${done}/${sized.length}`);
 });
-log(`이벤트 ${events.length}건, 신규상장 후보 ${ipo.size}종목, 실패 블록 ${hist.filter((h) => h.failed).length}`);
+log(`발행 규모 확인 ${sized.filter((e) => e.pct !== null && e.pct !== undefined).length}/${sized.length}`);
 
 // 2) 주가
 const by = new Map();
@@ -103,7 +104,7 @@ const metrics = Object.fromEntries(await pool(stockList, 8, async ([code, want])
 const samples = [];
 for (const e of events) {
   const x = metrics[e.c]?.ev?.[e.d];
-  if (x?.m?.base) samples.push({ t: e.t, c: e.c, n: e.n, d: e.d, ...x.m, k: x.k });
+  if (x?.m?.base) samples.push({ t: e.t, c: e.c, n: e.n, d: e.d, pct: e.pct ?? null, ...x.m, k: x.k });
 }
 for (const [code, st] of Object.entries(metrics)) {
   for (const l of st.lockups || []) if (l.m?.base) samples.push({ t: `lockup${l.months}`, c: code, n: ipo.get(code)?.n || code, d: l.d, ...l.m, k: l.k });
@@ -128,6 +129,7 @@ function summarize(list) {
     medMove: r4(median(list.map((x) => x.move))),
     lift: zc.length >= 5 ? r4(median(z) / median(zc)) : null,
     up: r4(list.filter((x) => x.ret > 0).length / list.length),
+    medRet: r4(median(list.map((x) => x.ret))),
     medBase: r4(median(list.map((x) => x.base))),
     years,
     zq: quantiles(z),
@@ -138,7 +140,19 @@ function summarize(list) {
 const types = {};
 const byType = new Map();
 for (const s of samples) { if (!byType.has(s.t)) byType.set(s.t, []); byType.get(s.t).push(s); }
-for (const [t, list] of byType) types[t] = summarize(list);
+const MIN_BUCKET = 30; // 이보다 적은 구간은 종류 전체 통계를 쓴다
+const bucketLabel = ([lo, hi]) => (hi === Infinity ? `${lo}% 이상` : `${lo}~${hi}%`);
+for (const [t, list] of byType) {
+  types[t] = summarize(list);
+  if (DILUTION_API[t]) {
+    types[t].buckets = DILUTION_BUCKETS.map((b, i) => {
+      const sub = list.filter((x) => bucketOf(x.pct) === i);
+      if (sub.length < MIN_BUCKET) return { label: bucketLabel(b), n: sub.length };
+      const { examples, years, ...rest } = summarize(sub);
+      return { label: bucketLabel(b), ...rest };
+    });
+  }
+}
 
 // 4) 검증: 마지막 1년을 빼고 만든 분포로 그 1년 예측
 const cutoff = String(Number(today.slice(0, 4)) - 1) + today.slice(4);
@@ -152,8 +166,9 @@ for (const [t, list] of byType) {
   const train = list.filter((s) => s.d < cutoff);
   if (train.length < 20) continue;
   const zq = quantiles(train.map(zOf));
+  const bz = DILUTION_API[t] ? DILUTION_BUCKETS.map((_, i) => { const sub = train.filter((x) => bucketOf(x.pct) === i); return sub.length >= MIN_BUCKET ? quantiles(sub.map(zOf)) : null; }) : [];
   for (const s of list.filter((x) => x.d >= cutoff)) {
-    const p = probFrom(zq, s.base * Math.sqrt(10));
+    const p = probFrom(bz[bucketOf(s.pct)] || zq, s.base * Math.sqrt(10));
     const y = s.move >= BIG ? 1 : 0;
     const b = bins[Math.min(9, Math.floor(p * 10))];
     b.n++; b.pred += p; b.hit += y;

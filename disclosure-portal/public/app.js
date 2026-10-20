@@ -859,12 +859,15 @@
         events.push(e);
       }
       const ipo = new Map(hist.flatMap((h) => h.ipo || []).map((x) => [x.c, x]));
-      // 최근 유상증자 중 RCPS·우선주(기타주식) 발행은 따로 분류
-      const recentRights = events.filter((e) => e.t === "rights" && e.cc && daysDiff(e.d, state.today) <= 14);
-      await runPool(recentRights.map((e) => async () => {
-        const k = await fetchJSON(`/api/ai/rights?corp=${e.cc}&r=${e.r}`);
+      // 최근 메자닌(CB·BW·EB)·유상증자: 발행 규모(발행주식총수 대비 %)와 RCPS·우선주 여부
+      const sized = events.filter((e) => ["rights", "cb", "bw", "eb"].includes(e.t) && e.cc && daysDiff(e.d, state.today) <= 14);
+      await runPool(sized.map((e) => async () => {
+        const k = await fetchJSON(`/api/ai/dilution?t=${e.t}&corp=${e.cc}&r=${e.r}`);
+        e.pct = k.pct;
+        e.refix = k.refix;
+        e.method = k.method;
         if (k.rcps) e.t = "rcps";
-      }), 6, (d, t) => meta(`유상증자 종류 확인 중 ${d}/${t}`));
+      }), 6, (d, t) => meta(`발행 규모 확인 중 ${d}/${t}`));
       // 2) 캘린더의 액면변경 변경상장 예정일(앞으로 2주)
       if (!state.cal.loadedAt) {
         meta("캘린더 일정 확인 중…");
@@ -917,22 +920,25 @@
     for (const [t, st] of Object.entries(model.types)) stats[t] = { ...st, t };
     // 지금 이벤트가 걸린 종목: 최근 14일 안에 나온 이벤트(10거래일 진행 중) + 앞으로 2주 안 락업 해제·변경상장
     const cands = [];
-    const addCand = (t, code, name, market, date, rcept, evDate = date) => {
-      const st = stats[t];
-      if (!st || st.n < AI_MIN_N || !st.zq) return;
+    const addCand = (t, code, name, market, date, rcept, evDate = date, extra = {}) => {
+      const typeSt = stats[t];
+      if (!typeSt || typeSt.n < AI_MIN_N || !typeSt.zq) return;
+      // 발행 규모 구간 통계가 충분하면 그걸 쓴다(같은 CB라도 희석률 20%와 3%는 다르게)
+      const b = typeSt.buckets && extra.pct !== null && extra.pct !== undefined ? typeSt.buckets[aiBucketOf(extra.pct)] : null;
+      const st = b && b.zq ? { ...typeSt, ...b, bucket: b.label } : typeSt;
       const ev = t.startsWith("lockup") ? (stocks[code]?.lockups || []).find((l) => l.d === date) : stocks[code]?.ev?.[evDate];
       const own = ev?.pre || stocks[code]?.now_base; // 이벤트 직전 평소 변동성(없으면 최근 60거래일)
       const sigma = own || st.medBase;
       const scale = sigma * Math.sqrt(10);
       cands.push({
-        t, code, name, market, date, rcept, sigma, own: Boolean(own), sofar: ev?.sofar || null,
+        t, code, name, market, date, rcept, sigma, own: Boolean(own), sofar: ev?.sofar || null, ...extra, st,
         prob: st.zq.filter((z) => z * scale >= big).length / st.zq.length, // 과거 사례 분포(백분위)에서 ±20% 넘는 비율
         exp: st.zq[50] * scale,
       });
     };
     for (const e of events) {
       const ago = daysDiff(e.d, today);
-      if (ago >= 0 && ago <= 14) addCand(e.t, e.c, e.n, e.m, e.d, e.r);
+      if (ago >= 0 && ago <= 14) addCand(e.t, e.c, e.n, e.m, e.d, e.r, e.d, { pct: e.pct ?? null, refix: e.refix, method: e.method });
     }
     for (const [code, st] of Object.entries(stocks)) {
       for (const l of st.lockups || []) {
@@ -953,6 +959,9 @@
     return { stats, ranked };
   }
 
+  const AI_BUCKETS = [[0, 5], [5, 10], [10, 20], [20, Infinity]]; // src/ai.js DILUTION_BUCKETS와 같게
+  const aiBucketOf = (pct) => AI_BUCKETS.findIndex(([lo, hi]) => pct >= lo && pct < hi);
+
   function aiWhen(d) {
     const dd = daysDiff(state.today, d);
     return dd > 0 ? `D-${dd}` : dd === 0 ? "오늘" : `${-dd}일 전`;
@@ -969,9 +978,11 @@
     if (!ai.stats) { $("aiRows").innerHTML = ""; $("aiStats").innerHTML = ""; return; }
     const rows = ai.ranked.slice(0, AI_TOP);
     $("aiRows").innerHTML = rows.map((r, i) => {
-      const st = ai.stats[r.t];
+      const st = r.st;
       const watched = isWatchedCode(r.code);
       const ex = st.examples.map((x) => `${x.n} ${fmtMD(x.d)} 최대 ${pct(x.move)} / 10일 뒤 ${x.ret > 0 ? "+" : ""}${pct(x.ret)}`).join("\n");
+      const size = r.pct !== null && r.pct !== undefined
+        ? `<div class="ai-size ${r.pct >= 10 ? "big" : ""}">발행주식 대비 <b>${r.pct.toFixed(1)}%</b>${r.refix ? " · 리픽싱" : ""}${r.method ? ` · ${esc(r.method)}` : ""}${st.bucket ? ` <span>(${esc(st.bucket)} 구간 통계 · 10일 뒤 하락 ${pct(1 - st.up)})</span>` : ""}</div>` : "";
       const sofar = r.sofar ? `<div class="ai-others">진행 ${r.sofar.days}거래일째 · 지금까지 최대 ±${pct(r.sofar.move)}</div>` : "";
       const others = r.others.length ? `<div class="ai-others">같이 걸린 이벤트: ${r.others.map((o) => `${esc(AI_LABEL[o.t])}(${pct(o.prob)})`).join(", ")}</div>` : "";
       const link = r.rcept ? `<a href="https://dart.fss.or.kr/dsaf001/main.do?rcpNo=${r.rcept}" target="_blank" rel="noopener">공시</a>` : "";
@@ -982,7 +993,7 @@
           <span class="nm" title="${esc(r.name)}">${esc(r.name)}</span><span class="cd">${esc(r.code)}</span>
           ${r.market ? `<span class="mkt ${esc(r.market)}">${esc(r.market)}</span>` : ""}
         </div></td>
-        <td><span class="ai-type t-${r.t.replace(/\d+$/, "")}">${esc(AI_LABEL[r.t])}</span> <span class="ai-when">${fmtMD(r.date)} · ${aiWhen(r.date)}</span> ${link}${sofar}${others}</td>
+        <td><span class="ai-type t-${r.t.replace(/\d+$/, "")}">${esc(AI_LABEL[r.t])}</span> <span class="ai-when">${fmtMD(r.date)} · ${aiWhen(r.date)}</span> ${link}${size}${sofar}${others}</td>
         <td class="num"><div class="ai-bar"><span style="width:${Math.round(r.prob * 100)}%"></span></div><b>${pct(r.prob)}</b></td>
         <td class="num">±${pct(r.exp)}</td>
         <td class="num" title="${r.own ? "이벤트 직전 60거래일 하루 변동성(표준편차)" : "주가 이력이 짧아 같은 종류 사례의 중앙값을 썼습니다"}">${pct(r.sigma, 1)}${r.own ? "" : "*"}</td>
@@ -993,6 +1004,17 @@
     }).join("");
     $("aiEmpty").hidden = rows.length > 0;
     $("aiEmpty").textContent = "지금 진행 중이거나 2주 안에 다가오는 이벤트 종목이 없습니다.";
+    // 발행 규모별 표
+    $("aiSize").innerHTML = ["cb", "bw", "eb", "rcps", "rights"].filter((t) => ai.stats[t]?.buckets).flatMap((t) =>
+      ai.stats[t].buckets.map((b, i) => `<tr class="${b.zq ? "" : "past"} ${i === 0 ? "grp" : ""}">
+        <td>${i === 0 ? esc(AI_LABEL[t]) : ""}</td>
+        <td>${esc(b.label)}</td>
+        <td class="num">${b.n}</td>
+        <td class="num">${b.zq ? `<b>${pct(b.big)}</b>` : "–"}</td>
+        <td class="num">${b.zq ? pct(b.ctrlBig) : "–"}</td>
+        <td class="num">${b.zq ? pct(1 - b.up) : "–"}</td>
+        <td class="num">${b.zq ? `${b.medRet > 0 ? "+" : ""}${pct(b.medRet, 1)}` : "–"}</td>
+      </tr>`)).join("");
     // 근거 표
     $("aiStats").innerHTML = Object.keys(AI_LABEL).filter((t) => ai.stats[t]).map((t) => {
       const st = ai.stats[t];

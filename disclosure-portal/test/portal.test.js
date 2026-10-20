@@ -517,3 +517,16 @@ test("AI분석 API: 입력 검사", async () => {
   assert.equal((await get(`/api/ai/history?k=${blockOf("20261020")}&g=x`)).status, 400);
   assert.equal((await get("/api/ai/metrics?q=")).status, 400);
 });
+
+test("AI분석: 메자닌·유상증자 희석률", async () => {
+  const { parseDilution, bucketOf } = await import("../src/ai.js");
+  assert.deepEqual(parseDilution("cb", { cvisstk_tisstk_vs: "19.52", act_mktprcfl_cvprc_lwtrsprc: "798" }), { pct: 19.52, refix: true });
+  assert.deepEqual(parseDilution("bw", { nstk_isstk_tisstk_vs: "2.72" }), { pct: 2.72 });
+  assert.deepEqual(parseDilution("eb", { extg_tisstk_vs: "-" }), { pct: null });
+  const r = parseDilution("rights", { nstk_ostk_cnt: "-", nstk_estk_cnt: "1,000", bfic_tisstk_ostk: "9,000", bfic_tisstk_estk: "1,000", ic_mthn: "제3자배정증자" });
+  assert.deepEqual(r, { pct: 10, rcps: true, method: "제3자배정증자" });
+  assert.equal(bucketOf(3), 0);
+  assert.equal(bucketOf(10), 2);
+  assert.equal(bucketOf(55), 3);
+  assert.equal(bucketOf(null), -1);
+});

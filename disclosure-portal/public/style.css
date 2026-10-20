@@ -441,3 +441,7 @@ td.flr { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: 
 .ai-model { margin: 10px 0 0; padding: 10px 14px; border-radius: 10px; background: #f9fafb; border: 1px solid var(--line); font-size: 12px; color: var(--muted); line-height: 1.6; }
 .ai-model:empty { display: none; }
 .ai-type.t-cb, .ai-type.t-bw, .ai-type.t-eb, .ai-type.t-rcps { background: #f3effe; color: #6941c6; }
+.ai-size { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.ai-size.big b { color: #c4262c; }
+.ai-size span { color: var(--faint); }
+.ai-stats tr.grp td { border-top: 2px solid var(--line); }

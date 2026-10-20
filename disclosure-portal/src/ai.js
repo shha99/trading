@@ -120,15 +120,45 @@ export async function fetchAiHistory(apiKey, k, g, today, fetchImpl = fetch, { d
   return { block: k, bgn, end, events: [...events.values()], ipo: [...ipo.values()] };
 }
 
-// 유상증자 결정 한 건이 RCPS·우선주(기타주식) 발행인지. 기타주식만 새로 발행하면 rcps.
-export async function fetchRightsKind(apiKey, corpCode, rceptNo, fetchImpl = fetch) {
-  const d = rceptNo.slice(0, 8);
-  const data = await dartRequest(apiKey, "piicDecsn.json", { corp_code: corpCode, bgn_de: d, end_de: d }, fetchImpl);
-  const x = ((data && data.list) || []).find((r) => r.rcept_no === rceptNo) || ((data && data.list) || [])[0];
-  if (!x) return { rcps: false, found: false };
-  const n = (v) => Number(String(v || "").replace(/[^\d]/g, "")) || 0;
-  return { rcps: n(x.nstk_estk_cnt) > 0 && n(x.nstk_ostk_cnt) === 0, found: true, method: x.ic_mthn || "" };
+// 메자닌·유상증자 발행 규모: 새로 생길 수 있는 주식이 발행주식총수의 몇 %인지(희석률).
+// 규모가 클수록 헤지 공매도·전환물량(오버행) 부담이 커진다는 실무 해석을 과거 데이터로 확인하려고 쓴다.
+//   rights/rcps: 유상증자 상세(piicDecsn) 새 주식 ÷ 증자 전 주식. 기타주식만 새로 발행하면 RCPS·우선주(rcps).
+//   cb: 전환사채(cvbdIsDecsn) "전환에 따라 발행할 주식 — 주식총수 대비 비율", 시가하락 전환가 조정(리픽싱) 하한 유무
+//   bw: 신주인수권부사채(bdwtIsDecsn) "신주 — 주식총수 대비 비율"
+//   eb: 교환사채(exbdIsDecsn) "교환대상 — 주식총수 대비 비율"(자기주식 교환일 때만 있다)
+export const DILUTION_API = { rights: "piicDecsn", rcps: "piicDecsn", cb: "cvbdIsDecsn", bw: "bdwtIsDecsn", eb: "exbdIsDecsn" };
+const num = (v) => { const n = Number(String(v ?? "").replace(/[^\d.]/g, "")); return Number.isFinite(n) ? n : 0; };
+
+export function parseDilution(t, x) {
+  if (!x) return { pct: null };
+  if (t === "rights" || t === "rcps") {
+    const neu = num(x.nstk_ostk_cnt) + num(x.nstk_estk_cnt);
+    const before = num(x.bfic_tisstk_ostk) + num(x.bfic_tisstk_estk);
+    return {
+      pct: before > 0 && neu > 0 ? Math.round((neu / before) * 10000) / 100 : null,
+      rcps: num(x.nstk_estk_cnt) > 0 && num(x.nstk_ostk_cnt) === 0,
+      method: x.ic_mthn || "",
+    };
+  }
+  const field = { cb: "cvisstk_tisstk_vs", bw: "nstk_isstk_tisstk_vs", eb: "extg_tisstk_vs" }[t];
+  const pct = num(x[field]);
+  const out = { pct: pct > 0 ? pct : null };
+  if (t === "cb") out.refix = num(x.act_mktprcfl_cvprc_lwtrsprc) > 0;
+  return out;
 }
+
+export async function fetchDilution(apiKey, t, corpCode, rceptNo, fetchImpl = fetch) {
+  const api = DILUTION_API[t];
+  if (!api) return { pct: null };
+  const d = rceptNo.slice(0, 8);
+  const data = await dartRequest(apiKey, `${api}.json`, { corp_code: corpCode, bgn_de: d, end_de: d }, fetchImpl);
+  const list = (data && data.list) || [];
+  return { ...parseDilution(t, list.find((r) => r.rcept_no === rceptNo) || list[0]), found: list.length > 0 };
+}
+
+// 희석률 구간(%). 모델과 화면이 같은 구간을 쓴다.
+export const DILUTION_BUCKETS = [[0, 5], [5, 10], [10, 20], [20, Infinity]];
+export const bucketOf = (pct) => (pct === null || pct === undefined ? -1 : DILUTION_BUCKETS.findIndex(([lo, hi]) => pct >= lo && pct < hi));
 
 // ---- 주가 ----
 // 거래정지일은 시가·고가·저가가 0인 줄로 온다 — 거래된 날만 남긴다. first/count는 정지일 포함 원래 줄 기준.

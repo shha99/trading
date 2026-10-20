@@ -11,7 +11,7 @@ import { DartError, TRADE_CATEGORIES, fetchDay, fetchPage } from "./dart.js";
 import { MARKET_KINDS, MarketError, fetchMarketList, fetchQuotes } from "./market.js";
 import { KindError, fetchKindToday } from "./kind.js";
 import { checkLogin, clearCookie, loginPage, makeSession, readSession, safeNext, sessionCookie, timingSafeEqual } from "./auth.js";
-import { HISTORY_BLOCKS, blockOf, fetchAiHistory, fetchAiMetrics, fetchRightsKind, parseMetricsQuery } from "./ai.js";
+import { HISTORY_BLOCKS, blockOf, fetchAiHistory, fetchAiMetrics, fetchDilution, parseMetricsQuery } from "./ai.js";
 import { DEAL_APIS, fetchCandidates, fetchCapital, fetchCapitalCandidates, fetchDeal, fetchExchangeCandidates, fetchSplit, fetchSplitCandidates, fetchTender } from "./events.js";
 
 const TODAY_TTL = 15; // 오늘 목록 캐시(초) — 탭 여러 개를 열어도 DART 호출이 늘지 않게
@@ -168,11 +168,12 @@ async function handleAi(url, env, ctx, fetchImpl) {
     return cached(`ai/history?k=${k}&g=${g}${k === cur ? `&d=${today}` : ""}`, k === cur ? 3600 : 3 * 86400, fresh && k === cur, ctx,
       async () => fetchAiHistory(env.DART_API_KEY, k, g, today, fetchImpl));
   }
-  if (url.pathname === "/api/ai/rights") {
+  if (url.pathname === "/api/ai/dilution") {
+    const t = url.searchParams.get("t") || "";
     const corp = url.searchParams.get("corp") || "";
     const rcept = url.searchParams.get("r") || "";
-    if (!/^\d{8}$/.test(corp) || !/^\d{14}$/.test(rcept)) return json({ detail: "corp 또는 r이 잘못됐습니다." }, 400);
-    return cached(`ai/rights?r=${rcept}`, 30 * 86400, false, ctx, async () => fetchRightsKind(env.DART_API_KEY, corp, rcept, fetchImpl));
+    if (!["rights", "cb", "bw", "eb"].includes(t) || !/^\d{8}$/.test(corp) || !/^\d{14}$/.test(rcept)) return json({ detail: "t, corp 또는 r이 잘못됐습니다." }, 400);
+    return cached(`ai/dilution?t=${t}&r=${rcept}`, 30 * 86400, false, ctx, async () => fetchDilution(env.DART_API_KEY, t, corp, rcept, fetchImpl));
   }
   if (url.pathname === "/api/ai/metrics") {
     const by = parseMetricsQuery(url.searchParams.get("q"));
