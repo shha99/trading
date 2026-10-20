@@ -802,7 +802,7 @@
   // 서버(/api/ai/*)는 최근 공시와 지금 종목의 측정값만 준다. 확률·순위는 여기서 계산한다.
   const AI_LABEL = {
     cb: "CB(전환사채) 발행", bw: "BW(신주인수권부사채) 발행", eb: "EB(교환사채) 발행", rcps: "RCPS·우선주 유상증자",
-    rights: "유상증자 결정", bonus: "무상증자 결정", reduce: "감자 결정", merger: "합병·분할·영업양수도 결정(매수청구권)",
+    rights: "유상증자 결정", exright_b: "권리락(무상증자)", exright_r: "권리락(유상증자)", bonus: "무상증자 결정", reduce: "감자 결정", merger: "합병·분할·영업양수도 결정(매수청구권)",
     tender: "공개매수", split: "액면분할 결정", consolidate: "액면병합 결정", relist: "액면변경 후 변경상장(거래재개)",
     delist: "정리매매", halt: "거래정지(사유 발생)", resume: "거래재개(정지 해제)", delist_warn: "관리종목·상장폐지 우려 안내",
     lockup1: "상장 1개월 의무보유 해제", lockup3: "상장 3개월 의무보유 해제", lockup6: "상장 6개월 의무보유 해제", lockup12: "상장 1년 의무보유 해제",
@@ -868,20 +868,25 @@
         e.method = k.method;
         if (k.rcps) e.t = "rcps";
       }), 6, (d, t) => meta(`발행 규모 확인 중 ${d}/${t}`));
-      // 2) 캘린더의 액면변경 변경상장 예정일(앞으로 2주)
+      // 2) 캘린더의 예정 일정(앞으로 30일): 액면변경 변경상장, 증자 권리락(배정기준일 전 거래일)
       if (!state.cal.loadedAt) {
         meta("캘린더 일정 확인 중…");
         if (!state.cal.loading) await loadCalendar(false);
         while (state.cal.loading) await new Promise((r) => setTimeout(r, 300));
       }
-      const relists = state.cal.events.filter((e) => e.type === "split" && e.sub === "relist" && e.start && /^[0-9A-Z]{6}$/.test(e.code || "") &&
-        daysDiff(state.today, e.start) >= 0 && daysDiff(state.today, e.start) <= 14);
+      const soon = (d) => d && daysDiff(state.today, d) >= -14 && daysDiff(state.today, d) <= AI_AHEAD;
+      const okCode = (e) => /^[0-9A-Z]{6}$/.test(e.code || "");
+      const relists = state.cal.events.filter((e) => e.type === "split" && e.sub === "relist" && okCode(e) && soon(e.start))
+        .map((e) => ({ t: "relist", code: e.code, name: e.name, market: e.market, date: e.start, rcept: e.rcept_no }));
+      const exrights = state.cal.events.filter((e) => e.type === "capital" && e.sub === "record" && okCode(e) && soon(prevWeekday(e.start)))
+        .map((e) => ({ t: /무상/.test(e.kind) ? "exright_b" : "exright_r", code: e.code, name: e.name, market: e.market, date: prevWeekday(e.start), rcept: e.rcept_no }));
+      const planned = [...relists, ...exrights];
       // 3) 종목별 주가 측정값 — 종목코드 해시로 묶어 요청(묶음이 매일 거의 같아 서버 캐시가 잘 맞는다)
       const want = new Map();
       const add = (code, tok) => { if (!want.has(code)) want.set(code, new Set()); want.get(code).add(tok); };
       for (const e of events) if (daysDiff(e.d, state.today) <= 14) add(e.c, e.d);
       for (const c of ipo.keys()) add(c, "L");
-      for (const e of relists) add(e.code, state.today);
+      for (const e of planned) add(e.code, state.today);
       const buckets = new Map();
       for (const [code, toks] of want) {
         const b = strHash(code) % 64;
@@ -902,7 +907,7 @@
       }
       const res = await runPool(qs.map((q) => () => fetchJSON(`/api/ai/metrics?q=${q.join(",")}`)), 6, (d, t) => meta(`주가 측정 중 ${d}/${t}`));
       const stocks = Object.assign({}, ...res.map((r) => r.stocks || {}));
-      Object.assign(ai, aiCompute(ai.model, events, ipo, stocks, relists));
+      Object.assign(ai, aiCompute(ai.model, events, ipo, stocks, planned));
       ai.partial = failedBlocks + res.filter((r) => r.error).length;
       ai.loadedAt = nowKst();
     } catch (e) {
@@ -913,7 +918,7 @@
     }
   }
 
-  function aiCompute(model, events, ipo, stocks, relists) {
+  function aiCompute(model, events, ipo, stocks, planned) {
     const today = state.today;
     const big = model.big;
     const stats = {};
@@ -943,24 +948,34 @@
     for (const [code, st] of Object.entries(stocks)) {
       for (const l of st.lockups || []) {
         const dd = daysDiff(today, l.d);
-        if (dd >= -14 && dd <= 14) addCand(`lockup${l.months}`, code, ipo.get(code)?.n || code, ipo.get(code)?.m || "", l.d, "");
+        if (dd >= -14 && dd <= AI_AHEAD) addCand(`lockup${l.months}`, code, ipo.get(code)?.n || code, ipo.get(code)?.m || "", l.d, "");
       }
     }
-    for (const e of relists) addCand("relist", e.code, e.name, e.market, e.start, e.rcept_no, state.today);
-    // 한 종목에 이벤트가 여럿이면 확률이 가장 높은 것으로, 나머지는 같이 표시
-    const byCode = new Map();
-    for (const c of cands) {
-      const p = byCode.get(c.code);
-      if (!p) { byCode.set(c.code, { ...c, others: [] }); continue; }
-      if (c.prob > p.prob || (c.prob === p.prob && c.exp > p.exp)) byCode.set(c.code, { ...c, others: [p, ...p.others].map(({ others, ...x }) => x) });
-      else p.others.push(c);
-    }
-    const ranked = [...byCode.values()].sort((a, b) => b.prob - a.prob || b.exp - a.exp);
-    return { stats, ranked };
+    for (const e of planned) addCand(e.t, e.code, e.name, e.market, e.date, e.rcept, state.today);
+    // 진행 중(이벤트일이 오늘이거나 지남) / 예정(앞으로) 따로. 한 종목에 이벤트가 여럿이면 확률이 가장 높은 것으로.
+    const rank = (list) => {
+      const byCode = new Map();
+      for (const c of list) {
+        const p = byCode.get(c.code);
+        if (!p) { byCode.set(c.code, { ...c, others: [] }); continue; }
+        if (c.prob > p.prob || (c.prob === p.prob && c.exp > p.exp)) byCode.set(c.code, { ...c, others: [p, ...p.others].map(({ others, ...x }) => x) });
+        else if (!(p.t === c.t && p.date === c.date)) p.others.push(c);
+      }
+      return [...byCode.values()].sort((a, b) => b.prob - a.prob || b.exp - a.exp);
+    };
+    return { stats, now: rank(cands.filter((c) => c.date <= today)), next: rank(cands.filter((c) => c.date > today)) };
   }
 
   const AI_BUCKETS = [[0, 5], [5, 10], [10, 20], [20, Infinity]]; // src/ai.js DILUTION_BUCKETS와 같게
   const aiBucketOf = (pct) => AI_BUCKETS.findIndex(([lo, hi]) => pct >= lo && pct < hi);
+
+  const AI_AHEAD = 30; // 예정 목록: 앞으로 30일
+  function prevWeekday(d) { // 배정기준일 전 거래일 ≈ 권리락일(공휴일은 무시)
+    if (!d) return null;
+    let x = shiftDate(d, -1);
+    while ([0, 6].includes(new Date(Date.UTC(+x.slice(0, 4), +x.slice(4, 6) - 1, +x.slice(6, 8))).getUTCDay())) x = shiftDate(x, -1);
+    return x;
+  }
 
   function aiWhen(d) {
     const dd = daysDiff(state.today, d);
@@ -975,9 +990,20 @@
     const err = $("aiError");
     err.hidden = !ai.error;
     if (ai.error) err.textContent = `불러오지 못했습니다: ${ai.error}`;
-    if (!ai.stats) { $("aiRows").innerHTML = ""; $("aiStats").innerHTML = ""; return; }
-    const rows = ai.ranked.slice(0, AI_TOP);
-    $("aiRows").innerHTML = rows.map((r, i) => {
+    if (!ai.stats) { $("aiNowRows").innerHTML = ""; $("aiNextRows").innerHTML = ""; $("aiStats").innerHTML = ""; return; }
+    const fill = (rows, body, empty, msg) => {
+      $(body).innerHTML = rows.slice(0, AI_TOP).map(aiRowHTML).join("");
+      $(empty).hidden = rows.length > 0;
+      $(empty).textContent = msg;
+    };
+    fill(ai.now, "aiNowRows", "aiNowEmpty", "최근 14일 안에 시작된 이벤트 종목이 없습니다.");
+    fill(ai.next, "aiNextRows", "aiNextEmpty", `앞으로 ${AI_AHEAD}일 안에 예정된 이벤트 종목이 없습니다.`);
+    $("aiNowCount").textContent = ai.now.length ? `${ai.now.length}종목 중` : "";
+    $("aiNextCount").textContent = ai.next.length ? `${ai.next.length}종목 중` : "";
+    aiRenderStats(ai);
+  }
+
+  function aiRowHTML(r, i) {
       const st = r.st;
       const watched = isWatchedCode(r.code);
       const ex = st.examples.map((x) => `${x.n} ${fmtMD(x.d)} 최대 ${pct(x.move)} / 10일 뒤 ${x.ret > 0 ? "+" : ""}${pct(x.ret)}`).join("\n");
@@ -1001,9 +1027,9 @@
         <td class="num">${pct(st.up)}</td>
         <td class="num" title="${esc(`최근 사례\n${ex}`)}">${st.n}건</td>
       </tr>`;
-    }).join("");
-    $("aiEmpty").hidden = rows.length > 0;
-    $("aiEmpty").textContent = "지금 진행 중이거나 2주 안에 다가오는 이벤트 종목이 없습니다.";
+  }
+
+  function aiRenderStats(ai) {
     // 발행 규모별 표
     $("aiSize").innerHTML = ["cb", "bw", "eb", "rcps", "rights"].filter((t) => ai.stats[t]?.buckets).flatMap((t) =>
       ai.stats[t].buckets.map((b, i) => `<tr class="${b.zq ? "" : "past"} ${i === 0 ? "grp" : ""}">
@@ -1558,7 +1584,7 @@
 
     bindCalendar();
     $("aiRefresh").addEventListener("click", () => loadAi(true));
-    $("aiRows").addEventListener("click", (e) => {
+    $("aiView").addEventListener("click", (e) => {
       const star = e.target.closest("[data-aistar]");
       if (!star) return;
       const code = star.dataset.aistar;

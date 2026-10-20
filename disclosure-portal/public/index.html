@@ -161,12 +161,13 @@
   <section class="market ai" id="aiView" hidden>
     <div class="ai-head">
       <div>
-        <h2>이벤트 변동성 예측 Top 20</h2>
+        <h2>이벤트 변동성 예측</h2>
       </div>
       <span class="mk-meta" id="aiMeta"></span>
       <button id="aiRefresh" class="ghost small">새로고침</button>
     </div>
     <div class="banner" id="aiError" hidden></div>
+    <h3 class="ai-h3">진행 중 Top 20 <small>최근 14일 안에 공시·시작된 이벤트</small> <span class="mk-meta" id="aiNowCount"></span></h3>
     <div class="table-wrap">
       <table class="list ai-list">
         <thead>
@@ -182,9 +183,30 @@
             <th class="c-num" title="근거가 된 과거 사례 수(마우스를 올리면 최근 사례)">근거</th>
           </tr>
         </thead>
-        <tbody id="aiRows"></tbody>
+        <tbody id="aiNowRows"></tbody>
       </table>
-      <p class="empty" id="aiEmpty" hidden></p>
+      <p class="empty" id="aiNowEmpty" hidden></p>
+    </div>
+
+    <h3 class="ai-h3">예정 Top 20 <small>앞으로 30일 안: 권리락·변경상장·락업 해제</small> <span class="mk-meta" id="aiNextCount"></span></h3>
+    <div class="table-wrap">
+      <table class="list ai-list">
+        <thead>
+          <tr>
+            <th class="c-rank">#</th>
+            <th class="c-corp">종목</th>
+            <th>이벤트 · 날짜</th>
+            <th class="c-num c-prob" title="같은 종류 과거 사례의 '이벤트 강도'를 이 종목 평소 변동성에 적용했을 때, 10거래일 안에 이벤트 전날 종가 대비 ±20% 이상(장중 포함) 움직인 비율">±20% 확률</th>
+            <th class="c-num" title="10거래일 안 최대 변동폭 예상(중앙값)">예상 최대변동</th>
+            <th class="c-num" title="이벤트 직전 60거래일 하루 변동성(표준편차)">평소 변동성</th>
+            <th class="c-num" title="이벤트 뒤 10일 변동폭 ÷ 같은 종목 평소(30거래일 전) 10일 변동폭, 평소 변동성으로 나눠 맞춘 값의 중앙값">평소 대비</th>
+            <th class="c-num" title="과거 같은 종류 이벤트 10거래일 뒤 주가가 오른 비율">상승 비율</th>
+            <th class="c-num" title="근거가 된 과거 사례 수(마우스를 올리면 최근 사례)">근거</th>
+          </tr>
+        </thead>
+        <tbody id="aiNextRows"></tbody>
+      </table>
+      <p class="empty" id="aiNextEmpty" hidden></p>
     </div>
 
     <h3 class="ai-h3">메자닌·유상증자 발행 규모별 결과 (발행주식총수 대비 새로 생길 수 있는 주식)</h3>
