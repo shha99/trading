@@ -412,11 +412,11 @@ td.flr { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: 
 .ai-head > div { flex: 1; min-width: 280px; }
 .ai-head h2 { margin: 0; font-size: 18px; }
 .ai-sub { margin: 4px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
-.ai-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 0; }
-.ai-chips button { border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: 5px 12px; font-size: 13px; color: var(--muted); }
-.ai-chips button b { color: var(--text); margin-left: 2px; }
-.ai-chips button.on { background: var(--text); border-color: var(--text); color: #fff; }
-.ai-chips button.on b { color: #fff; }
+
+
+
+
+
 .ai-list .c-rank { width: 44px; }
 .ai-list .c-corp { width: 250px; }
 .ai-list .c-prob { width: 130px; }
@@ -440,3 +440,4 @@ td.flr { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: 
 .ai-list .corp .mkt { white-space: nowrap; }
 .ai-model { margin: 10px 0 0; padding: 10px 14px; border-radius: 10px; background: #f9fafb; border: 1px solid var(--line); font-size: 12px; color: var(--muted); line-height: 1.6; }
 .ai-model:empty { display: none; }
+.ai-type.t-cb, .ai-type.t-bw, .ai-type.t-eb, .ai-type.t-rcps { background: #f3effe; color: #6941c6; }

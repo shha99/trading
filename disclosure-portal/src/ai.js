@@ -24,6 +24,10 @@ const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 
 // 이벤트 종류. g: 어느 목록에서 찾나(b: 주요사항·지분·발행공시, i: 거래소 공시 — i1 수시공시, i3 시장조치)
 export const AI_TYPES = {
+  cb: { label: "CB(전환사채) 발행", g: "b", re: /전환사채권발행결정/ },
+  bw: { label: "BW(신주인수권부사채) 발행", g: "b", re: /신주인수권부사채권발행결정/ },
+  eb: { label: "EB(교환사채) 발행", g: "b", re: /교환사채권발행결정/ },
+  // RCPS·우선주 유상증자는 제목이 같아서 유상증자 상세(piicDecsn)의 기타주식 수량으로 따로 가른다(fetchRightsKind)
   rights: { label: "유상증자", g: "b", re: /유상증자결정/, not: /유무상/ },
   bonus: { label: "무상증자", g: "b", re: /(?:무상|유무상)증자결정/ },
   reduce: { label: "감자", g: "b", re: /감자결정/ },
@@ -111,9 +115,19 @@ export async function fetchAiHistory(apiKey, k, g, today, fetchImpl = fetch, { d
     }
     const t = classify(r.report_nm, group);
     if (!t || events.has(`${t}:${code}`)) continue;
-    events.set(`${t}:${code}`, { t, c: code, n: name, m: SCOPE[r.corp_cls] || "상장폐지", d: r.rcept_dt, r: r.rcept_no, title: r.report_nm.trim().slice(0, 60) });
+    events.set(`${t}:${code}`, { t, c: code, cc: r.corp_code, n: name, m: SCOPE[r.corp_cls] || "상장폐지", d: r.rcept_dt, r: r.rcept_no, title: r.report_nm.trim().slice(0, 60) });
   }
   return { block: k, bgn, end, events: [...events.values()], ipo: [...ipo.values()] };
+}
+
+// 유상증자 결정 한 건이 RCPS·우선주(기타주식) 발행인지. 기타주식만 새로 발행하면 rcps.
+export async function fetchRightsKind(apiKey, corpCode, rceptNo, fetchImpl = fetch) {
+  const d = rceptNo.slice(0, 8);
+  const data = await dartRequest(apiKey, "piicDecsn.json", { corp_code: corpCode, bgn_de: d, end_de: d }, fetchImpl);
+  const x = ((data && data.list) || []).find((r) => r.rcept_no === rceptNo) || ((data && data.list) || [])[0];
+  if (!x) return { rcps: false, found: false };
+  const n = (v) => Number(String(v || "").replace(/[^\d]/g, "")) || 0;
+  return { rcps: n(x.nstk_estk_cnt) > 0 && n(x.nstk_ostk_cnt) === 0, found: true, method: x.ic_mthn || "" };
 }
 
 // ---- 주가 ----

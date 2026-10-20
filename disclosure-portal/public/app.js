@@ -22,7 +22,7 @@
       month: null, events: [], quotes: {}, loadedAt: null, loading: false, selected: null, error: null, newIds: new Set(),
       manual: [],
     },
-    ai: { loading: false, loadedAt: null, error: null, stats: null, ranked: [], type: "" },
+    ai: { loading: false, loadedAt: null, error: null, stats: null, ranked: [] },
     mode: "day",      // "day"(하루, 실시간) | "range"(기간 조회)
     date: null,       // 하루 모드에서 보고 있는 날짜
     range: null,      // 기간 모드의 { from, to } (YYYYMMDD)
@@ -801,6 +801,7 @@
   // 과거 몇 년치 통계(모델)는 /ai-model.json(scripts/build-ai-model.mjs로 미리 만든 파일).
   // 서버(/api/ai/*)는 최근 공시와 지금 종목의 측정값만 준다. 확률·순위는 여기서 계산한다.
   const AI_LABEL = {
+    cb: "CB(전환사채) 발행", bw: "BW(신주인수권부사채) 발행", eb: "EB(교환사채) 발행", rcps: "RCPS·우선주 유상증자",
     rights: "유상증자 결정", bonus: "무상증자 결정", reduce: "감자 결정", merger: "합병·분할·영업양수도 결정(매수청구권)",
     tender: "공개매수", split: "액면분할 결정", consolidate: "액면병합 결정", relist: "액면변경 후 변경상장(거래재개)",
     delist: "정리매매", halt: "거래정지(사유 발생)", resume: "거래재개(정지 해제)", delist_warn: "관리종목·상장폐지 우려 안내",
@@ -858,6 +859,12 @@
         events.push(e);
       }
       const ipo = new Map(hist.flatMap((h) => h.ipo || []).map((x) => [x.c, x]));
+      // 최근 유상증자 중 RCPS·우선주(기타주식) 발행은 따로 분류
+      const recentRights = events.filter((e) => e.t === "rights" && e.cc && daysDiff(e.d, state.today) <= 14);
+      await runPool(recentRights.map((e) => async () => {
+        const k = await fetchJSON(`/api/ai/rights?corp=${e.cc}&r=${e.r}`);
+        if (k.rcps) e.t = "rcps";
+      }), 6, (d, t) => meta(`유상증자 종류 확인 중 ${d}/${t}`));
       // 2) 캘린더의 액면변경 변경상장 예정일(앞으로 2주)
       if (!state.cal.loadedAt) {
         meta("캘린더 일정 확인 중…");
@@ -946,13 +953,6 @@
     return { stats, ranked };
   }
 
-  const fmtYmd = (d) => (d ? `${d.slice(0, 4)}.${d.slice(4, 6)}.${d.slice(6, 8)}` : "");
-  function aiValidationText(v) {
-    if (!v || !v.tests) return "";
-    const rows = v.bins.filter((b) => b.n >= 30).map((b) => `${b.range} 예측 → 실제 ${pct(b.actual)} (${b.n}건)`).join(" · ");
-    return `<br>검증(${fmtYmd(v.train_until)} 이전 데이터로 만든 통계로 그 뒤 ${v.tests.toLocaleString()}건 예측): ${rows}`;
-  }
-
   function aiWhen(d) {
     const dd = daysDiff(state.today, d);
     return dd > 0 ? `D-${dd}` : dd === 0 ? "오늘" : `${-dd}일 전`;
@@ -961,20 +961,13 @@
   function renderAi() {
     const ai = state.ai;
     $("aiRefresh").disabled = ai.loading;
-    const md = ai.model;
     if (!ai.loading) $("aiMeta").textContent = ai.error ? "" : ai.loadedAt
       ? `${ai.loadedAt} 기준${ai.partial ? ` · 일부 ${ai.partial}건 실패` : ""}` : "";
-    $("aiModel").innerHTML = md ? `학습 데이터: <b>${fmtYmd(md.from)} ~ ${fmtYmd(md.built)}</b> (${md.years}년) · 과거 사례 <b>${md.samples.toLocaleString()}건</b> · ${md.stocks.toLocaleString()}종목${aiValidationText(md.validation)}` : "";
     const err = $("aiError");
     err.hidden = !ai.error;
     if (ai.error) err.textContent = `불러오지 못했습니다: ${ai.error}`;
-    if (!ai.stats) { $("aiRows").innerHTML = ""; $("aiStats").innerHTML = ""; $("aiChips").innerHTML = ""; return; }
-    // 종류 칩
-    const counts = {};
-    for (const r of ai.ranked) counts[r.t] = (counts[r.t] || 0) + 1;
-    $("aiChips").innerHTML = [`<button data-ait="" class="${ai.type ? "" : "on"}">전체 <b>${ai.ranked.length}</b></button>`,
-      ...Object.keys(AI_LABEL).filter((t) => counts[t]).map((t) => `<button data-ait="${t}" class="${ai.type === t ? "on" : ""}">${esc(AI_LABEL[t])} <b>${counts[t]}</b></button>`)].join("");
-    const rows = ai.ranked.filter((r) => !ai.type || r.t === ai.type).slice(0, AI_TOP);
+    if (!ai.stats) { $("aiRows").innerHTML = ""; $("aiStats").innerHTML = ""; return; }
+    const rows = ai.ranked.slice(0, AI_TOP);
     $("aiRows").innerHTML = rows.map((r, i) => {
       const st = ai.stats[r.t];
       const watched = isWatchedCode(r.code);
@@ -1543,12 +1536,6 @@
 
     bindCalendar();
     $("aiRefresh").addEventListener("click", () => loadAi(true));
-    $("aiChips").addEventListener("click", (e) => {
-      const b = e.target.closest("button[data-ait]");
-      if (!b) return;
-      state.ai.type = b.dataset.ait;
-      renderAi();
-    });
     $("aiRows").addEventListener("click", (e) => {
       const star = e.target.closest("[data-aistar]");
       if (!star) return;

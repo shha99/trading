@@ -461,6 +461,9 @@ import { blockOf, blockRange, classify, parseChart, parseMetricsQuery, stockMetr
 
 test("AI분석: 공시 제목 → 이벤트 종류", () => {
   assert.equal(classify("주요사항보고서(유상증자결정)", "b"), "rights");
+  assert.equal(classify("주요사항보고서(전환사채권발행결정)", "b"), "cb");
+  assert.equal(classify("주요사항보고서(신주인수권부사채권발행결정)", "b"), "bw");
+  assert.equal(classify("주요사항보고서(교환사채권발행결정)", "b"), "eb");
   assert.equal(classify("주요사항보고서(유무상증자결정)", "b"), "bonus");
   assert.equal(classify("[기재정정]주요사항보고서(유상증자결정)", "b"), null);
   assert.equal(classify("주요사항보고서(회사합병결정)", "b"), "merger");

@@ -10,7 +10,7 @@
 // 키는 환경변수로만 받는다 — 저장소에 넣지 말 것. 이 스크립트는 Worker에 배포되지 않는다.
 import fs from "node:fs";
 import path from "node:path";
-import { blockOf, fetchAiHistory, fetchChart, stockMetrics } from "../src/ai.js";
+import { blockOf, fetchAiHistory, fetchChart, fetchRightsKind, stockMetrics } from "../src/ai.js";
 
 const KEY = process.env.DART_API_KEY;
 if (!KEY) { console.error("DART_API_KEY 환경변수가 필요합니다."); process.exit(1); }
@@ -62,6 +62,21 @@ for (const e of all) {
   events.push(e);
 }
 const ipo = new Map(hist.flatMap((h) => h.ipo).map((x) => [x.c, x]));
+// 유상증자 중 RCPS·우선주(기타주식) 발행을 따로
+done = 0;
+const rights = events.filter((e) => e.t === "rights" && e.cc);
+await pool(rights, 4, async (e) => {
+  const k = await cachedJson(`piic-${e.r}.json`, async () => {
+    for (let attempt = 0; ; attempt++) {
+      try { return await fetchRightsKind(KEY, e.cc, e.r); } catch (err) {
+        if (attempt >= 2) return { rcps: false, error: err.message };
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+    }
+  });
+  if (k.rcps) e.t = "rcps";
+  if (++done % 300 === 0) log(`유상증자 종류 ${done}/${rights.length}`);
+});
 log(`이벤트 ${events.length}건, 신규상장 후보 ${ipo.size}종목, 실패 블록 ${hist.filter((h) => h.failed).length}`);
 
 // 2) 주가
@@ -71,7 +86,8 @@ for (const c of ipo.keys()) { if (!by.has(c)) by.set(c, { dates: new Set(), list
 done = 0;
 const stockList = [...by];
 const metrics = Object.fromEntries(await pool(stockList, 8, async ([code, want]) => {
-  const m = await cachedJson(`m-${COUNT}-${code}.json`, async () => {
+  const tag = [...want.dates].sort().join("").length + (want.listing ? "L" : "") + [...want.dates].sort().slice(-1)[0];
+  const m = await cachedJson(`m-${COUNT}-${code}-${tag}.json`, async () => {
     for (let attempt = 0; ; attempt++) {
       try { return stockMetrics(await fetchChart(code, fetch, COUNT), [...want.dates], want.listing, today, COUNT); } catch (e) {
         if (attempt >= 2) return { error: e.message };
