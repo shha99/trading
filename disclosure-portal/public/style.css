@@ -438,3 +438,5 @@ td.flr { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: 
 .ai-list .c-prob { width: 150px; }
 .ai-list td.num { white-space: nowrap; }
 .ai-list .corp .mkt { white-space: nowrap; }
+.ai-model { margin: 10px 0 0; padding: 10px 14px; border-radius: 10px; background: #f9fafb; border: 1px solid var(--line); font-size: 12px; color: var(--muted); line-height: 1.6; }
+.ai-model:empty { display: none; }

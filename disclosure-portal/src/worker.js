@@ -163,7 +163,7 @@ async function handleAi(url, env, ctx, fetchImpl) {
     const k = Number(url.searchParams.get("k"));
     const g = url.searchParams.get("g");
     const cur = blockOf(today);
-    if (!Number.isInteger(k) || k > cur || k < cur - HISTORY_BLOCKS - 1 || !["b", "i1", "i3"].includes(g)) return json({ detail: "k 또는 g가 잘못됐습니다." }, 400);
+    if (!Number.isInteger(k) || k > cur || k < cur - HISTORY_BLOCKS - 1 || !["b", "c", "i1", "i3"].includes(g)) return json({ detail: "k 또는 g가 잘못됐습니다." }, 400);
     // 지난 블록은 거의 안 바뀌어 사흘, 이번 블록은 1시간
     return cached(`ai/history?k=${k}&g=${g}${k === cur ? `&d=${today}` : ""}`, k === cur ? 3600 : 3 * 86400, fresh && k === cur, ctx,
       async () => fetchAiHistory(env.DART_API_KEY, k, g, today, fetchImpl));

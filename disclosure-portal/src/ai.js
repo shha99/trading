@@ -1,9 +1,12 @@
 // AI분석: 과거 기업 이벤트 뒤 실제로 주가가 얼마나 흔들렸는지(통계)로, 지금 이벤트가 걸린 종목의
-// 변동성을 예상한다. 머신러닝 모델이 아니라 "같은 종류 이벤트의 과거 사례 비율"이다.
+// 변동성을 예상한다. 머신러닝 모델이 아니라 "같은 종류 이벤트의 과거 사례 분포"다.
 //
-// 1) history: DART 공시 목록에서 지난 13개월의 이벤트(증자·감자·합병 등·공개매수·액면분할/병합·
-//    거래정지·거래재개·상장폐지 우려·정리매매·신규상장)를 30일 단위 블록으로 모은다. 블록은 날짜에
-//    고정돼 있어(오늘이 바뀌어도 지난 블록은 같은 캐시를 쓴다) 지난 블록은 며칠씩 캐시한다.
+// 과거 몇 년치 통계("모델")는 scripts/build-ai-model.mjs로 미리 만들어 public/ai-model.json에 둔다.
+// 사이트는 최근 공시와 지금 종목 주가만 받아 그 모델을 적용한다.
+//
+// 1) history: DART 공시 목록에서 이벤트(증자·감자·합병 등·공개매수·액면분할/병합·거래정지·거래재개·
+//    상장폐지 우려·정리매매·신규상장)를 30일 단위 블록으로 모은다. 블록은 날짜에 고정돼 있어
+//    (오늘이 바뀌어도 지난 블록은 같은 캐시를 쓴다) 지난 블록은 며칠씩 캐시한다.
 // 2) metrics: 종목별 일봉(네이버 차트, 수정주가)을 받아 각 이벤트일 기준
 //    - 직전 60거래일 하루 변동성(평소 변동성)
 //    - 이벤트일부터 10거래일 동안 이벤트 전날 종가 대비 최대 변동폭(장중 고가·저가 포함)
@@ -14,7 +17,7 @@ import { PAGE_COUNT, dartRequest } from "./dart.js";
 
 const SCOPE = { Y: "코스피", K: "코스닥" };
 export const BLOCK_DAYS = 30;
-export const HISTORY_BLOCKS = 13; // 약 13개월
+export const HISTORY_BLOCKS = 13; // 사이트가 직접 보는 범위(신규상장 찾기용) 약 13개월
 export const CHART_COUNT = 330; // 13개월 + 평소 변동성 60거래일 + 여유
 const CHART_URL = "https://fchart.stock.naver.com/sise.nhn";
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
@@ -70,35 +73,40 @@ export function classify(reportNm, group) {
 }
 
 // 블록 하나의 이벤트 목록. 종목×종류마다 블록 안 첫 공시만 남긴다.
-// g="b"면 신규상장 후보(지분증권 증권신고서를 낸 상장사)도 같이 돌려준다.
-export async function fetchAiHistory(apiKey, k, g, today, fetchImpl = fetch) {
+// g="b"·"c"면 신규상장 후보(지분증권 증권신고서를 낸 상장사)도 돌려준다("c"는 그것만).
+// delisted: 모델 만들 때만 — 지금은 상장폐지돼 "기타(E)"로 바뀐 회사의 과거 공시도 넣는다(생존편향 줄이기).
+export async function fetchAiHistory(apiKey, k, g, today, fetchImpl = fetch, { delisted = false } = {}) {
   const group = g[0]; // 제목 분류는 b / i 두 갈래
   const [bgn, end] = blockRange(k, today);
   if (bgn > today) return { block: k, bgn, end, events: [], ipo: [] };
   const jobs = [];
-  if (g === "b") {
-    for (const cls of Object.keys(SCOPE)) jobs.push(listAll(apiKey, { bgn_de: bgn, end_de: end, corp_cls: cls, pblntf_ty: "B" }, fetchImpl));
+  const classes = delisted ? [...Object.keys(SCOPE), "E"] : Object.keys(SCOPE);
+  if (g === "c") {
+    jobs.push(listAll(apiKey, { bgn_de: bgn, end_de: end, pblntf_detail_ty: "C001" }, fetchImpl));
+  } else if (g === "b") {
+    for (const cls of classes) jobs.push(listAll(apiKey, { bgn_de: bgn, end_de: end, corp_cls: cls, pblntf_ty: "B" }, fetchImpl));
     jobs.push(listAll(apiKey, { bgn_de: bgn, end_de: end, pblntf_detail_ty: "D004" }, fetchImpl)); // 공개매수
     jobs.push(listAll(apiKey, { bgn_de: bgn, end_de: end, pblntf_detail_ty: "C001" }, fetchImpl)); // 지분증권 증권신고서(공모·상장)
   } else if (g === "i1") { // 거래소 수시공시(액면분할·병합 결정) — 양이 많아 따로
-    for (const cls of Object.keys(SCOPE)) jobs.push(listAll(apiKey, { bgn_de: bgn, end_de: end, corp_cls: cls, pblntf_detail_ty: "I001" }, fetchImpl));
+    for (const cls of classes) jobs.push(listAll(apiKey, { bgn_de: bgn, end_de: end, corp_cls: cls, pblntf_detail_ty: "I001" }, fetchImpl));
   } else if (g === "i3") { // 시장조치·안내(거래정지·재개·변경상장·상장폐지)
     for (const cls of Object.keys(SCOPE)) jobs.push(listAll(apiKey, { bgn_de: bgn, end_de: end, corp_cls: cls, pblntf_detail_ty: "I003" }, fetchImpl));
     // 정리매매 중인 회사는 이미 "기타(E)"로 분류돼 있다
     jobs.push(listAll(apiKey, { bgn_de: bgn, end_de: end, corp_cls: "E", pblntf_detail_ty: "I003" }, fetchImpl));
   } else {
-    throw new Error("g는 b, i1, i3 중 하나");
+    throw new Error("g는 b, c, i1, i3 중 하나");
   }
   const rows = (await Promise.all(jobs)).flat().filter((r) => /^[0-9A-Z]{6}$/.test((r.stock_code || "").trim()) &&
-    (r.corp_cls in SCOPE || (r.corp_cls === "E" && classify(r.report_nm, group) === "delist")));
+    (r.corp_cls in SCOPE || (r.corp_cls === "E" && (delisted || classify(r.report_nm, group) === "delist"))));
   rows.sort((a, b) => a.rcept_no.localeCompare(b.rcept_no));
   const events = new Map();
   const ipo = new Map();
   for (const r of rows) {
     const code = r.stock_code.trim();
     const name = r.corp_name.trim();
-    if (g === "b" && r.report_nm.includes("증권신고서(지분증권)")) {
-      if (!/스팩|기업인수목적/.test(name)) ipo.set(code, { c: code, n: name, m: SCOPE[r.corp_cls] });
+    if (g === "c" || r.report_nm.includes("증권신고서(지분증권)")) {
+      if (!r.report_nm.includes("증권신고서(지분증권)") || !(r.corp_cls in SCOPE || delisted)) continue;
+      if (!/스팩|기업인수목적/.test(name)) ipo.set(code, { c: code, n: name, m: SCOPE[r.corp_cls] || "상장폐지" });
       continue;
     }
     const t = classify(r.report_nm, group);
@@ -125,8 +133,8 @@ export function parseChart(xml) {
   return rows;
 }
 
-async function fetchChart(code, fetchImpl) {
-  const resp = await fetchImpl(`${CHART_URL}?symbol=${code}&timeframe=day&count=${CHART_COUNT}&requestType=0`, { headers: { "User-Agent": UA } });
+export async function fetchChart(code, fetchImpl = fetch, count = CHART_COUNT) {
+  const resp = await fetchImpl(`${CHART_URL}?symbol=${code}&timeframe=day&count=${count}&requestType=0`, { headers: { "User-Agent": UA } });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   return parseChart(await resp.text());
 }
@@ -165,7 +173,7 @@ const addMonths = (d, n) => {
 };
 
 // 한 종목의 측정값. dates: 이벤트일(YYYYMMDD) 목록, wantListing: 신규상장 락업 해제일 계산 여부
-export function stockMetrics(rows, dates, wantListing, today) {
+export function stockMetrics(rows, dates, wantListing, today, count = CHART_COUNT) {
   const ended = Boolean(today && rows.length && rows[rows.length - 1].d < shiftYmd(today, -10)); // 열흘 넘게 거래 없음(폐지 등)
   const out = { now_base: rows.length > 20 ? round(dailyVol(rows, rows.length - BASE_DAYS, rows.length - 1)) : null, last: rows.length ? rows[rows.length - 1].d : null, ev: {} };
   const idx = (d) => { // d 이후 첫 거래일
@@ -191,7 +199,7 @@ export function stockMetrics(rows, dates, wantListing, today) {
   };
   for (const d of dates) out.ev[d] = one(d);
   // 신규상장: 차트가 CHART_COUNT보다 짧으면 첫 거래일이 상장일. 1·3·6·12개월 뒤가 흔한 의무보유 해제 시점.
-  if (wantListing && rows.first && rows.count < CHART_COUNT) {
+  if (wantListing && rows.first && rows.count < count) {
     out.listed = rows.first;
     out.lockups = [1, 3, 6, 12].map((n) => {
       const d = addMonths(rows.first, n);
@@ -214,11 +222,11 @@ export function parseMetricsQuery(q) {
   return by;
 }
 
-export async function fetchAiMetrics(by, today, fetchImpl = fetch) {
+export async function fetchAiMetrics(by, today, fetchImpl = fetch, count = CHART_COUNT) {
   const out = {};
   await Promise.all([...by].map(async ([code, want]) => {
     try {
-      out[code] = stockMetrics(await fetchChart(code, fetchImpl), want.dates, want.listing, today);
+      out[code] = stockMetrics(await fetchChart(code, fetchImpl, count), want.dates, want.listing, today, count);
     } catch (e) {
       out[code] = { error: String(e.message).slice(0, 80) };
     }

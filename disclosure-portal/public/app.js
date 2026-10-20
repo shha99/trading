@@ -798,15 +798,15 @@
   }
 
   // ---------- AI분석: 과거 이벤트 뒤 실제 변동성 통계로 지금 이벤트 종목의 변동성 예상 ----------
-  // 서버(/api/ai/*)는 공시 목록과 종목별 측정값만 준다. 확률·순위는 여기서 계산한다.
+  // 과거 몇 년치 통계(모델)는 /ai-model.json(scripts/build-ai-model.mjs로 미리 만든 파일).
+  // 서버(/api/ai/*)는 최근 공시와 지금 종목의 측정값만 준다. 확률·순위는 여기서 계산한다.
   const AI_LABEL = {
     rights: "유상증자 결정", bonus: "무상증자 결정", reduce: "감자 결정", merger: "합병·분할·영업양수도 결정(매수청구권)",
     tender: "공개매수", split: "액면분할 결정", consolidate: "액면병합 결정", relist: "액면변경 후 변경상장(거래재개)",
     delist: "정리매매", halt: "거래정지(사유 발생)", resume: "거래재개(정지 해제)", delist_warn: "관리종목·상장폐지 우려 안내",
     lockup1: "상장 1개월 의무보유 해제", lockup3: "상장 3개월 의무보유 해제", lockup6: "상장 6개월 의무보유 해제", lockup12: "상장 1년 의무보유 해제",
   };
-  const AI_BLOCKS = 13; // 30일 블록 13개 ≈ 13개월
-  const AI_BIG = 0.2; // "크게 움직임" = 10거래일 안에 이벤트 전날 종가 대비 ±20% 이상(장중 포함)
+  const AI_IPO_BLOCKS = 14; // 신규상장 찾기: 30일 블록 14개 ≈ 14개월(1년 락업까지)
   const AI_MIN_N = 5; // 과거 사례가 이보다 적은 종류는 순위에서 뺀다
   const AI_TOP = 20;
   const median = (a) => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
@@ -835,11 +835,15 @@
     renderAi();
     const meta = (t) => { $("aiMeta").textContent = t; };
     try {
-      // 1) 지난 13개월 이벤트 공시
+      // 0) 미리 만든 과거 통계(모델)
+      meta("모델 불러오는 중…");
+      if (!ai.model) ai.model = await fetchJSON("/ai-model.json").catch(() => { throw new Error("과거 통계(모델) 파일을 준비 중입니다. 잠시 뒤 다시 열어주세요."); });
+      // 1) 최근 공시(이벤트는 최근 2블록, 신규상장은 14블록)
       const cur = aiBlockOf(state.today);
       const urls = [];
-      for (let k = cur - AI_BLOCKS; k <= cur; k++) for (const g of ["b", "i1", "i3"]) urls.push(`/api/ai/history?k=${k}&g=${g}${fresh && k === cur ? "&fresh=1" : ""}`);
-      const hist = await runPool(urls.map((u) => () => fetchJSON(u)), 6, (d, t) => meta(`과거 공시 모으는 중 ${d}/${t}`));
+      for (let k = cur - 1; k <= cur; k++) for (const g of ["b", "i1", "i3"]) urls.push(`/api/ai/history?k=${k}&g=${g}${fresh && k === cur ? "&fresh=1" : ""}`);
+      for (let k = cur - AI_IPO_BLOCKS; k <= cur; k++) urls.push(`/api/ai/history?k=${k}&g=c${fresh && k === cur ? "&fresh=1" : ""}`);
+      const hist = await runPool(urls.map((u) => () => fetchJSON(u)), 6, (d, t) => meta(`최근 공시 확인 중 ${d}/${t}`));
       const failedBlocks = hist.filter((h) => h.error).length;
       if (failedBlocks === hist.length) throw new Error(hist[0].error);
       // 같은 종목·같은 종류가 20일 안에 또 나오면(블록 경계·정정) 처음 것만
@@ -865,7 +869,7 @@
       // 3) 종목별 주가 측정값 — 종목코드 해시로 묶어 요청(묶음이 매일 거의 같아 서버 캐시가 잘 맞는다)
       const want = new Map();
       const add = (code, tok) => { if (!want.has(code)) want.set(code, new Set()); want.get(code).add(tok); };
-      for (const e of events) add(e.c, e.d);
+      for (const e of events) if (daysDiff(e.d, state.today) <= 14) add(e.c, e.d);
       for (const c of ipo.keys()) add(c, "L");
       for (const e of relists) add(e.code, state.today);
       const buckets = new Map();
@@ -888,7 +892,7 @@
       }
       const res = await runPool(qs.map((q) => () => fetchJSON(`/api/ai/metrics?q=${q.join(",")}`)), 6, (d, t) => meta(`주가 측정 중 ${d}/${t}`));
       const stocks = Object.assign({}, ...res.map((r) => r.stocks || {}));
-      Object.assign(ai, aiCompute(events, ipo, stocks, relists));
+      Object.assign(ai, aiCompute(ai.model, events, ipo, stocks, relists));
       ai.partial = failedBlocks + res.filter((r) => r.error).length;
       ai.loadedAt = nowKst();
     } catch (e) {
@@ -899,44 +903,24 @@
     }
   }
 
-  function aiCompute(events, ipo, stocks, relists) {
+  function aiCompute(model, events, ipo, stocks, relists) {
     const today = state.today;
-    const samples = {};
-    const addSample = (t, x, info) => { if (x && x.m && x.m.base) (samples[t] ||= []).push({ ...x.m, k: x.k, ...info }); };
-    for (const e of events) addSample(e.t, stocks[e.c]?.ev?.[e.d], { n: e.n, c: e.c, d: e.d });
-    for (const [code, st] of Object.entries(stocks)) {
-      for (const l of st.lockups || []) addSample(`lockup${l.months}`, l, { n: ipo.get(code)?.n || code, c: code, d: l.d });
-    }
-    // 종류별 통계. z = 10일 최대변동 ÷ (평소 하루 변동성 × √10): 종목마다 다른 평소 변동성을 걷어낸 "이벤트 강도"
+    const big = model.big;
     const stats = {};
-    for (const [t, a] of Object.entries(samples)) {
-      const z = a.map((x) => x.move / (x.base * Math.sqrt(10)));
-      const ctrl = a.filter((x) => x.k && x.k.base);
-      const zc = ctrl.map((x) => x.k.move / (x.k.base * Math.sqrt(10)));
-      stats[t] = {
-        t, n: a.length, z,
-        big: a.filter((x) => x.move >= AI_BIG).length / a.length,
-        ctrlBig: ctrl.length >= AI_MIN_N ? ctrl.filter((x) => x.k.move >= AI_BIG).length / ctrl.length : null,
-        medMove: median(a.map((x) => x.move)),
-        lift: zc.length >= AI_MIN_N ? median(z) / median(zc) : null,
-        up: a.filter((x) => x.ret > 0).length / a.length,
-        medBase: median(a.map((x) => x.base)),
-        examples: [...a].sort((x, y) => y.d.localeCompare(x.d)).slice(0, 5),
-      };
-    }
+    for (const [t, st] of Object.entries(model.types)) stats[t] = { ...st, t };
     // 지금 이벤트가 걸린 종목: 최근 14일 안에 나온 이벤트(10거래일 진행 중) + 앞으로 2주 안 락업 해제·변경상장
     const cands = [];
     const addCand = (t, code, name, market, date, rcept, evDate = date) => {
       const st = stats[t];
-      if (!st || st.n < AI_MIN_N) return;
+      if (!st || st.n < AI_MIN_N || !st.zq) return;
       const ev = t.startsWith("lockup") ? (stocks[code]?.lockups || []).find((l) => l.d === date) : stocks[code]?.ev?.[evDate];
       const own = ev?.pre || stocks[code]?.now_base; // 이벤트 직전 평소 변동성(없으면 최근 60거래일)
       const sigma = own || st.medBase;
       const scale = sigma * Math.sqrt(10);
       cands.push({
         t, code, name, market, date, rcept, sigma, own: Boolean(own), sofar: ev?.sofar || null,
-        prob: st.z.filter((z) => z * scale >= AI_BIG).length / st.z.length,
-        exp: median(st.z) * scale,
+        prob: st.zq.filter((z) => z * scale >= big).length / st.zq.length, // 과거 사례 분포(백분위)에서 ±20% 넘는 비율
+        exp: st.zq[50] * scale,
       });
     };
     for (const e of events) {
@@ -959,7 +943,14 @@
       else p.others.push(c);
     }
     const ranked = [...byCode.values()].sort((a, b) => b.prob - a.prob || b.exp - a.exp);
-    return { stats, ranked, sampleCount: Object.values(samples).reduce((a, x) => a + x.length, 0), stockCount: Object.keys(stocks).length };
+    return { stats, ranked };
+  }
+
+  const fmtYmd = (d) => (d ? `${d.slice(0, 4)}.${d.slice(4, 6)}.${d.slice(6, 8)}` : "");
+  function aiValidationText(v) {
+    if (!v || !v.tests) return "";
+    const rows = v.bins.filter((b) => b.n >= 30).map((b) => `${b.range} 예측 → 실제 ${pct(b.actual)} (${b.n}건)`).join(" · ");
+    return `<br>검증(${fmtYmd(v.train_until)} 이전 데이터로 만든 통계로 그 뒤 ${v.tests.toLocaleString()}건 예측): ${rows}`;
   }
 
   function aiWhen(d) {
@@ -970,8 +961,10 @@
   function renderAi() {
     const ai = state.ai;
     $("aiRefresh").disabled = ai.loading;
+    const md = ai.model;
     if (!ai.loading) $("aiMeta").textContent = ai.error ? "" : ai.loadedAt
-      ? `과거 이벤트 ${ai.sampleCount.toLocaleString()}건 · ${ai.stockCount.toLocaleString()}종목 주가 분석 · ${ai.loadedAt} 기준${ai.partial ? ` · 일부 ${ai.partial}건 실패` : ""}` : "";
+      ? `${ai.loadedAt} 기준${ai.partial ? ` · 일부 ${ai.partial}건 실패` : ""}` : "";
+    $("aiModel").innerHTML = md ? `학습 데이터: <b>${fmtYmd(md.from)} ~ ${fmtYmd(md.built)}</b> (${md.years}년) · 과거 사례 <b>${md.samples.toLocaleString()}건</b> · ${md.stocks.toLocaleString()}종목${aiValidationText(md.validation)}` : "";
     const err = $("aiError");
     err.hidden = !ai.error;
     if (ai.error) err.textContent = `불러오지 못했습니다: ${ai.error}`;
