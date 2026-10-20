@@ -455,3 +455,62 @@ test("로그인: 화면·API 막고, 맞는 계정이면 쿠키로 통과, 목�
   r = await get("/logout", cookie);
   assert.match(r.headers.get("Set-Cookie"), /Max-Age=0/);
 });
+
+// ---- AI분석 ----
+import { blockOf, blockRange, classify, parseChart, parseMetricsQuery, stockMetrics } from "../src/ai.js";
+
+test("AI분석: 공시 제목 → 이벤트 종류", () => {
+  assert.equal(classify("주요사항보고서(유상증자결정)", "b"), "rights");
+  assert.equal(classify("주요사항보고서(유무상증자결정)", "b"), "bonus");
+  assert.equal(classify("[기재정정]주요사항보고서(유상증자결정)", "b"), null);
+  assert.equal(classify("주요사항보고서(회사합병결정)", "b"), "merger");
+  assert.equal(classify("주요사항보고서(자회사의 주요경영사항)", "b"), null);
+  assert.equal(classify("주식병합결정", "i"), "consolidate");
+  assert.equal(classify("주권매매거래정지해제(액면병합 주권 변경상장)", "i"), "relist");
+  assert.equal(classify("주권매매거래정지(주식의 병합, 분할 등 전자등록 변경, 말소)", "i"), null);
+  assert.equal(classify("주권매매거래정지(풍문 또는 보도 관련)", "i"), "halt");
+  assert.equal(classify("주권매매거래정지해제", "i"), "resume");
+  assert.equal(classify("주권매매거래정지해제(상장폐지에 따른 정리매매 개시)", "i"), "delist");
+  assert.equal(classify("기타시장안내(관리종목지정 우려 종목)(주가 1,000원 미달)", "i"), "delist_warn");
+});
+
+test("AI분석: 30일 고정 블록", () => {
+  const k = blockOf("20261020");
+  const [bgn, end] = blockRange(k, "20261020");
+  assert.ok(bgn <= "20261020" && end === "20261020");
+  assert.equal(blockRange(k - 1, "20261020")[1] < bgn, true);
+});
+
+test("AI분석: 차트 파싱(정지일 제외)과 이벤트 전후 측정", () => {
+  const lines = [];
+  let d = Date.UTC(2026, 0, 1);
+  const days = [];
+  for (let i = 0; i < 120; i++) { days.push(new Date(d).toISOString().slice(0, 10).replaceAll("-", "")); d += 86400000; }
+  days.forEach((day, i) => {
+    const c = i < 100 ? 1000 + (i % 2 ? 10 : -10) : 1300; // 100번째 날부터 +30% 급등
+    lines.push(i === 50 ? `<item data="${day}|0|0|0|1000|0" />` : `<item data="${day}|${c}|${c + 5}|${c - 5}|${c}|100" />`);
+  });
+  const rows = parseChart(lines.join("\n"));
+  assert.equal(rows.length, 119);
+  assert.equal(rows.count, 120);
+  const m = stockMetrics(rows, [days[100], days[115]], true, days[119]);
+  const ev = m.ev[days[100]];
+  assert.ok(ev.m.move > 0.29 && ev.m.move < 0.32);
+  assert.ok(ev.m.ret > 0.28);
+  assert.ok(ev.pre > 0 && ev.k);
+  assert.equal(m.ev[days[115]].m, null); // 10거래일이 안 지났다
+  assert.equal(m.ev[days[115]].sofar.days, 5); // 115~119일
+  assert.equal(m.listed, days[0]); // 차트가 짧으면 신규상장으로 본다
+  assert.deepEqual(m.lockups.map((l) => l.months), [1, 3, 6, 12]);
+  const q = parseMetricsQuery("005930:20260105,005930:L,bad,0015N0:20260101");
+  assert.deepEqual([...q.keys()], ["005930", "0015N0"]);
+  assert.equal(q.get("005930").listing, true);
+});
+
+test("AI분석 API: 입력 검사", async () => {
+  const e = env();
+  const get = (p) => handle(new Request(`https://portal.example${p}`), e, ctx);
+  assert.equal((await get("/api/ai/history?k=1&g=b")).status, 400);
+  assert.equal((await get(`/api/ai/history?k=${blockOf("20261020")}&g=x`)).status, 400);
+  assert.equal((await get("/api/ai/metrics?q=")).status, 400);
+});

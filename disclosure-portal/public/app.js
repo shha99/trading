@@ -22,6 +22,7 @@
       month: null, events: [], quotes: {}, loadedAt: null, loading: false, selected: null, error: null, newIds: new Set(),
       manual: [],
     },
+    ai: { loading: false, loadedAt: null, error: null, stats: null, ranked: [], type: "" },
     mode: "day",      // "day"(하루, 실시간) | "range"(기간 조회)
     date: null,       // 하루 모드에서 보고 있는 날짜
     range: null,      // 기간 모드의 { from, to } (YYYYMMDD)
@@ -796,6 +797,231 @@
     $("mkMeta").textContent = state.mk.loadedAt ? `${rows.length}종목 · ${state.mk.loadedAt} 확인` : "";
   }
 
+  // ---------- AI분석: 과거 이벤트 뒤 실제 변동성 통계로 지금 이벤트 종목의 변동성 예상 ----------
+  // 서버(/api/ai/*)는 공시 목록과 종목별 측정값만 준다. 확률·순위는 여기서 계산한다.
+  const AI_LABEL = {
+    rights: "유상증자 결정", bonus: "무상증자 결정", reduce: "감자 결정", merger: "합병·분할·영업양수도 결정(매수청구권)",
+    tender: "공개매수", split: "액면분할 결정", consolidate: "액면병합 결정", relist: "액면변경 후 변경상장(거래재개)",
+    delist: "정리매매", halt: "거래정지(사유 발생)", resume: "거래재개(정지 해제)", delist_warn: "관리종목·상장폐지 우려 안내",
+    lockup1: "상장 1개월 의무보유 해제", lockup3: "상장 3개월 의무보유 해제", lockup6: "상장 6개월 의무보유 해제", lockup12: "상장 1년 의무보유 해제",
+  };
+  const AI_BLOCKS = 13; // 30일 블록 13개 ≈ 13개월
+  const AI_BIG = 0.2; // "크게 움직임" = 10거래일 안에 이벤트 전날 종가 대비 ±20% 이상(장중 포함)
+  const AI_MIN_N = 5; // 과거 사례가 이보다 적은 종류는 순위에서 뺀다
+  const AI_TOP = 20;
+  const median = (a) => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+  const pct = (x, d = 0) => (x === null || x === undefined || !Number.isFinite(x) ? "–" : `${(x * 100).toFixed(d)}%`);
+  const aiBlockOf = (d) => Math.floor(Date.UTC(+d.slice(0, 4), +d.slice(4, 6) - 1, +d.slice(6, 8)) / 86400000 / 30);
+  const strHash = (s) => { let h = 0; for (const ch of s) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return h; };
+
+  async function runPool(jobs, n, onDone) {
+    const out = new Array(jobs.length);
+    let next = 0;
+    let done = 0;
+    await Promise.all(Array.from({ length: Math.min(n, jobs.length) }, async () => {
+      while (next < jobs.length) {
+        const i = next++;
+        try { out[i] = await jobs[i](); } catch (e) { out[i] = { error: e.message }; }
+        onDone(++done, jobs.length);
+      }
+    }));
+    return out;
+  }
+
+  async function loadAi(fresh) {
+    const ai = state.ai;
+    ai.loading = true;
+    ai.error = null;
+    renderAi();
+    const meta = (t) => { $("aiMeta").textContent = t; };
+    try {
+      // 1) 지난 13개월 이벤트 공시
+      const cur = aiBlockOf(state.today);
+      const urls = [];
+      for (let k = cur - AI_BLOCKS; k <= cur; k++) for (const g of ["b", "i1", "i3"]) urls.push(`/api/ai/history?k=${k}&g=${g}${fresh && k === cur ? "&fresh=1" : ""}`);
+      const hist = await runPool(urls.map((u) => () => fetchJSON(u)), 6, (d, t) => meta(`과거 공시 모으는 중 ${d}/${t}`));
+      const failedBlocks = hist.filter((h) => h.error).length;
+      if (failedBlocks === hist.length) throw new Error(hist[0].error);
+      // 같은 종목·같은 종류가 20일 안에 또 나오면(블록 경계·정정) 처음 것만
+      const all = hist.flatMap((h) => h.events || []).sort((a, b) => a.d.localeCompare(b.d) || a.r.localeCompare(b.r));
+      const lastSeen = new Map();
+      const events = [];
+      for (const e of all) {
+        const key = `${e.t}:${e.c}`;
+        const p = lastSeen.get(key);
+        lastSeen.set(key, e.d);
+        if (p && daysDiff(p, e.d) < 20) continue;
+        events.push(e);
+      }
+      const ipo = new Map(hist.flatMap((h) => h.ipo || []).map((x) => [x.c, x]));
+      // 2) 캘린더의 액면변경 변경상장 예정일(앞으로 2주)
+      if (!state.cal.loadedAt) {
+        meta("캘린더 일정 확인 중…");
+        if (!state.cal.loading) await loadCalendar(false);
+        while (state.cal.loading) await new Promise((r) => setTimeout(r, 300));
+      }
+      const relists = state.cal.events.filter((e) => e.type === "split" && e.sub === "relist" && e.start && /^[0-9A-Z]{6}$/.test(e.code || "") &&
+        daysDiff(state.today, e.start) >= 0 && daysDiff(state.today, e.start) <= 14);
+      // 3) 종목별 주가 측정값 — 종목코드 해시로 묶어 요청(묶음이 매일 거의 같아 서버 캐시가 잘 맞는다)
+      const want = new Map();
+      const add = (code, tok) => { if (!want.has(code)) want.set(code, new Set()); want.get(code).add(tok); };
+      for (const e of events) add(e.c, e.d);
+      for (const c of ipo.keys()) add(c, "L");
+      for (const e of relists) add(e.code, state.today);
+      const buckets = new Map();
+      for (const [code, toks] of want) {
+        const b = strHash(code) % 64;
+        if (!buckets.has(b)) buckets.set(b, []);
+        buckets.get(b).push(...[...toks].map((t) => `${code}:${t}`));
+      }
+      const qs = [];
+      for (const list of buckets.values()) {
+        let part = [];
+        let codes = new Set();
+        for (const tok of list.sort()) {
+          const c = tok.slice(0, 6);
+          if (!codes.has(c) && codes.size >= 35) { qs.push(part); part = []; codes = new Set(); }
+          codes.add(c);
+          part.push(tok);
+        }
+        if (part.length) qs.push(part);
+      }
+      const res = await runPool(qs.map((q) => () => fetchJSON(`/api/ai/metrics?q=${q.join(",")}`)), 6, (d, t) => meta(`주가 측정 중 ${d}/${t}`));
+      const stocks = Object.assign({}, ...res.map((r) => r.stocks || {}));
+      Object.assign(ai, aiCompute(events, ipo, stocks, relists));
+      ai.partial = failedBlocks + res.filter((r) => r.error).length;
+      ai.loadedAt = nowKst();
+    } catch (e) {
+      ai.error = e.message;
+    } finally {
+      ai.loading = false;
+      renderAi();
+    }
+  }
+
+  function aiCompute(events, ipo, stocks, relists) {
+    const today = state.today;
+    const samples = {};
+    const addSample = (t, x, info) => { if (x && x.m && x.m.base) (samples[t] ||= []).push({ ...x.m, k: x.k, ...info }); };
+    for (const e of events) addSample(e.t, stocks[e.c]?.ev?.[e.d], { n: e.n, c: e.c, d: e.d });
+    for (const [code, st] of Object.entries(stocks)) {
+      for (const l of st.lockups || []) addSample(`lockup${l.months}`, l, { n: ipo.get(code)?.n || code, c: code, d: l.d });
+    }
+    // 종류별 통계. z = 10일 최대변동 ÷ (평소 하루 변동성 × √10): 종목마다 다른 평소 변동성을 걷어낸 "이벤트 강도"
+    const stats = {};
+    for (const [t, a] of Object.entries(samples)) {
+      const z = a.map((x) => x.move / (x.base * Math.sqrt(10)));
+      const ctrl = a.filter((x) => x.k && x.k.base);
+      const zc = ctrl.map((x) => x.k.move / (x.k.base * Math.sqrt(10)));
+      stats[t] = {
+        t, n: a.length, z,
+        big: a.filter((x) => x.move >= AI_BIG).length / a.length,
+        ctrlBig: ctrl.length >= AI_MIN_N ? ctrl.filter((x) => x.k.move >= AI_BIG).length / ctrl.length : null,
+        medMove: median(a.map((x) => x.move)),
+        lift: zc.length >= AI_MIN_N ? median(z) / median(zc) : null,
+        up: a.filter((x) => x.ret > 0).length / a.length,
+        medBase: median(a.map((x) => x.base)),
+        examples: [...a].sort((x, y) => y.d.localeCompare(x.d)).slice(0, 5),
+      };
+    }
+    // 지금 이벤트가 걸린 종목: 최근 14일 안에 나온 이벤트(10거래일 진행 중) + 앞으로 2주 안 락업 해제·변경상장
+    const cands = [];
+    const addCand = (t, code, name, market, date, rcept, evDate = date) => {
+      const st = stats[t];
+      if (!st || st.n < AI_MIN_N) return;
+      const ev = t.startsWith("lockup") ? (stocks[code]?.lockups || []).find((l) => l.d === date) : stocks[code]?.ev?.[evDate];
+      const own = ev?.pre || stocks[code]?.now_base; // 이벤트 직전 평소 변동성(없으면 최근 60거래일)
+      const sigma = own || st.medBase;
+      const scale = sigma * Math.sqrt(10);
+      cands.push({
+        t, code, name, market, date, rcept, sigma, own: Boolean(own), sofar: ev?.sofar || null,
+        prob: st.z.filter((z) => z * scale >= AI_BIG).length / st.z.length,
+        exp: median(st.z) * scale,
+      });
+    };
+    for (const e of events) {
+      const ago = daysDiff(e.d, today);
+      if (ago >= 0 && ago <= 14) addCand(e.t, e.c, e.n, e.m, e.d, e.r);
+    }
+    for (const [code, st] of Object.entries(stocks)) {
+      for (const l of st.lockups || []) {
+        const dd = daysDiff(today, l.d);
+        if (dd >= -14 && dd <= 14) addCand(`lockup${l.months}`, code, ipo.get(code)?.n || code, ipo.get(code)?.m || "", l.d, "");
+      }
+    }
+    for (const e of relists) addCand("relist", e.code, e.name, e.market, e.start, e.rcept_no, state.today);
+    // 한 종목에 이벤트가 여럿이면 확률이 가장 높은 것으로, 나머지는 같이 표시
+    const byCode = new Map();
+    for (const c of cands) {
+      const p = byCode.get(c.code);
+      if (!p) { byCode.set(c.code, { ...c, others: [] }); continue; }
+      if (c.prob > p.prob || (c.prob === p.prob && c.exp > p.exp)) byCode.set(c.code, { ...c, others: [p, ...p.others].map(({ others, ...x }) => x) });
+      else p.others.push(c);
+    }
+    const ranked = [...byCode.values()].sort((a, b) => b.prob - a.prob || b.exp - a.exp);
+    return { stats, ranked, sampleCount: Object.values(samples).reduce((a, x) => a + x.length, 0), stockCount: Object.keys(stocks).length };
+  }
+
+  function aiWhen(d) {
+    const dd = daysDiff(state.today, d);
+    return dd > 0 ? `D-${dd}` : dd === 0 ? "오늘" : `${-dd}일 전`;
+  }
+
+  function renderAi() {
+    const ai = state.ai;
+    $("aiRefresh").disabled = ai.loading;
+    if (!ai.loading) $("aiMeta").textContent = ai.error ? "" : ai.loadedAt
+      ? `과거 이벤트 ${ai.sampleCount.toLocaleString()}건 · ${ai.stockCount.toLocaleString()}종목 주가 분석 · ${ai.loadedAt} 기준${ai.partial ? ` · 일부 ${ai.partial}건 실패` : ""}` : "";
+    const err = $("aiError");
+    err.hidden = !ai.error;
+    if (ai.error) err.textContent = `불러오지 못했습니다: ${ai.error}`;
+    if (!ai.stats) { $("aiRows").innerHTML = ""; $("aiStats").innerHTML = ""; $("aiChips").innerHTML = ""; return; }
+    // 종류 칩
+    const counts = {};
+    for (const r of ai.ranked) counts[r.t] = (counts[r.t] || 0) + 1;
+    $("aiChips").innerHTML = [`<button data-ait="" class="${ai.type ? "" : "on"}">전체 <b>${ai.ranked.length}</b></button>`,
+      ...Object.keys(AI_LABEL).filter((t) => counts[t]).map((t) => `<button data-ait="${t}" class="${ai.type === t ? "on" : ""}">${esc(AI_LABEL[t])} <b>${counts[t]}</b></button>`)].join("");
+    const rows = ai.ranked.filter((r) => !ai.type || r.t === ai.type).slice(0, AI_TOP);
+    $("aiRows").innerHTML = rows.map((r, i) => {
+      const st = ai.stats[r.t];
+      const watched = isWatchedCode(r.code);
+      const ex = st.examples.map((x) => `${x.n} ${fmtMD(x.d)} 최대 ${pct(x.move)} / 10일 뒤 ${x.ret > 0 ? "+" : ""}${pct(x.ret)}`).join("\n");
+      const sofar = r.sofar ? `<div class="ai-others">진행 ${r.sofar.days}거래일째 · 지금까지 최대 ±${pct(r.sofar.move)}</div>` : "";
+      const others = r.others.length ? `<div class="ai-others">같이 걸린 이벤트: ${r.others.map((o) => `${esc(AI_LABEL[o.t])}(${pct(o.prob)})`).join(", ")}</div>` : "";
+      const link = r.rcept ? `<a href="https://dart.fss.or.kr/dsaf001/main.do?rcpNo=${r.rcept}" target="_blank" rel="noopener">공시</a>` : "";
+      return `<tr class="${watched ? "watched" : ""}">
+        <td class="num ai-rank">${i + 1}</td>
+        <td><div class="corp">
+          <button class="star ${watched ? "on" : ""}" data-aistar="${esc(r.code)}" data-name="${esc(r.name)}" title="${watched ? "관심종목 해제" : "관심종목 추가"}">${watched ? "★" : "☆"}</button>
+          <span class="nm" title="${esc(r.name)}">${esc(r.name)}</span><span class="cd">${esc(r.code)}</span>
+          ${r.market ? `<span class="mkt ${esc(r.market)}">${esc(r.market)}</span>` : ""}
+        </div></td>
+        <td><span class="ai-type t-${r.t.replace(/\d+$/, "")}">${esc(AI_LABEL[r.t])}</span> <span class="ai-when">${fmtMD(r.date)} · ${aiWhen(r.date)}</span> ${link}${sofar}${others}</td>
+        <td class="num"><div class="ai-bar"><span style="width:${Math.round(r.prob * 100)}%"></span></div><b>${pct(r.prob)}</b></td>
+        <td class="num">±${pct(r.exp)}</td>
+        <td class="num" title="${r.own ? "이벤트 직전 60거래일 하루 변동성(표준편차)" : "주가 이력이 짧아 같은 종류 사례의 중앙값을 썼습니다"}">${pct(r.sigma, 1)}${r.own ? "" : "*"}</td>
+        <td class="num">${st.lift ? `${st.lift.toFixed(1)}배` : "–"}</td>
+        <td class="num">${pct(st.up)}</td>
+        <td class="num" title="${esc(`최근 사례\n${ex}`)}">${st.n}건</td>
+      </tr>`;
+    }).join("");
+    $("aiEmpty").hidden = rows.length > 0;
+    $("aiEmpty").textContent = "지금 진행 중이거나 2주 안에 다가오는 이벤트 종목이 없습니다.";
+    // 근거 표
+    $("aiStats").innerHTML = Object.keys(AI_LABEL).filter((t) => ai.stats[t]).map((t) => {
+      const st = ai.stats[t];
+      return `<tr class="${st.n < AI_MIN_N ? "past" : ""}">
+        <td>${esc(AI_LABEL[t])}${st.n < AI_MIN_N ? " <small>(사례 부족 — 순위 제외)</small>" : ""}</td>
+        <td class="num">${st.n}</td>
+        <td class="num"><b>${pct(st.big)}</b></td>
+        <td class="num">${st.ctrlBig === null ? "–" : pct(st.ctrlBig)}</td>
+        <td class="num">±${pct(st.medMove, 1)}</td>
+        <td class="num">${st.lift ? `${st.lift.toFixed(2)}배` : "–"}</td>
+        <td class="num">${pct(st.up)}</td>
+      </tr>`;
+    }).join("");
+  }
+
   function setView(view) {
     state.view = view;
     for (const b of document.querySelectorAll("#viewNav button")) b.classList.toggle("on", b.dataset.view === view);
@@ -803,6 +1029,7 @@
     $("discView").hidden = !disc;
     $("marketView").hidden = view !== "market";
     $("calView").hidden = view !== "cal";
+    $("aiView").hidden = view !== "ai";
     for (const id of ["live", "refreshBtn", "modeSeg"]) $(id).hidden = !disc;
     if (disc) {
       $("dayNav").hidden = state.mode !== "day";
@@ -815,6 +1042,9 @@
       if (view === "market") {
         renderMarket();
         if (!state.mk.loadedAt) loadMarketLists(false);
+      } else if (view === "ai") {
+        renderAi();
+        if (!state.ai.loadedAt && !state.ai.loading) loadAi(false);
       } else {
         renderCal();
         if (!state.cal.loadedAt && !state.cal.loading) loadCalendar(false);
@@ -1319,6 +1549,23 @@
     $("todayBtn").addEventListener("click", () => loadDate(state.today));
 
     bindCalendar();
+    $("aiRefresh").addEventListener("click", () => loadAi(true));
+    $("aiChips").addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-ait]");
+      if (!b) return;
+      state.ai.type = b.dataset.ait;
+      renderAi();
+    });
+    $("aiRows").addEventListener("click", (e) => {
+      const star = e.target.closest("[data-aistar]");
+      if (!star) return;
+      const code = star.dataset.aistar;
+      const w = state.watch.find((x) => x.code === code);
+      if (w) removeWatch(watchKey(w));
+      else addWatch({ code, name: star.dataset.name });
+      renderAi();
+      renderWatch();
+    });
     initWatchOpen();
     $("viewNav").addEventListener("click", (e) => {
       const b = e.target.closest("button[data-view]");

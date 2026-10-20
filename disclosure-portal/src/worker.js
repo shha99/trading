@@ -11,6 +11,7 @@ import { DartError, TRADE_CATEGORIES, fetchDay, fetchPage } from "./dart.js";
 import { MARKET_KINDS, MarketError, fetchMarketList, fetchQuotes } from "./market.js";
 import { KindError, fetchKindToday } from "./kind.js";
 import { checkLogin, clearCookie, loginPage, makeSession, readSession, safeNext, sessionCookie, timingSafeEqual } from "./auth.js";
+import { HISTORY_BLOCKS, blockOf, fetchAiHistory, fetchAiMetrics, parseMetricsQuery } from "./ai.js";
 import { DEAL_APIS, fetchCandidates, fetchCapital, fetchCapitalCandidates, fetchDeal, fetchExchangeCandidates, fetchSplit, fetchSplitCandidates, fetchTender } from "./events.js";
 
 const TODAY_TTL = 15; // 오늘 목록 캐시(초) — 탭 여러 개를 열어도 DART 호출이 늘지 않게
@@ -154,6 +155,28 @@ async function handleEvents(url, env, ctx, fetchImpl) {
   return json({ detail: "not found" }, 404);
 }
 
+// AI분석: 과거 이벤트 목록(30일 고정 블록)과 종목별 이벤트 전후 주가 측정값
+async function handleAi(url, env, ctx, fetchImpl) {
+  const fresh = url.searchParams.get("fresh") === "1";
+  const today = todayKst();
+  if (url.pathname === "/api/ai/history") {
+    const k = Number(url.searchParams.get("k"));
+    const g = url.searchParams.get("g");
+    const cur = blockOf(today);
+    if (!Number.isInteger(k) || k > cur || k < cur - HISTORY_BLOCKS - 1 || !["b", "i1", "i3"].includes(g)) return json({ detail: "k 또는 g가 잘못됐습니다." }, 400);
+    // 지난 블록은 거의 안 바뀌어 사흘, 이번 블록은 1시간
+    return cached(`ai/history?k=${k}&g=${g}${k === cur ? `&d=${today}` : ""}`, k === cur ? 3600 : 3 * 86400, fresh && k === cur, ctx,
+      async () => fetchAiHistory(env.DART_API_KEY, k, g, today, fetchImpl));
+  }
+  if (url.pathname === "/api/ai/metrics") {
+    const by = parseMetricsQuery(url.searchParams.get("q"));
+    if (!by.size || by.size > 40) return json({ detail: "q는 종목 1~40개여야 합니다." }, 400);
+    const q = [...by].sort(([a], [b]) => a.localeCompare(b)).map(([c, w]) => `${c}:${[...w.dates].sort().join("/")}${w.listing ? "L" : ""}`).join(",");
+    return cached(`ai/metrics?d=${today}&q=${q}`, 12 * 3600, false, ctx, async () => ({ today, stocks: await fetchAiMetrics(by, today, fetchImpl) }));
+  }
+  return json({ detail: "not found" }, 404);
+}
+
 async function handleQuotes(url, env, ctx, fetchImpl) {
   const codes = [...new Set((url.searchParams.get("codes") || "").split(",").filter((c) => /^[0-9A-Z]{6}$/.test(c)))].sort();
   if (!codes.length || codes.length > 100) return json({ detail: "codes는 종목코드 1~100개(쉼표 구분)여야 합니다." }, 400);
@@ -200,6 +223,7 @@ export async function handle(request, env, ctx, fetchImpl = fetch) {
   if (url.pathname === "/api/day" && request.method === "GET") return handleDay(url, env, ctx, fetchImpl);
   if (url.pathname === "/api/market" && request.method === "GET") return handleMarket(url, env, ctx, fetchImpl);
   if (url.pathname.startsWith("/api/events/") && request.method === "GET") return handleEvents(url, env, ctx, fetchImpl);
+  if (url.pathname.startsWith("/api/ai/") && request.method === "GET") return handleAi(url, env, ctx, fetchImpl);
   if (url.pathname === "/api/quotes" && request.method === "GET") return handleQuotes(url, env, ctx, fetchImpl);
   if (url.pathname === "/api/kind/today" && request.method === "GET") {
     // 오늘 KIND 공시 전체(새로고침 때 DART와 맞춰보기용). 1분 캐시, fresh=1이면 바로 받는다.

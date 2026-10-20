@@ -406,3 +406,35 @@ td.flr { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: 
   .list td, .list th { padding: 10px 8px; }
   .corp .cd { display: none; }
 }
+
+/* AI분석 */
+.ai-head { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 14px; }
+.ai-head > div { flex: 1; min-width: 280px; }
+.ai-head h2 { margin: 0; font-size: 18px; }
+.ai-sub { margin: 4px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.ai-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 0; }
+.ai-chips button { border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: 5px 12px; font-size: 13px; color: var(--muted); }
+.ai-chips button b { color: var(--text); margin-left: 2px; }
+.ai-chips button.on { background: var(--text); border-color: var(--text); color: #fff; }
+.ai-chips button.on b { color: #fff; }
+.ai-list .c-rank { width: 44px; }
+.ai-list .c-corp { width: 250px; }
+.ai-list .c-prob { width: 130px; }
+.ai-list td.ai-rank { color: var(--faint); font-weight: 700; }
+.ai-list .corp .mkt { margin-left: 6px; }
+.ai-type { display: inline-block; padding: 2px 8px; border-radius: 6px; background: var(--accent-soft); color: #1b64da; font-size: 12px; font-weight: 600; }
+.ai-type.t-delist, .ai-type.t-delist_warn, .ai-type.t-halt { background: var(--danger-soft); color: #b42318; }
+.ai-type.t-lockup { background: #fff4e5; color: #b45309; }
+.ai-type.t-relist, .ai-type.t-split, .ai-type.t-consolidate { background: #eefbf4; color: #0f7b52; }
+.ai-when { color: var(--muted); font-size: 12px; margin: 0 4px; }
+.ai-others { font-size: 12px; color: var(--faint); margin-top: 3px; }
+.ai-bar { display: inline-block; width: 54px; height: 6px; border-radius: 3px; background: var(--line-soft); margin-right: 8px; vertical-align: middle; overflow: hidden; }
+.ai-bar span { display: block; height: 100%; background: #e5484d; }
+.ai-h3 { margin: 28px 0 10px; font-size: 16px; }
+.ai-stats td small { color: var(--faint); }
+@media (max-width: 760px) {
+  .ai-list .c-corp { width: 170px; }
+}
+.ai-list .c-prob { width: 150px; }
+.ai-list td.num { white-space: nowrap; }
+.ai-list .corp .mkt { white-space: nowrap; }

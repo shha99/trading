@@ -20,6 +20,7 @@
       <button data-view="disc" class="on">공시</button>
       <button data-view="market">투자경고·관리종목</button>
       <button data-view="cal">캘린더</button>
+      <button data-view="ai">AI분석</button>
     </nav>
     <span class="user-box" id="userBox" hidden>👤 <b id="userName"></b> <a href="/logout">로그아웃</a></span>
     <div class="live" id="live">
@@ -155,6 +156,61 @@
       <p class="empty" id="calEmpty" hidden></p>
     </div>
     <p class="hint mk-src">자동 수집: DART 최근 6개월 공시에서 공개매수신고서(정정 반영, 결과보고서 나오면 종료)와 합병·분할합병·주식교환이전·영업양수도 결정의 주식매수청구권 행사기간·매수예정가격을 읽습니다(코스피·코스닥). 영업양수도는 보고서에 기간 칸이 없어 주총일부터 20일로 추정합니다(추정 표시). 증자는 최근 3개월 유상증자(증권신고서를 낸 공모만)·무상·유무상증자 결정 보고서 본문에서 신주인수권증서 상장기간과 신주 상장예정일을 읽습니다. 현재가는 네이버 증권, 1분 지연될 수 있습니다. 투자 판단 전 반드시 원문 공시를 확인하세요.</p>
+  </section>
+
+  <section class="market ai" id="aiView" hidden>
+    <div class="ai-head">
+      <div>
+        <h2>이벤트 변동성 예측 Top 20</h2>
+        <p class="ai-sub">지금 이벤트가 진행 중이거나(최근 14일 공시) 2주 안에 다가오는 코스피·코스닥 종목을, 같은 종류 이벤트의 지난 13개월 실제 주가 움직임으로 줄 세웠습니다.</p>
+      </div>
+      <span class="mk-meta" id="aiMeta"></span>
+      <button id="aiRefresh" class="ghost small">새로고침</button>
+    </div>
+    <div class="banner" id="aiError" hidden></div>
+    <div class="ai-chips" id="aiChips"></div>
+    <div class="table-wrap">
+      <table class="list ai-list">
+        <thead>
+          <tr>
+            <th class="c-rank">#</th>
+            <th class="c-corp">종목</th>
+            <th>이벤트 · 날짜</th>
+            <th class="c-num c-prob" title="같은 종류 과거 사례의 '이벤트 강도'를 이 종목 평소 변동성에 적용했을 때, 10거래일 안에 이벤트 전날 종가 대비 ±20% 이상(장중 포함) 움직인 비율">±20% 확률</th>
+            <th class="c-num" title="10거래일 안 최대 변동폭 예상(중앙값)">예상 최대변동</th>
+            <th class="c-num" title="이벤트 직전 60거래일 하루 변동성(표준편차)">평소 변동성</th>
+            <th class="c-num" title="이벤트 뒤 10일 변동폭 ÷ 같은 종목 평소(30거래일 전) 10일 변동폭, 평소 변동성으로 나눠 맞춘 값의 중앙값">평소 대비</th>
+            <th class="c-num" title="과거 같은 종류 이벤트 10거래일 뒤 주가가 오른 비율">상승 비율</th>
+            <th class="c-num" title="근거가 된 과거 사례 수(마우스를 올리면 최근 사례)">근거</th>
+          </tr>
+        </thead>
+        <tbody id="aiRows"></tbody>
+      </table>
+      <p class="empty" id="aiEmpty" hidden></p>
+    </div>
+
+    <h3 class="ai-h3">근거 데이터 — 이벤트 종류별 과거 13개월 실제 결과</h3>
+    <div class="table-wrap">
+      <table class="list ai-stats">
+        <thead>
+          <tr>
+            <th>이벤트</th>
+            <th class="c-num">사례</th>
+            <th class="c-num" title="이벤트일부터 10거래일 안에 이벤트 전날 종가 대비 ±20% 이상 움직인 비율(장중 고가·저가 포함)">±20% 이상 비율</th>
+            <th class="c-num" title="같은 종목들의 30거래일 전(평소) 10일 동안 ±20% 이상 움직인 비율 — 비교용">평소엔</th>
+            <th class="c-num">최대변동 중앙값</th>
+            <th class="c-num">평소 대비</th>
+            <th class="c-num">10일 뒤 상승 비율</th>
+          </tr>
+        </thead>
+        <tbody id="aiStats"></tbody>
+      </table>
+    </div>
+    <p class="hint mk-src">
+      <b>계산 방법</b> · DART 공시 목록(거래소 공시 포함)에서 지난 13개월의 유상·무상증자, 감자, 합병·분할·영업양수도(매수청구권), 공개매수, 액면분할·병합 결정과 변경상장, 거래정지·재개, 관리종목·상장폐지 우려 안내, 정리매매를 찾고, 지분증권 증권신고서를 낸 종목 중 차트가 짧은 종목을 신규상장으로 보아 상장 1·3·6·12개월 뒤를 의무보유(락업) 해제 시점으로 잡았습니다(실제 해제일·물량은 종목마다 다릅니다).
+      각 사례는 네이버 일봉(수정주가)으로 이벤트일부터 10거래일 동안 이벤트 전날 종가 대비 최대 변동폭을 쟀고, 종목마다 다른 평소 변동성(직전 60거래일)으로 나눠 "이벤트 강도"를 구했습니다. 지금 종목의 확률은 같은 종류 과거 사례의 이벤트 강도에 이 종목의 평소 변동성을 곱해, ±20%를 넘는 사례 비율로 계산합니다.
+      "AI분석"이지만 학습된 예측 모델이 아니라 과거 사례 통계입니다. 사례가 적은 종류는 오차가 크고, 방향(상승·하락)은 예측하지 않습니다. 투자 판단은 반드시 원문 공시로 확인하세요.
+    </p>
   </section>
 
   <main class="layout" id="discView">
