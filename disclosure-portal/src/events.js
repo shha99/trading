@@ -25,6 +25,8 @@ export const DEAL_APIS = [
 const DEAL_LABEL = Object.fromEntries(DEAL_APIS.map(([, api, label]) => [api, label]));
 
 const SCOPE = new Set(["Y", "K"]); // 코스피·코스닥
+// [첨부정정]은 첨부서류만 바꾼 정정이라 본문(document.xml)이 없다 — 일정은 그 전 보고서에서 읽는다
+const attachOnly = (title) => title.includes("첨부정정");
 const MARKET = { Y: "코스피", K: "코스닥" };
 
 export function ymd(d) {
@@ -79,7 +81,7 @@ export async function fetchCandidates(apiKey, today, fetchImpl = fetch) {
   const deals = new Map();
   for (const r of rows) {
     const title = r.report_nm.replace(/\s/g, "");
-    if (!title.includes("주요사항보고서") || title.includes("철회")) continue;
+    if (!title.includes("주요사항보고서") || title.includes("철회") || attachOnly(title)) continue;
     const hit = DEAL_APIS.find(([kw]) => title.includes(kw));
     if (!hit) continue;
     const key = `${r.corp_code}:${hit[1]}`;
@@ -288,7 +290,7 @@ export async function fetchCapitalCandidates(apiKey, today, fetchImpl = fetch) {
     const prev = out.get(key);
     out.set(key, {
       corp_code: r.corp_code, corp_name: r.corp_name.trim(), stock_code: (r.stock_code || "").trim(), market: MARKET[r.corp_cls],
-      kind: hit[1], rcept_no: r.rcept_no, first_rcept_no: prev ? prev.first_rcept_no : r.rcept_no,
+      kind: hit[1], rcept_no: attachOnly(title) && prev ? prev.rcept_no : r.rcept_no, first_rcept_no: prev ? prev.first_rcept_no : r.rcept_no,
     });
   }
   return [...out.values()];
@@ -349,7 +351,7 @@ export async function fetchExchangeCandidates(apiKey, today, fetchImpl = fetch) 
     const prev = out.get(key);
     out.set(key, {
       corp_code: r.corp_code, corp_name: r.corp_name.trim(), stock_code: (r.stock_code || "").trim(), market: MARKET[r.corp_cls],
-      api: "doc", kind: hit[1], rcept_no: r.rcept_no, rcept_dt: r.rcept_dt, first_rcept_no: prev ? prev.first_rcept_no : r.rcept_no, source: "거래소",
+      api: "doc", kind: hit[1], rcept_no: attachOnly(title) && prev ? prev.rcept_no : r.rcept_no, rcept_dt: r.rcept_dt, first_rcept_no: prev ? prev.first_rcept_no : r.rcept_no, source: "거래소",
     });
   }
   return [...out.values()];
@@ -374,7 +376,7 @@ export async function fetchSplitCandidates(apiKey, today, w = 0, fetchImpl = fet
     const prev = out.get(r.corp_code);
     out.set(r.corp_code, {
       corp_code: r.corp_code, corp_name: r.corp_name.trim(), stock_code: (r.stock_code || "").trim(), market: MARKET[r.corp_cls],
-      kind, rcept_no: title.includes("철회") && prev ? prev.rcept_no : r.rcept_no,
+      kind, rcept_no: (title.includes("철회") || attachOnly(title)) && prev ? prev.rcept_no : r.rcept_no,
       first_rcept_no: prev ? prev.first_rcept_no : r.rcept_no,
       withdrawn: title.includes("철회") || Boolean(prev && prev.withdrawn && !title.includes("결정")),
     });

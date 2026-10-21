@@ -238,7 +238,8 @@ test("캘린더 후보: 공개매수 정정·결과보고서 묶기, 매수청�
   assert.equal(gabia.rcept_no, "20260824000263"); // 정정 반영
   assert.equal(gabia.done, true);
   assert.equal(c.tenders.find((t) => t.corp_name === "한화").done, false);
-  assert.deepEqual(c.deals.map((d) => [d.corp_name, d.api, d.rcept_no]), [["우성", "cmpMgDecsn", "20260909000530"]]);
+  // [첨부정정]은 본문이 없어 건너뛰고 그 전 보고서를 읽는다
+  assert.deepEqual(c.deals.map((d) => [d.corp_name, d.api, d.rcept_no]), [["우성", "cmpMgDecsn", "20260904000355"]]);
 });
 
 test("매수청구 일정: 합병은 행사기간 칸, 영업양수는 주총일+20일 추정", async () => {
@@ -547,4 +548,21 @@ test("AI분석: 유통주식 비율", async () => {
   assert.equal(floatBucketOf(0.1829), 0);
   assert.equal(floatBucketOf(0.6), 3);
   assert.equal(parseFloat_([], []), null);
+});
+
+test("액면변경 후보: [첨부정정]은 본문이 없어 그 전 보고서를 읽는다", async () => {
+  const { fetchSplitCandidates } = await import("../src/events.js");
+  const rows = [
+    { rcept_no: "20260728900305", corp_code: "00550082", corp_name: "빅텐츠", stock_code: "210120", corp_cls: "K", report_nm: "[기재정정]주식병합결정" },
+    { rcept_no: "20260811900499", corp_code: "00550082", corp_name: "빅텐츠", stock_code: "210120", corp_cls: "K", report_nm: "[기재정정]주식병합결정" },
+    { rcept_no: "20260811900624", corp_code: "00550082", corp_name: "빅텐츠", stock_code: "210120", corp_cls: "K", report_nm: "[첨부정정]주식병합결정" },
+  ];
+  const fakeFetch = async (url) => {
+    const cls = new URL(url).searchParams.get("corp_cls");
+    return new Response(JSON.stringify({ status: "000", total_page: 1, list: cls === "K" ? rows : [] }), { headers: { "Content-Type": "application/json" } });
+  };
+  const items = await fetchSplitCandidates("key", "20260820", 0, fakeFetch);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].rcept_no, "20260811900499");
+  assert.equal(items[0].first_rcept_no, "20260728900305");
 });
