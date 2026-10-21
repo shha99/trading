@@ -75,8 +75,12 @@ tr.partial td { background: var(--call-soft); }
 #pick-call.pk-done { background: var(--ok-soft); border-color: var(--ok); color: var(--ok); font-weight: 600; }
 #pick-call.pk-typing { background: var(--warn-soft); border-color: var(--warn); color: var(--warn); }
 #pick-legend .pill { font-size: 0.7rem; margin-left: 4px; }
-tbody.click tr { cursor: pointer; }
-tbody.click tr:hover td { background: var(--accent-soft); }
+tbody.click > tr[data-key] { cursor: pointer; }
+tbody.click > tr[data-key]:hover > td { background: var(--accent-soft); }
+tbody.click > tr.sel.open > td { background: var(--accent-soft); border-bottom-color: transparent; font-weight: 600; }
+tr.exp > td.exp-td { padding: 0 0 14px; background: var(--accent-soft); border-bottom: 2px solid var(--accent); }
+tr.exp #detail { margin: 0 8px; border-color: var(--accent); box-shadow: 0 6px 18px -12px rgba(0,0,0,.35); }
+.dh-act { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 .neg { color: var(--call); }
 .pos { color: var(--ok); }
 .muted { color: var(--muted); }
@@ -213,14 +217,14 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
       </div>
     </section>
 
-    <section class="panel" id="detail"></section>
+    <div id="detail-home" hidden><section class="panel" id="detail"></section></div>
 
     <section class="panel">
       <div class="row between">
         <h2>담보번호별 현황 <span class="muted num" id="list-count"></span></h2>
-        <span class="fine">행을 누르면 위에서 바로 배정할 수 있습니다.</span>
+        <span class="fine">행을 누르면 그 아래에 배정 화면이 펼쳐집니다. 다 넣었으면 “다음 건”으로 넘어가세요. 다시 누르면 접힙니다.</span>
       </div>
-      <div class="tablewrap scrolllist">
+      <div class="tablewrap" id="calls-wrap">
         <table>
           <thead><tr>
             <th>상태</th><th>정산결과</th><th>담보번호</th><th>거래상대방</th><th>ETF / OB+코드명</th><th>제공/수취</th>
@@ -858,6 +862,9 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
 
   // ---------- 렌더링 ----------
   function render() {
+    // 배정 화면 안 입력칸에 커서가 있으면 먼저 빼서(변경 이벤트를 먼저 끝내고) 화면을 옮긴다
+    var ae = document.activeElement;
+    if (ae && ae !== document.body && $("detail").contains(ae)) { ae.blur(); }
     var calls = buildCalls();
     var s = state.settings;
     $("hdr-meta").innerHTML = "정산 기준일 <b class='num'>" + esc(state.dailyDate || "–") + "</b> · 종가 기준일 <b class='num'>" + esc(state.pricesDate || "–") +
@@ -881,8 +888,10 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
       if (f === "release") return c.U > 0;
       return true;
     });
+    $("detail-home").appendChild($("detail")); // 목록을 다시 그리기 전에 배정 화면을 잠시 빼 둔다
+    var isOpen = state.open !== false;
     $("calls-body").innerHTML = shown.length ? shown.map(function (c) {
-      return '<tr data-key="' + esc(c.key) + '"' + (c.key === state.sel ? ' class="sel"' : c.lines.length ? (c.Z >= 0 ? ' class="done"' : ' class="partial"') : "") + ">" +
+      return '<tr data-key="' + esc(c.key) + '"' + (c.key === state.sel ? ' class="sel' + (isOpen ? " open" : "") + '"' : c.lines.length ? (c.Z >= 0 ? ' class="done"' : ' class="partial"') : "") + ">" +
         '<td><span class="pill ' + c.st.c + '">' + c.st.t + "</span></td>" +
         '<td class="nw muted">' + esc(c.result) + (c.status ? " · " + esc(c.status) : "") + "</td>" +
         '<td class="nw num">' + esc(c.key) + "</td><td>" + esc(c.cp) + "</td>" +
@@ -919,6 +928,13 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     $("list-count").textContent = shown.length + "건";
     render._shown = shown.map(function (c) { return c.key; });
     renderDetail(cur);
+    // 선택한 행 바로 아래에 펼치기 (접혀 있으면 숨김)
+    var selTr = cur ? $("calls-body").querySelector('tr[data-key="' + cur.key + '"]') : null;
+    if (selTr && isOpen) {
+      var exp = document.createElement("tr"); exp.className = "exp";
+      var td = document.createElement("td"); td.colSpan = 10; td.className = "exp-td";
+      exp.appendChild(td); selTr.parentNode.insertBefore(exp, selTr.nextSibling); td.appendChild($("detail"));
+    }
     buildLists();
     renderDaily(); renderPrices(); renderMaster(); renderLink(); renderExport(calls); renderMail(calls); renderSettings();
   }
@@ -951,7 +967,10 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     el.innerHTML =
       '<div class="dh-top"><div class="dh-id"><h2>' + esc(c.key) + ' <span class="muted">·</span> ' + esc(c.cp) + "</h2>" +
         '<div class="dh-sub"><span title="' + esc(c.fundName) + '">' + esc(c.fundName || "–") + '</span><span class="num">' + esc(c.fund || "") + "</span></div></div>" +
-        '<div class="dh-st"><span class="pill ' + c.st.c + '">' + c.st.t + '</span><span class="fine">' + esc(c.result || "") + (c.status ? " · " + esc(c.status) : "") + "</span></div></div>" +
+        '<div class="dh-st"><div class="dh-act"><span class="pill ' + c.st.c + '">' + c.st.t + '</span>' +
+          '<button type="button" class="btn sm" data-act="collapse">▲ 접기</button>' +
+          '<button type="button" class="btn sm primary" data-act="next">다음 건 ▶</button></div>' +
+          '<span class="fine">' + esc(c.result || "") + (c.status ? " · " + esc(c.status) : "") + "</span></div></div>" +
       '<dl class="dh-meta">' +
         "<div><dt>OB+코드</dt><dd class='num'>" + ob + "</dd></div>" +
         "<div><dt>OB+코드명</dt><dd>" + esc(c.m.obName || "–") + "</dd></div>" +
@@ -1196,21 +1215,32 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     });
   }
   $("flt").addEventListener("change", render);
-  $("pick-call").addEventListener("change", function () { state.sel = this.value; commit(); });
+  // 선택한 행이 상단 고정 선택 줄 바로 아래에 오도록 스크롤
+  function goRow(key) {
+    var tr = $("calls-body").querySelector('tr[data-key="' + key + '"]'); if (!tr) return;
+    var y = tr.getBoundingClientRect().top + window.scrollY - $("picker").getBoundingClientRect().height - 12;
+    window.scrollTo({ top: Math.max(0, y), behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+  }
+  function openCall(key) { state.sel = key; state.open = true; commit(); goRow(key); }
+  $("pick-call").addEventListener("change", function () { openCall(this.value); });
   function step(d) {
     var list = render._shown || [], i = list.indexOf(state.sel) + d;
-    if (i >= 0 && i < list.length) { state.sel = list[i]; commit(); }
+    if (i >= 0 && i < list.length) openCall(list[i]);
   }
   $("prev-call").addEventListener("click", function () { step(-1); });
   $("next-call").addEventListener("click", function () { step(1); });
   $("calls-body").addEventListener("click", function (e) {
-    var tr = e.target.closest("tr[data-key]"); if (!tr) return;
-    state.sel = tr.getAttribute("data-key"); commit();
-    $("picker").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+    var tr = e.target.closest("tr[data-key]"); if (!tr || tr.parentNode !== $("calls-body")) return;
+    var key = tr.getAttribute("data-key");
+    if (key === state.sel && state.open !== false) { state.open = false; commit(); goRow(key); return; } // 다시 누르면 접기
+    openCall(key);
   });
   $("detail").addEventListener("click", function (e) {
     var d = e.target.closest("[data-ldel]"), dd = e.target.closest("[data-drdel]");
     var key = state.sel; if (!key) return;
+    var act = e.target.closest("[data-act]");
+    if (act && act.getAttribute("data-act") === "collapse") { state.open = false; commit(); goRow(key); return; }
+    if (act && act.getAttribute("data-act") === "next") { step(1); return; }
     if (e.target.closest("#dr-add")) { draftsOf(key).push(blankDraft()); commit(); return; }
     if (dd) { var ds = draftsOf(key); ds.splice(+dd.getAttribute("data-drdel"), 1); if (!ds.length) ds.push(blankDraft()); commit(); return; }
     var cm = e.target.closest("#dr-commit");
