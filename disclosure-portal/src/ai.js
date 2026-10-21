@@ -170,6 +170,40 @@ export async function fetchDilution(apiKey, t, corpCode, rceptNo, fetchImpl = fe
   return { ...parseDilution(t, list.find((r) => r.rcept_no === rceptNo) || list[0]), found: list.length > 0 };
 }
 
+// 유통주식 비율: (발행주식 − 최대주주·특수관계인 지분 − 자기주식) ÷ 발행주식, 보통주 기준.
+// 가장 최근 정기보고서(반기 → 1분기 → 전년 사업보고서 순)의 최대주주 현황(hyslrSttus)·주식 총수(stockTotqySttus).
+export function parseFloat_(holders, totals) {
+  const shares = num((totals || []).find((x) => x.se === "보통주")?.istc_totqy);
+  if (!shares) return null;
+  const treasury = num((totals || []).find((x) => x.se === "보통주")?.tesstk_co);
+  const sum = (holders || []).find((x) => x.nm === "계" && x.stock_knd === "보통주");
+  const major = sum ? num(sum.trmend_posesn_stock_co)
+    : (holders || []).filter((x) => x.stock_knd === "보통주" && x.nm !== "계").reduce((a, x) => a + num(x.trmend_posesn_stock_co), 0);
+  const free = shares - major - treasury;
+  return { float: Math.max(0, Math.round((free / shares) * 10000) / 10000), shares, major, treasury };
+}
+
+export async function fetchFloat(apiKey, corpCode, today, fetchImpl = fetch) {
+  const y = Number(today.slice(0, 4));
+  const m = Number(today.slice(4, 6));
+  // 제출 기한이 지난 보고서만 시도(3분기 11월 중순, 반기 8월 중순, 1분기 5월 중순, 사업 3월 말)
+  const order = [[y, "11014", "3분기", 11], [y, "11012", "반기", 8], [y, "11013", "1분기", 5], [y - 1, "11011", "사업", 0], [y - 1, "11014", "3분기", 0]]
+    .filter(([yy, , , due]) => yy < y || m > due);
+  for (const [year, code, label] of order) {
+    const [h, t] = await Promise.all([
+      dartRequest(apiKey, "hyslrSttus.json", { corp_code: corpCode, bsns_year: String(year), reprt_code: code }, fetchImpl),
+      dartRequest(apiKey, "stockTotqySttus.json", { corp_code: corpCode, bsns_year: String(year), reprt_code: code }, fetchImpl),
+    ]);
+    const f = h && t ? parseFloat_(h.list, t.list) : null;
+    if (f) return { ...f, basis: `${year} ${label}` };
+  }
+  return null;
+}
+
+// 유통주식 비율 구간(0~1). 모델과 화면이 같은 구간을 쓴다.
+export const FLOAT_BUCKETS = [[0, 0.2], [0.2, 0.35], [0.35, 0.5], [0.5, 1.01]];
+export const floatBucketOf = (f) => (f === null || f === undefined ? -1 : FLOAT_BUCKETS.findIndex(([lo, hi]) => f >= lo && f < hi));
+
 // 희석률 구간(%). 모델과 화면이 같은 구간을 쓴다.
 export const DILUTION_BUCKETS = [[0, 5], [5, 10], [10, 20], [20, Infinity]];
 export const bucketOf = (pct) => (pct === null || pct === undefined ? -1 : DILUTION_BUCKETS.findIndex(([lo, hi]) => pct >= lo && pct < hi));

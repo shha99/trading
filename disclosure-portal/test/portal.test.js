@@ -536,3 +536,15 @@ test("AI분석: 메자닌·유상증자 희석률", async () => {
   assert.equal(bucketOf(55), 3);
   assert.equal(bucketOf(null), -1);
 });
+
+test("AI분석: 유통주식 비율", async () => {
+  const { parseFloat_, floatBucketOf } = await import("../src/ai.js");
+  const f = parseFloat_(
+    [{ nm: "LS전선㈜", stock_knd: "보통주", trmend_posesn_stock_co: "13,501,695" }, { nm: "계", stock_knd: "보통주", trmend_posesn_stock_co: "13,518,091" }],
+    [{ se: "보통주", istc_totqy: "16,543,115", tesstk_co: "-" }],
+  );
+  assert.equal(f.float, 0.1829);
+  assert.equal(floatBucketOf(0.1829), 0);
+  assert.equal(floatBucketOf(0.6), 3);
+  assert.equal(parseFloat_([], []), null);
+});

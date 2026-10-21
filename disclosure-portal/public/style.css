@@ -450,3 +450,5 @@ td.flr { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: 
 .ai-parts { font-size: 13px; line-height: 1.6; }
 .ai-parts span, .ai-sig { color: var(--faint); font-size: 12px; }
 .ai-hot { color: #c4262c; }
+.ai-fl { margin-left: 6px; font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; white-space: nowrap; }
+.ai-fl.low { color: #c4262c; border-color: #f8c9cb; }

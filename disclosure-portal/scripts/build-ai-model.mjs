@@ -10,7 +10,7 @@
 // 키는 환경변수로만 받는다 — 저장소에 넣지 말 것. 이 스크립트는 Worker에 배포되지 않는다.
 import fs from "node:fs";
 import path from "node:path";
-import { DILUTION_API, DILUTION_BUCKETS, blockOf, bucketOf, fetchAiHistory, fetchChart, fetchDilution, stockMetrics } from "../src/ai.js";
+import { DILUTION_API, DILUTION_BUCKETS, FLOAT_BUCKETS, blockOf, bucketOf, fetchAiHistory, fetchChart, fetchDilution, fetchFloat, floatBucketOf, stockMetrics } from "../src/ai.js";
 
 const KEY = process.env.DART_API_KEY;
 if (!KEY) { console.error("DART_API_KEY 환경변수가 필요합니다."); process.exit(1); }
@@ -114,8 +114,31 @@ for (const e of sized) {
   o.items.push(item);
   o.total = Math.round((o.total + e.pct) * 100) / 100;
 }
-const overhang = [...over.values()].sort((a, b) => b.total - a.total).slice(0, 400);
+const overhang = [...over.values()].sort((a, b) => b.total - a.total).slice(0, 1000);
 log(`오버행 종목 ${over.size}개(상위 ${overhang.length} 저장)`);
+
+// 유통주식 비율(지금 상장된 종목만, 가장 최근 정기보고서 기준). 과거 사례에도 지금 비율을 근사값으로 쓴다.
+const corpOf = new Map();
+const nameOf = new Map();
+for (const e of events) if (e.cc && ["코스피", "코스닥"].includes(e.m)) { corpOf.set(e.c, e.cc); nameOf.set(e.c, { n: e.n, m: e.m }); }
+done = 0;
+const floats = {};
+await pool([...corpOf], 4, async ([code, cc]) => {
+  const f = await cachedJson(`float-${cc}-${today.slice(0, 6)}.json`, async () => {
+    for (let attempt = 0; ; attempt++) {
+      try { return (await fetchFloat(KEY, cc, today)) || { none: true }; } catch (err) {
+        if (attempt >= 2) return { none: true, error: err.message };
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+    }
+  });
+  if (!f.none) floats[code] = f.float;
+  if (++done % 300 === 0) log(`유통주식 ${done}/${corpOf.size}`);
+});
+log(`유통주식 비율 ${Object.keys(floats).length}/${corpOf.size}종목`);
+for (const o of overhang) {
+  if (floats[o.c] > 0) { o.float = floats[o.c]; o.totalFloat = Math.round((o.total / floats[o.c]) * 10) / 10; }
+}
 
 // 2) 주가
 const by = new Map();
@@ -141,7 +164,7 @@ const metrics = Object.fromEntries(await pool(stockList, 8, async ([code, want])
 const samples = [];
 for (const e of events) {
   const x = metrics[e.c]?.ev?.[e.d];
-  if (x?.m?.base) samples.push({ t: e.t, c: e.c, n: e.n, d: e.d, pct: e.pct ?? null, ...x.m, k: x.k });
+  if (x?.m?.base) samples.push({ t: e.t, c: e.c, n: e.n, d: e.d, pct: e.pct ?? null, fl: floats[e.c] ?? null, ...x.m, k: x.k });
 
 }
 for (const [code, st] of Object.entries(metrics)) {
@@ -183,6 +206,14 @@ const MIN_BUCKET = 30; // 이보다 적은 구간은 종류 전체 통계를 쓴
 const bucketLabel = ([lo, hi]) => (hi === Infinity ? `${lo}% 이상` : `${lo}~${hi}%`);
 for (const [t, list] of byType) {
   types[t] = summarize(list);
+  // 유통주식 비율 구간별(모든 종류)
+  types[t].fbuckets = FLOAT_BUCKETS.map((b, i) => {
+    const sub = list.filter((x) => floatBucketOf(x.fl) === i);
+    const label = `유통 ${Math.round(b[0] * 100)}~${Math.min(100, Math.round(b[1] * 100))}%`;
+    if (sub.length < MIN_BUCKET) return { label, n: sub.length };
+    const { examples, years, ...rest } = summarize(sub);
+    return { label, ...rest };
+  });
   if (BUCKETED.has(t)) {
     types[t].buckets = DILUTION_BUCKETS.map((b, i) => {
       const sub = list.filter((x) => bucketOf(x.pct) === i);
@@ -205,9 +236,10 @@ for (const [t, list] of byType) {
   const train = list.filter((s) => s.d < cutoff);
   if (train.length < 20) continue;
   const zq = quantiles(train.map(zOf));
+  const fz = FLOAT_BUCKETS.map((_, i) => { const sub = train.filter((x) => floatBucketOf(x.fl) === i); return sub.length >= MIN_BUCKET ? quantiles(sub.map(zOf)) : null; });
   const bz = BUCKETED.has(t) ? DILUTION_BUCKETS.map((_, i) => { const sub = train.filter((x) => bucketOf(x.pct) === i); return sub.length >= MIN_BUCKET ? quantiles(sub.map(zOf)) : null; }) : [];
   for (const s of list.filter((x) => x.d >= cutoff)) {
-    const p = probFrom(bz[bucketOf(s.pct)] || zq, s.base * Math.sqrt(10));
+    const p = probFrom(bz[bucketOf(s.pct)] || fz[floatBucketOf(s.fl)] || zq, s.base * Math.sqrt(10));
     const y = s.move >= BIG ? 1 : 0;
     const b = bins[Math.min(9, Math.floor(p * 10))];
     b.n++; b.pred += p; b.hit += y;
@@ -220,10 +252,25 @@ const validation = {
   bins: bins.map((b, i) => ({ range: `${i * 10}~${i * 10 + 10}%`, n: b.n, predicted: b.n ? r4(b.pred / b.n) : null, actual: b.n ? r4(b.hit / b.n) : null })),
 };
 
+// 유통주식 비율별 근거: 평소 하루 변동성, 이벤트 뒤 ±20% 비율, 이벤트 강도(평소 대비)
+const floatStats = FLOAT_BUCKETS.map((b, i) => {
+  const sub = samples.filter((x) => floatBucketOf(x.fl) === i);
+  const ctrl = sub.filter((x) => x.k?.base);
+  return {
+    label: `${Math.round(b[0] * 100)}~${Math.min(100, Math.round(b[1] * 100))}%`, n: sub.length,
+    stocks: Object.values(floats).filter((f) => floatBucketOf(f) === i).length,
+    medBase: r4(median(sub.map((x) => x.base))),
+    big: sub.length ? r4(sub.filter((x) => x.move >= BIG).length / sub.length) : null,
+    ctrlBig: ctrl.length ? r4(ctrl.filter((x) => x.k.move >= BIG).length / ctrl.length) : null,
+    medZ: r4(median(sub.map(zOf))),
+  };
+});
 const model = {
   built: today, years: YEARS, from: events[0]?.d, to: today, big: BIG, window: 10,
   samples: samples.length, stocks: Object.keys(metrics).length, events: events.length,
-  validation, types, overhang,
+  validation, types, overhang, floatStats,
+  // 종목코드 → [유통주식 비율, 이름, 시장]
+  floats: Object.fromEntries(Object.entries(floats).map(([c, f]) => [c, [Math.round(f * 1000) / 1000, nameOf.get(c)?.n || c, nameOf.get(c)?.m || ""]])),
 };
 const out = new URL("../public/ai-model.json", import.meta.url);
 fs.writeFileSync(out, JSON.stringify(model));

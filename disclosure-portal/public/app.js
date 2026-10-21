@@ -921,6 +921,7 @@
       const res = await runPool(qs.map((q) => () => fetchJSON(`/api/ai/metrics?q=${q.join(",")}`)), 6, (d, t) => meta(`주가 측정 중 ${d}/${t}`));
       const stocks = Object.assign({}, ...res.map((r) => r.stocks || {}));
       Object.assign(ai, aiCompute(ai.model, events, ipo, stocks, planned));
+      ai.recent = events.filter((e) => daysDiff(e.d, state.today) <= 60);
       ai.partial = failedBlocks + res.filter((r) => r.error).length;
       ai.loadedAt = nowKst();
     } catch (e) {
@@ -933,6 +934,7 @@
 
   function aiCompute(model, events, ipo, stocks, planned) {
     const today = state.today;
+    const floatOf = (code) => (model.floats && model.floats[code] ? model.floats[code][0] : null);
     const big = model.big;
     const stats = {};
     for (const [t, st] of Object.entries(model.types)) stats[t] = { ...st, t };
@@ -941,15 +943,17 @@
     const addCand = (t, code, name, market, date, rcept, evDate = date, extra = {}) => {
       const typeSt = stats[t];
       if (!typeSt || typeSt.n < AI_MIN_N || !typeSt.zq) return;
-      // 발행 규모 구간 통계가 충분하면 그걸 쓴다(같은 CB라도 희석률 20%와 3%는 다르게)
+      // 구간 통계가 충분하면 그걸 쓴다: 발행 규모(희석률) → 유통주식 비율 → 종류 전체 순
+      const fl = floatOf(code);
       const b = typeSt.buckets && extra.pct !== null && extra.pct !== undefined ? typeSt.buckets[aiBucketOf(extra.pct)] : null;
-      const st = b && b.zq ? { ...typeSt, ...b, bucket: b.label } : typeSt;
+      const fb = typeSt.fbuckets && fl !== null ? typeSt.fbuckets[aiFloatBucketOf(fl)] : null;
+      const st = b && b.zq ? { ...typeSt, ...b, bucket: b.label } : fb && fb.zq ? { ...typeSt, ...fb, bucket: fb.label } : typeSt;
       const ev = t.startsWith("lockup") ? (stocks[code]?.lockups || []).find((l) => l.d === date) : stocks[code]?.ev?.[evDate];
       const own = ev?.pre || stocks[code]?.now_base; // 이벤트 직전 평소 변동성(없으면 최근 60거래일)
       const sigma = own || st.medBase;
       const scale = sigma * Math.sqrt(10);
       cands.push({
-        t, code, name, market, date, rcept, sigma, own: Boolean(own), sofar: ev?.sofar || null, ...extra, st,
+        t, code, name, market, date, rcept, sigma, own: Boolean(own), sofar: ev?.sofar || null, ...extra, st, fl,
         prob: st.zq.filter((z) => z * scale >= big).length / st.zq.length, // 과거 사례 분포(백분위)에서 ±20% 넘는 비율
         exp: st.zq[50] * scale,
       });
@@ -981,6 +985,8 @@
   }
 
   const AI_BUCKETS = [[0, 5], [5, 10], [10, 20], [20, Infinity]]; // src/ai.js DILUTION_BUCKETS와 같게
+  const AI_FLOAT_BUCKETS = [[0, 0.2], [0.2, 0.35], [0.35, 0.5], [0.5, 1.01]]; // src/ai.js FLOAT_BUCKETS와 같게
+  const aiFloatBucketOf = (f) => AI_FLOAT_BUCKETS.findIndex(([lo, hi]) => f >= lo && f < hi);
   const aiBucketOf = (pct) => AI_BUCKETS.findIndex(([lo, hi]) => pct >= lo && pct < hi);
 
   const AI_AHEAD = 30; // 예정 목록: 앞으로 30일
@@ -1013,6 +1019,7 @@
     fill(ai.now, "aiNowRows", "aiNowEmpty", "최근 14일 안에 시작된 이벤트 종목이 없습니다.");
     fill(ai.next, "aiNextRows", "aiNextEmpty", `앞으로 ${AI_AHEAD}일 안에 예정된 이벤트 종목이 없습니다.`);
     aiRenderOverhang(ai);
+    aiRenderLowFloat(ai);
     $("aiNowCount").textContent = ai.now.length ? `${ai.now.length}종목 중` : "";
     $("aiNextCount").textContent = ai.next.length ? `${ai.next.length}종목 중` : "";
     aiRenderStats(ai);
@@ -1045,8 +1052,43 @@
       const x = get(e.c, e.n, e.m);
       if (!x.items.some((y) => y.t === it.t && y.d === it.d)) x.items.push(it);
     }
-    for (const x of by.values()) x.total = x.items.reduce((a, it) => a + it.pct, 0);
-    return [...by.values()].filter((x) => x.items.length).sort((a, b) => b.total - a.total);
+    for (const x of by.values()) {
+      x.total = x.items.reduce((a, it) => a + it.pct, 0);
+      const f = model.floats && model.floats[x.c] ? model.floats[x.c][0] : null;
+      x.float = f;
+      x.totalFloat = f > 0.01 ? x.total / f : null; // 유통주식 대비(대주주 물량은 안 판다고 보면 실제 부담)
+    }
+    // 유통주식 대비로 줄 세운다(유통 비율을 모르면 발행주식 대비)
+    const key = (x) => x.totalFloat ?? x.total;
+    return [...by.values()].filter((x) => x.items.length).sort((a, b) => key(b) - key(a));
+  }
+
+  // 저유통 종목: 유통주식 비율이 낮은 순. 최근 60일·앞으로 30일 이벤트와 오버행을 같이 보여준다.
+  function aiRenderLowFloat(ai) {
+    const fl = ai.model?.floats || {};
+    const evBy = new Map();
+    for (const c of [...ai.now, ...ai.next]) { if (!evBy.has(c.code)) evBy.set(c.code, []); evBy.get(c.code).push(c, ...(c.others || [])); }
+    for (const e of ai.recent || []) { if (!evBy.has(e.c)) evBy.set(e.c, []); evBy.get(e.c).push({ t: e.t, date: e.d }); }
+    const overBy = new Map((ai.over || []).map((o) => [o.c, o]));
+    const list = Object.entries(fl).filter(([, [f, , m]]) => f >= 0.01 && ["코스피", "코스닥"].includes(m)).sort((a, b) => a[1][0] - b[1][0]);
+    const ymd2 = (d) => `${d.slice(2, 4)}.${d.slice(4, 6)}.${d.slice(6, 8)}`;
+    $("aiLowRows").innerHTML = list.slice(0, AI_TOP).map(([code, [f, name, m]], i) => {
+      const watched = isWatchedCode(code);
+      const evs = [...new Map((evBy.get(code) || []).map((e) => [`${e.t}:${e.date}`, e])).values()].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 4);
+      const o = overBy.get(code);
+      return `<tr class="${watched ? "watched" : ""}">
+        <td class="num ai-rank">${i + 1}</td>
+        <td><div class="corp">
+          <button class="star ${watched ? "on" : ""}" data-aistar="${esc(code)}" data-name="${esc(name)}" title="${watched ? "관심종목 해제" : "관심종목 추가"}">${watched ? "★" : "☆"}</button>
+          <span class="nm" title="${esc(name)}">${esc(name)}</span><span class="cd">${esc(code)}</span><span class="mkt ${esc(m)}">${esc(m)}</span>
+        </div></td>
+        <td class="num"><b class="ai-hot">${(f * 100).toFixed(1)}%</b></td>
+        <td class="ai-parts">${evs.length ? evs.map((e) => `${esc(AI_LABEL[e.t] || e.t)} <span>${ymd2(e.date)} · ${aiWhen(e.date)}</span>`).join("<br>") : '<span>최근 60일·앞으로 30일 이벤트 없음</span>'}</td>
+        <td class="num">${o ? `${(o.totalFloat ?? o.total).toFixed(1)}%` : "–"}</td>
+      </tr>`;
+    }).join("");
+    const fs = ai.model?.floatStats || [];
+    $("aiLowNote").innerHTML = fs.length ? `과거 5년 이벤트를 유통주식 비율별로 보면 — ${fs.map((b) => `유통 ${b.label}: 평소 하루 변동성 ${pct(b.medBase, 1)}, 이벤트 뒤 ±20% ${pct(b.big)}(평소 ${pct(b.ctrlBig)}) [${b.n.toLocaleString()}건]`).join(" · ")}` : "";
   }
 
   function aiRenderOverhang(ai) {
@@ -1066,7 +1108,9 @@
           <button class="star ${watched ? "on" : ""}" data-aistar="${esc(o.c)}" data-name="${esc(o.n)}" title="${watched ? "관심종목 해제" : "관심종목 추가"}">${watched ? "★" : "☆"}</button>
           <span class="nm" title="${esc(o.n)}">${esc(o.n)}</span><span class="cd">${esc(o.c)}</span><span class="mkt ${esc(o.m)}">${esc(o.m)}</span>
         </div></td>
-        <td class="num"><b class="${o.total >= 20 ? "ai-hot" : ""}">${o.total.toFixed(1)}%</b></td>
+        <td class="num"><b class="${(o.totalFloat ?? o.total) >= 30 ? "ai-hot" : ""}">${o.totalFloat !== null ? `${o.totalFloat.toFixed(1)}%` : "–"}</b></td>
+        <td class="num">${o.total.toFixed(1)}%</td>
+        <td class="num">${o.float !== null ? `${Math.round(o.float * 100)}%` : "–"}</td>
         <td class="ai-parts">${parts}</td>
         <td>${next ? `${ymd2(next)} · ${aiWhen(next)}` : "–"}</td>
         <td class="ai-sig">${sig || "–"}</td>
@@ -1090,7 +1134,8 @@
       const watched = isWatchedCode(r.code);
       const ex = st.examples.map((x) => `${x.n} ${fmtMD(x.d)} 최대 ${pct(x.move)} / 10일 뒤 ${x.ret > 0 ? "+" : ""}${pct(x.ret)}`).join("\n");
       const size = r.pct !== null && r.pct !== undefined
-        ? `<div class="ai-size ${r.pct >= 10 ? "big" : ""}">발행주식 대비 <b>${r.pct.toFixed(1)}%</b>${r.refix ? " · 리픽싱" : ""}${r.method ? ` · ${esc(r.method)}` : ""}${st.bucket ? ` <span>(${esc(st.bucket)} 구간 통계 · 10일 뒤 하락 ${pct(1 - st.up)})</span>` : ""}</div>` : "";
+        ? `<div class="ai-size ${r.pct >= 10 ? "big" : ""}">발행주식 대비 <b>${r.pct.toFixed(1)}%</b>${r.refix ? " · 리픽싱" : ""}${r.method ? ` · ${esc(r.method)}` : ""}${st.bucket ? ` <span>(${esc(st.bucket)} 구간 통계 · 10일 뒤 하락 ${pct(1 - st.up)})</span>` : ""}</div>`
+        : st.bucket ? `<div class="ai-size"><span>${esc(st.bucket)} 구간 통계 적용</span></div>` : "";
       const sofar = r.sofar ? `<div class="ai-others">진행 ${r.sofar.days}거래일째 · 지금까지 최대 ±${pct(r.sofar.move)}</div>` : "";
       const others = r.others.length ? `<div class="ai-others">같이 걸린 이벤트: ${r.others.map((o) => `${esc(AI_LABEL[o.t])}(${pct(o.prob)})`).join(", ")}</div>` : "";
       const link = r.rcept ? `<a href="https://dart.fss.or.kr/dsaf001/main.do?rcpNo=${r.rcept}" target="_blank" rel="noopener">공시</a>` : "";
@@ -1100,6 +1145,7 @@
           <button class="star ${watched ? "on" : ""}" data-aistar="${esc(r.code)}" data-name="${esc(r.name)}" title="${watched ? "관심종목 해제" : "관심종목 추가"}">${watched ? "★" : "☆"}</button>
           <span class="nm" title="${esc(r.name)}">${esc(r.name)}</span><span class="cd">${esc(r.code)}</span>
           ${r.market ? `<span class="mkt ${esc(r.market)}">${esc(r.market)}</span>` : ""}
+          ${r.fl !== null && r.fl !== undefined ? `<span class="ai-fl ${r.fl < 0.2 ? "low" : ""}" title="유통주식 비율(최대주주·특수관계인·자사주 제외)">유통 ${Math.round(r.fl * 100)}%</span>` : ""}
         </div></td>
         <td><span class="ai-type t-${r.t.replace(/\d+$/, "")}">${esc(AI_LABEL[r.t])}</span> <span class="ai-when">${fmtMD(r.date)} · ${aiWhen(r.date)}</span> ${link}${size}${sofar}${others}</td>
         <td class="num"><div class="ai-bar"><span style="width:${Math.round(r.prob * 100)}%"></span></div><b>${pct(r.prob)}</b></td>
