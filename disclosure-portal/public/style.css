@@ -446,3 +446,7 @@ td.flr { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: 
 .ai-size span { color: var(--faint); }
 .ai-stats tr.grp td { border-top: 2px solid var(--line); }
 .ai-h3 small { font-size: 12px; font-weight: 400; color: var(--faint); margin-left: 6px; }
+.ai-over .c-next { width: 130px; }
+.ai-parts { font-size: 13px; line-height: 1.6; }
+.ai-parts span, .ai-sig { color: var(--faint); font-size: 12px; }
+.ai-hot { color: #c4262c; }

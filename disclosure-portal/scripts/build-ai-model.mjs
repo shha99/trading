@@ -75,10 +75,47 @@ await pool(sized, 4, async (e) => {
     }
   });
   e.pct = k.pct;
+  e.bgd = k.bgd || null;
+  e.edd = k.edd || null;
+  e.method = k.method || "";
   if (k.rcps) e.t = "rcps";
   if (++done % 500 === 0) log(`발행 규모 ${done}/${sized.length}`);
 });
 log(`발행 규모 확인 ${sized.filter((e) => e.pct !== null && e.pct !== undefined).length}/${sized.length}`);
+
+// 오버행(잠재 물량)에서 나오는 파생 이벤트
+//   conv_start: CB·BW·EB 전환(행사)청구 시작일
+//   lockup3p: 제3자배정 증자 신주 1년 보호예수 해제 무렵(결정일 + 13개월로 추정: 납입·상장까지 약 1개월)
+const addMonths = (d, n) => new Date(Date.UTC(+d.slice(0, 4), +d.slice(4, 6) - 1 + n, +d.slice(6, 8))).toISOString().slice(0, 10).replaceAll("-", "");
+const thirdParty = (e) => (e.t === "rights" || e.t === "rcps") && /제3자/.test(e.method || "");
+const derived = [];
+for (const e of sized) {
+  if (["cb", "bw", "eb"].includes(e.t) && e.bgd && e.bgd <= today) derived.push({ ...e, t: "conv_start", d: e.bgd, src: e.t });
+  if (thirdParty(e)) { const d = addMonths(e.d, 13); if (d <= today) derived.push({ ...e, t: "lockup3p", d, src: e.t }); }
+}
+events.push(...derived);
+log(`파생 이벤트(전환청구 시작·보호예수 해제) ${derived.length}건`);
+
+// 지금 남아 있는 오버행: 전환기간이 안 끝난 CB·BW·EB + 보호예수 해제 전후(±) 제3자배정 신주
+const lastSignal = new Map(); // 종목 → 최근 전환청구·가액조정·자기CB매도 공시
+for (const e of events) if (["conv_exercise", "refix_adj", "cb_resale"].includes(e.t)) {
+  const p = lastSignal.get(e.c) || {};
+  if (!p[e.t] || p[e.t] < e.d) lastSignal.set(e.c, { ...p, [e.t]: e.d });
+}
+const over = new Map();
+for (const e of sized) {
+  if (e.pct === null || e.pct === undefined) continue;
+  let item = null;
+  if (["cb", "bw", "eb"].includes(e.t) && (e.edd ? e.edd >= today : e.d >= addMonths(today, -36))) item = { t: e.t, d: e.d, pct: e.pct, bgd: e.bgd, edd: e.edd };
+  if (thirdParty(e)) { const rel = addMonths(e.d, 13); if (rel >= addMonths(today, -1)) item = { t: e.t, d: e.d, pct: e.pct, rel, method: e.method }; }
+  if (!item) continue;
+  if (!over.has(e.c)) over.set(e.c, { c: e.c, n: e.n, m: e.m, total: 0, items: [], ...(lastSignal.get(e.c) ? { sig: lastSignal.get(e.c) } : {}) });
+  const o = over.get(e.c);
+  o.items.push(item);
+  o.total = Math.round((o.total + e.pct) * 100) / 100;
+}
+const overhang = [...over.values()].sort((a, b) => b.total - a.total).slice(0, 400);
+log(`오버행 종목 ${over.size}개(상위 ${overhang.length} 저장)`);
 
 // 2) 주가
 const by = new Map();
@@ -105,6 +142,7 @@ const samples = [];
 for (const e of events) {
   const x = metrics[e.c]?.ev?.[e.d];
   if (x?.m?.base) samples.push({ t: e.t, c: e.c, n: e.n, d: e.d, pct: e.pct ?? null, ...x.m, k: x.k });
+
 }
 for (const [code, st] of Object.entries(metrics)) {
   for (const l of st.lockups || []) if (l.m?.base) samples.push({ t: `lockup${l.months}`, c: code, n: ipo.get(code)?.n || code, d: l.d, ...l.m, k: l.k });
@@ -140,11 +178,12 @@ function summarize(list) {
 const types = {};
 const byType = new Map();
 for (const s of samples) { if (!byType.has(s.t)) byType.set(s.t, []); byType.get(s.t).push(s); }
+const BUCKETED = new Set([...Object.keys(DILUTION_API), "conv_start", "lockup3p"]); // 발행 규모(희석률) 구간을 나누는 종류
 const MIN_BUCKET = 30; // 이보다 적은 구간은 종류 전체 통계를 쓴다
 const bucketLabel = ([lo, hi]) => (hi === Infinity ? `${lo}% 이상` : `${lo}~${hi}%`);
 for (const [t, list] of byType) {
   types[t] = summarize(list);
-  if (DILUTION_API[t]) {
+  if (BUCKETED.has(t)) {
     types[t].buckets = DILUTION_BUCKETS.map((b, i) => {
       const sub = list.filter((x) => bucketOf(x.pct) === i);
       if (sub.length < MIN_BUCKET) return { label: bucketLabel(b), n: sub.length };
@@ -166,7 +205,7 @@ for (const [t, list] of byType) {
   const train = list.filter((s) => s.d < cutoff);
   if (train.length < 20) continue;
   const zq = quantiles(train.map(zOf));
-  const bz = DILUTION_API[t] ? DILUTION_BUCKETS.map((_, i) => { const sub = train.filter((x) => bucketOf(x.pct) === i); return sub.length >= MIN_BUCKET ? quantiles(sub.map(zOf)) : null; }) : [];
+  const bz = BUCKETED.has(t) ? DILUTION_BUCKETS.map((_, i) => { const sub = train.filter((x) => bucketOf(x.pct) === i); return sub.length >= MIN_BUCKET ? quantiles(sub.map(zOf)) : null; }) : [];
   for (const s of list.filter((x) => x.d >= cutoff)) {
     const p = probFrom(bz[bucketOf(s.pct)] || zq, s.base * Math.sqrt(10));
     const y = s.move >= BIG ? 1 : 0;
@@ -184,9 +223,9 @@ const validation = {
 const model = {
   built: today, years: YEARS, from: events[0]?.d, to: today, big: BIG, window: 10,
   samples: samples.length, stocks: Object.keys(metrics).length, events: events.length,
-  validation, types,
+  validation, types, overhang,
 };
 const out = new URL("../public/ai-model.json", import.meta.url);
 fs.writeFileSync(out, JSON.stringify(model));
 log(`저장: ${out.pathname} (${Math.round(fs.statSync(out).size / 1024)}KB) 사례 ${samples.length}`);
-console.log(JSON.stringify({ ...model, types: Object.fromEntries(Object.entries(types).map(([t, v]) => [t, { n: v.n, big: v.big, ctrlBig: v.ctrlBig, lift: v.lift, years: v.years }])) }, null, 1));
+console.log(JSON.stringify({ ...model, overhang: overhang.slice(0, 15), types: Object.fromEntries(Object.entries(types).map(([t, v]) => [t, { n: v.n, big: v.big, ctrlBig: v.ctrlBig, lift: v.lift, years: v.years }])) }, null, 1));

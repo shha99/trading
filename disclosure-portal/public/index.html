@@ -209,6 +209,26 @@
       <p class="empty" id="aiNextEmpty" hidden></p>
     </div>
 
+    <h3 class="ai-h3">오버행(잠재 물량) Top 20 <small>전환기간이 남은 CB·BW·EB + 보호예수가 풀리는 제3자배정 신주, 발행주식 대비 %</small> <span class="mk-meta" id="aiOverCount"></span></h3>
+    <div class="table-wrap">
+      <table class="list ai-list ai-over">
+        <thead>
+          <tr>
+            <th class="c-rank">#</th>
+            <th class="c-corp">종목</th>
+            <th class="c-num" title="각 발행 당시 발행주식총수 대비 % 합계. 이미 전환된 물량은 빠지지 않습니다">잠재 물량</th>
+            <th>구성</th>
+            <th class="c-next">다음 일정</th>
+            <th title="최근 2년 안의 거래소 공시: 전환청구권 행사, 전환가액 조정, 자기 CB 매도">최근 신호</th>
+            <th class="c-num">평소 변동성</th>
+          </tr>
+        </thead>
+        <tbody id="aiOverRows"></tbody>
+      </table>
+      <p class="empty" id="aiOverEmpty" hidden></p>
+    </div>
+    <p class="hint" id="aiOverNote"></p>
+
     <h3 class="ai-h3">메자닌·유상증자 발행 규모별 결과 (발행주식총수 대비 새로 생길 수 있는 주식)</h3>
     <div class="table-wrap">
       <table class="list ai-stats">

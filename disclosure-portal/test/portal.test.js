@@ -475,6 +475,11 @@ test("AI분석: 공시 제목 → 이벤트 종류", () => {
   assert.equal(classify("주권매매거래정지해제", "i"), "resume");
   assert.equal(classify("주권매매거래정지해제(상장폐지에 따른 정리매매 개시)", "i"), "delist");
   assert.equal(classify("기타시장안내(관리종목지정 우려 종목)(주가 1,000원 미달)", "i"), "delist_warn");
+  assert.equal(classify("전환청구권행사 (제3회차)", "i"), "conv_exercise");
+  assert.equal(classify("전환가액ㆍ신주인수권행사가액ㆍ교환가액의조정", "i"), "refix_adj");
+  assert.equal(classify("자기전환사채매도결정", "i"), "cb_resale");
+  assert.equal(classify("주식매수선택권행사", "i"), null);
+  assert.equal(classify("권리락              (무상증자)", "i"), "exright_b");
 });
 
 test("AI분석: 30일 고정 블록", () => {
@@ -520,9 +525,10 @@ test("AI분석 API: 입력 검사", async () => {
 
 test("AI분석: 메자닌·유상증자 희석률", async () => {
   const { parseDilution, bucketOf } = await import("../src/ai.js");
-  assert.deepEqual(parseDilution("cb", { cvisstk_tisstk_vs: "19.52", act_mktprcfl_cvprc_lwtrsprc: "798" }), { pct: 19.52, refix: true });
-  assert.deepEqual(parseDilution("bw", { nstk_isstk_tisstk_vs: "2.72" }), { pct: 2.72 });
-  assert.deepEqual(parseDilution("eb", { extg_tisstk_vs: "-" }), { pct: null });
+  assert.deepEqual(parseDilution("cb", { cvisstk_tisstk_vs: "19.52", act_mktprcfl_cvprc_lwtrsprc: "798", cvrqpd_bgd: "2025년 07월 18일", cvrqpd_edd: "2027년 06월 18일" }),
+    { pct: 19.52, refix: true, bgd: "20250718", edd: "20270618" });
+  assert.deepEqual(parseDilution("bw", { nstk_isstk_tisstk_vs: "2.72" }), { pct: 2.72, bgd: null, edd: null });
+  assert.deepEqual(parseDilution("eb", { extg_tisstk_vs: "-" }), { pct: null, bgd: null, edd: null });
   const r = parseDilution("rights", { nstk_ostk_cnt: "-", nstk_estk_cnt: "1,000", bfic_tisstk_ostk: "9,000", bfic_tisstk_estk: "1,000", ic_mthn: "제3자배정증자" });
   assert.deepEqual(r, { pct: 10, rcps: true, method: "제3자배정증자" });
   assert.equal(bucketOf(3), 0);

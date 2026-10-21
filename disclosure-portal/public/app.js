@@ -802,6 +802,8 @@
   // 서버(/api/ai/*)는 최근 공시와 지금 종목의 측정값만 준다. 확률·순위는 여기서 계산한다.
   const AI_LABEL = {
     cb: "CB(전환사채) 발행", bw: "BW(신주인수권부사채) 발행", eb: "EB(교환사채) 발행", rcps: "RCPS·우선주 유상증자",
+    conv_start: "CB·BW·EB 전환(행사)청구 시작", lockup3p: "제3자배정 신주 보호예수 해제(추정)",
+    conv_exercise: "전환·행사청구 공시(신주 상장)", refix_adj: "전환·행사가액 조정(리픽싱 등)", cb_resale: "자기 CB·BW 재매각",
     rights: "유상증자 결정", exright_b: "권리락(무상증자)", exright_r: "권리락(유상증자)", bonus: "무상증자 결정", reduce: "감자 결정", merger: "합병·분할·영업양수도 결정(매수청구권)",
     tender: "공개매수", split: "액면분할 결정", consolidate: "액면병합 결정", relist: "액면변경 후 변경상장(거래재개)",
     delist: "정리매매", halt: "거래정지(사유 발생)", resume: "거래재개(정지 해제)", delist_warn: "관리종목·상장폐지 우려 안내",
@@ -860,12 +862,15 @@
       }
       const ipo = new Map(hist.flatMap((h) => h.ipo || []).map((x) => [x.c, x]));
       // 최근 메자닌(CB·BW·EB)·유상증자: 발행 규모(발행주식총수 대비 %)와 RCPS·우선주 여부
-      const sized = events.filter((e) => ["rights", "cb", "bw", "eb"].includes(e.t) && e.cc && daysDiff(e.d, state.today) <= 14);
+      // (최근 두 블록 전부 — 모델을 만든 뒤 새로 생긴 오버행도 잡으려고)
+      const sized = events.filter((e) => ["rights", "cb", "bw", "eb"].includes(e.t) && e.cc);
       await runPool(sized.map((e) => async () => {
         const k = await fetchJSON(`/api/ai/dilution?t=${e.t}&corp=${e.cc}&r=${e.r}`);
         e.pct = k.pct;
         e.refix = k.refix;
         e.method = k.method;
+        e.bgd = k.bgd;
+        e.edd = k.edd;
         if (k.rcps) e.t = "rcps";
       }), 6, (d, t) => meta(`발행 규모 확인 중 ${d}/${t}`));
       // 2) 캘린더의 예정 일정(앞으로 30일): 액면변경 변경상장, 증자 권리락(배정기준일 전 거래일)
@@ -880,13 +885,21 @@
         .map((e) => ({ t: "relist", code: e.code, name: e.name, market: e.market, date: e.start, rcept: e.rcept_no }));
       const exrights = state.cal.events.filter((e) => e.type === "capital" && e.sub === "record" && okCode(e) && soon(prevWeekday(e.start)))
         .map((e) => ({ t: /무상/.test(e.kind) ? "exright_b" : "exright_r", code: e.code, name: e.name, market: e.market, date: prevWeekday(e.start), rcept: e.rcept_no }));
-      const planned = [...relists, ...exrights];
+      // 오버행(잠재 물량): 모델(과거 3년 발행분) + 최근 공시
+      ai.over = aiOverhang(ai.model, events);
+      const overPlanned = [];
+      for (const o of ai.over) for (const it of o.items) {
+        if (it.bgd && soon(it.bgd)) overPlanned.push({ t: "conv_start", code: o.c, name: o.n, market: o.m, date: it.bgd, pct: it.pct, src: it.t });
+        if (it.rel && soon(it.rel)) overPlanned.push({ t: "lockup3p", code: o.c, name: o.n, market: o.m, date: it.rel, pct: it.pct, src: it.t });
+      }
+      const planned = [...relists, ...exrights, ...overPlanned];
       // 3) 종목별 주가 측정값 — 종목코드 해시로 묶어 요청(묶음이 매일 거의 같아 서버 캐시가 잘 맞는다)
       const want = new Map();
       const add = (code, tok) => { if (!want.has(code)) want.set(code, new Set()); want.get(code).add(tok); };
       for (const e of events) if (daysDiff(e.d, state.today) <= 14) add(e.c, e.d);
       for (const c of ipo.keys()) add(c, "L");
-      for (const e of planned) add(e.code, state.today);
+      for (const e of planned) add(e.code, e.date <= state.today ? e.date : state.today);
+      for (const o of ai.over.slice(0, 40)) add(o.c, state.today);
       const buckets = new Map();
       for (const [code, toks] of want) {
         const b = strHash(code) % 64;
@@ -951,7 +964,7 @@
         if (dd >= -14 && dd <= AI_AHEAD) addCand(`lockup${l.months}`, code, ipo.get(code)?.n || code, ipo.get(code)?.m || "", l.d, "");
       }
     }
-    for (const e of planned) addCand(e.t, e.code, e.name, e.market, e.date, e.rcept, state.today);
+    for (const e of planned) addCand(e.t, e.code, e.name, e.market, e.date, e.rcept, e.date <= today ? e.date : today, { pct: e.pct ?? null });
     // 진행 중(이벤트일이 오늘이거나 지남) / 예정(앞으로) 따로. 한 종목에 이벤트가 여럿이면 확률이 가장 높은 것으로.
     const rank = (list) => {
       const byCode = new Map();
@@ -963,6 +976,7 @@
       }
       return [...byCode.values()].sort((a, b) => b.prob - a.prob || b.exp - a.exp);
     };
+    for (const o of state.ai.over || []) o.sigma = stocks[o.c]?.now_base ?? null;
     return { stats, now: rank(cands.filter((c) => c.date <= today)), next: rank(cands.filter((c) => c.date > today)) };
   }
 
@@ -998,9 +1012,76 @@
     };
     fill(ai.now, "aiNowRows", "aiNowEmpty", "최근 14일 안에 시작된 이벤트 종목이 없습니다.");
     fill(ai.next, "aiNextRows", "aiNextEmpty", `앞으로 ${AI_AHEAD}일 안에 예정된 이벤트 종목이 없습니다.`);
+    aiRenderOverhang(ai);
     $("aiNowCount").textContent = ai.now.length ? `${ai.now.length}종목 중` : "";
     $("aiNextCount").textContent = ai.next.length ? `${ai.next.length}종목 중` : "";
     aiRenderStats(ai);
+  }
+
+  // 오버행: 전환기간이 남은 CB·BW·EB와 보호예수가 풀리는(풀린) 제3자배정 신주를 발행주식 대비 %로 합친다.
+  // 비율은 각 발행 당시 발행주식총수 기준이고, 이미 전환된 물량은 빼지 못한다(DART에 구조화된 잔액 자료가 없음).
+  function aiOverhang(model, events) {
+    const today = state.today;
+    const by = new Map();
+    const get = (c, n, m) => { if (!by.has(c)) by.set(c, { c, n, m, total: 0, items: [], sig: {} }); return by.get(c); };
+    for (const o of model.overhang || []) {
+      if (!["코스피", "코스닥"].includes(o.m)) continue;
+      const x = get(o.c, o.n, o.m);
+      for (const it of o.items) if (!(it.edd && it.edd < today)) x.items.push(it);
+      Object.assign(x.sig, o.sig || {});
+    }
+    const addMonths = (d, n) => { const x = new Date(Date.UTC(+d.slice(0, 4), +d.slice(4, 6) - 1 + n, +d.slice(6, 8))); return ymdUTC(x); };
+    for (const e of events) {
+      if (["conv_exercise", "refix_adj", "cb_resale"].includes(e.t)) {
+        const x = by.get(e.c);
+        if (x && (!x.sig[e.t] || x.sig[e.t] < e.d)) x.sig[e.t] = e.d;
+        continue;
+      }
+      if (e.pct === null || e.pct === undefined || !["코스피", "코스닥"].includes(e.m)) continue;
+      let it = null;
+      if (["cb", "bw", "eb"].includes(e.t) && !(e.edd && e.edd < today)) it = { t: e.t, d: e.d, pct: e.pct, bgd: e.bgd, edd: e.edd };
+      if (["rights", "rcps"].includes(e.t) && /제3자/.test(e.method || "")) it = { t: e.t, d: e.d, pct: e.pct, rel: addMonths(e.d, 13), method: e.method };
+      if (!it) continue;
+      const x = get(e.c, e.n, e.m);
+      if (!x.items.some((y) => y.t === it.t && y.d === it.d)) x.items.push(it);
+    }
+    for (const x of by.values()) x.total = x.items.reduce((a, it) => a + it.pct, 0);
+    return [...by.values()].filter((x) => x.items.length).sort((a, b) => b.total - a.total);
+  }
+
+  function aiRenderOverhang(ai) {
+    const T = { cb: "CB", bw: "BW", eb: "EB", rights: "제3자배정 증자", rcps: "RCPS" };
+    const ym = (d) => (d ? `${d.slice(2, 4)}.${d.slice(4, 6)}` : "?");
+    const rows = (ai.over || []).slice(0, AI_TOP).map((o, i) => {
+      const watched = isWatchedCode(o.c);
+      const parts = o.items.sort((a, b) => b.pct - a.pct).map((it) => it.rel
+        ? `${T[it.t]} ${it.pct.toFixed(1)}% <span>(보호예수 해제 ${ym(it.rel)} 무렵)</span>`
+        : `${T[it.t]} ${it.pct.toFixed(1)}% <span>(${it.bgd && it.bgd > state.today ? `전환 시작 ${ym(it.bgd)}` : "전환 가능"}${it.edd ? ` ~${ym(it.edd)}` : ""})</span>`).join("<br>");
+      const next = o.items.flatMap((it) => [it.bgd, it.rel]).filter((d) => d && d > state.today).sort()[0];
+      const sig = [["conv_exercise", "전환청구"], ["refix_adj", "가액조정"], ["cb_resale", "자기CB매도"]].filter(([k]) => o.sig[k]).map(([k, l]) => `${l} ${fmtMD(o.sig[k])}`).join(" · ");
+      return `<tr class="${watched ? "watched" : ""}">
+        <td class="num ai-rank">${i + 1}</td>
+        <td><div class="corp">
+          <button class="star ${watched ? "on" : ""}" data-aistar="${esc(o.c)}" data-name="${esc(o.n)}" title="${watched ? "관심종목 해제" : "관심종목 추가"}">${watched ? "★" : "☆"}</button>
+          <span class="nm" title="${esc(o.n)}">${esc(o.n)}</span><span class="cd">${esc(o.c)}</span><span class="mkt ${esc(o.m)}">${esc(o.m)}</span>
+        </div></td>
+        <td class="num"><b class="${o.total >= 20 ? "ai-hot" : ""}">${o.total.toFixed(1)}%</b></td>
+        <td class="ai-parts">${parts}</td>
+        <td>${next ? `${fmtMD(next)} · ${aiWhen(next)}` : "–"}</td>
+        <td class="ai-sig">${sig || "–"}</td>
+        <td class="num">${o.sigma ? pct(o.sigma, 1) : "–"}</td>
+      </tr>`;
+    });
+    $("aiOverRows").innerHTML = rows.join("");
+    $("aiOverEmpty").hidden = rows.length > 0;
+    $("aiOverEmpty").textContent = "전환기간이 남은 메자닌·보호예수 해제 예정 신주가 있는 종목이 없습니다.";
+    $("aiOverCount").textContent = ai.over && ai.over.length ? `${ai.over.length}종목 중` : "";
+    // 근거: 전환청구 시작·보호예수 해제·전환청구 공시 뒤 과거 결과
+    const ev = ["conv_start", "lockup3p", "conv_exercise", "refix_adj", "cb_resale"].filter((t) => ai.stats[t]).map((t) => {
+      const st = ai.stats[t];
+      return `${esc(AI_LABEL[t])} ${st.n}건: ±20% ${pct(st.big)}(평소 ${pct(st.ctrlBig)}), 10일 뒤 하락 ${pct(1 - st.up)}`;
+    });
+    $("aiOverNote").innerHTML = ev.length ? `과거 5년 결과 — ${ev.join(" · ")}` : "";
   }
 
   function aiRowHTML(r, i) {

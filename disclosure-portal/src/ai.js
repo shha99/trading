@@ -36,6 +36,10 @@ export const AI_TYPES = {
   split: { label: "액면분할 결정", g: "i", re: /주식분할결정/ },
   consolidate: { label: "액면병합 결정", g: "i", re: /주식병합결정/ },
   relist: { label: "액면변경 후 변경상장(거래재개)", g: "i", re: /거래정지해제.*변경상장/ },
+  // 메자닌 물량이 실제로 시장에 나오는 신호(거래소 수시공시)
+  conv_exercise: { label: "전환·행사청구 공시(신주 상장)", g: "i", re: /(?:전환청구권|신주인수권|교환청구권)행사/, not: /가액/ },
+  refix_adj: { label: "전환·행사가액 조정(리픽싱 등)", g: "i", re: /가액(?:의)?조정/ },
+  cb_resale: { label: "자기 CB·BW 재매각", g: "i", re: /자기(?:전환사채|신주인수권부사채|교환사채)매도/ },
   exright_b: { label: "권리락(무상증자)", g: "i", re: /^권리락.*무상/ }, // 유무상증자 포함
   exright_r: { label: "권리락(유상증자)", g: "i", re: /^권리락/, not: /무상/ },
   delist: { label: "정리매매", g: "i", re: /정리매매(?:개시|재개)/ },
@@ -129,6 +133,10 @@ export async function fetchAiHistory(apiKey, k, g, today, fetchImpl = fetch, { d
 //   bw: 신주인수권부사채(bdwtIsDecsn) "신주 — 주식총수 대비 비율"
 //   eb: 교환사채(exbdIsDecsn) "교환대상 — 주식총수 대비 비율"(자기주식 교환일 때만 있다)
 export const DILUTION_API = { rights: "piicDecsn", rcps: "piicDecsn", cb: "cvbdIsDecsn", bw: "bdwtIsDecsn", eb: "exbdIsDecsn" };
+const koDate = (v) => {
+  const m = String(v || "").match(/(\d{4})\s*[년.\-/]\s*(\d{1,2})\s*[월.\-/]\s*(\d{1,2})/);
+  return m ? `${m[1]}${m[2].padStart(2, "0")}${m[3].padStart(2, "0")}` : null;
+};
 const num = (v) => { const n = Number(String(v ?? "").replace(/[^\d.]/g, "")); return Number.isFinite(n) ? n : 0; };
 
 export function parseDilution(t, x) {
@@ -146,6 +154,10 @@ export function parseDilution(t, x) {
   const pct = num(x[field]);
   const out = { pct: pct > 0 ? pct : null };
   if (t === "cb") out.refix = num(x.act_mktprcfl_cvprc_lwtrsprc) > 0;
+  // 전환(행사·교환)청구 기간 — 이 기간에 주식으로 바뀌어 시장에 나올 수 있다
+  const [bgd, edd] = { cb: ["cvrqpd_bgd", "cvrqpd_edd"], bw: ["expd_bgd", "expd_edd"], eb: ["exrqpd_bgd", "exrqpd_edd"] }[t];
+  out.bgd = koDate(x[bgd]);
+  out.edd = koDate(x[edd]);
   return out;
 }
 
