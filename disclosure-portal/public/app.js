@@ -1052,13 +1052,14 @@
   function aiRenderOverhang(ai) {
     const T = { cb: "CB", bw: "BW", eb: "EB", rights: "제3자배정 증자", rcps: "RCPS" };
     const ym = (d) => (d ? `${d.slice(2, 4)}.${d.slice(4, 6)}` : "?");
+    const ymd2 = (d) => `${d.slice(2, 4)}.${d.slice(4, 6)}.${d.slice(6, 8)}`;
     const rows = (ai.over || []).slice(0, AI_TOP).map((o, i) => {
       const watched = isWatchedCode(o.c);
       const parts = o.items.sort((a, b) => b.pct - a.pct).map((it) => it.rel
         ? `${T[it.t]} ${it.pct.toFixed(1)}% <span>(보호예수 해제 ${ym(it.rel)} 무렵)</span>`
         : `${T[it.t]} ${it.pct.toFixed(1)}% <span>(${it.bgd && it.bgd > state.today ? `전환 시작 ${ym(it.bgd)}` : "전환 가능"}${it.edd ? ` ~${ym(it.edd)}` : ""})</span>`).join("<br>");
       const next = o.items.flatMap((it) => [it.bgd, it.rel]).filter((d) => d && d > state.today).sort()[0];
-      const sig = [["conv_exercise", "전환청구"], ["refix_adj", "가액조정"], ["cb_resale", "자기CB매도"]].filter(([k]) => o.sig[k]).map(([k, l]) => `${l} ${fmtMD(o.sig[k])}`).join(" · ");
+      const sig = [["conv_exercise", "전환청구"], ["refix_adj", "가액조정"], ["cb_resale", "자기CB매도"]].filter(([k]) => o.sig[k]).map(([k, l]) => `${l} ${ymd2(o.sig[k])}`).join(" · ");
       return `<tr class="${watched ? "watched" : ""}">
         <td class="num ai-rank">${i + 1}</td>
         <td><div class="corp">
@@ -1067,7 +1068,7 @@
         </div></td>
         <td class="num"><b class="${o.total >= 20 ? "ai-hot" : ""}">${o.total.toFixed(1)}%</b></td>
         <td class="ai-parts">${parts}</td>
-        <td>${next ? `${fmtMD(next)} · ${aiWhen(next)}` : "–"}</td>
+        <td>${next ? `${ymd2(next)} · ${aiWhen(next)}` : "–"}</td>
         <td class="ai-sig">${sig || "–"}</td>
         <td class="num">${o.sigma ? pct(o.sigma, 1) : "–"}</td>
       </tr>`;
