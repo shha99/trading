@@ -193,6 +193,22 @@ async function handleQuotes(url, env, ctx, fetchImpl) {
 export async function handle(request, env, ctx, fetchImpl = fetch) {
   const url = new URL(request.url);
   if (url.pathname === "/healthz") return json({ ok: true });
+  if (url.pathname === "/healthz/kind-probe") { // 임시: KIND 지난 날짜 조회 방식 확인용(공개 공시 목록만, 확인 뒤 삭제)
+    const sel = url.searchParams.get("d") || "2026-10-21";
+    const out = [];
+    for (const [flag, sd] of [["N", sel], ["Y", sel], ["", sel], ["N", sel.replaceAll("-", "")]]) {
+      const body = new URLSearchParams({ method: "searchTodayDisclosureSub", currentPageSize: "100", pageIndex: "1", orderMode: "0", orderStat: "D",
+        forward: "todaydisclosure_sub", marketType: "", searchMode: "", searchCodeType: "", chose: "S", todayFlag: flag, repIsuSrtCd: "", kosdaqSegment: "", selDate: sd });
+      try {
+        const r = await fetchImpl("https://kind.krx.co.kr/disclosure/todaydisclosure.do", { method: "POST", headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36", "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", Referer: "https://kind.krx.co.kr/disclosure/todaydisclosure.do?method=searchTodayDisclosureMain" }, body });
+        const html = await r.text();
+        const { parseKindList } = await import("./kind.js");
+        const p = parseKindList(html);
+        out.push({ flag, sd, status: r.status, total: p.total, first: p.items.slice(0, 3).map((x) => [x.rcept_no, x.time, x.corp_name, x.report_nm]), samsung: p.items.filter((x) => /삼성바이오/.test(x.corp_name)).map((x) => [x.rcept_no, x.time, x.report_nm]) });
+      } catch (e) { out.push({ flag, sd, error: String(e.message) }); }
+    }
+    return json(out);
+  }
 
   // 사람별 로그인(PORTAL_USERS가 있으면). 없으면 예전 방식(PORTAL_PASSWORD 하나, 브라우저 팝업)으로.
   let user = null;
