@@ -591,3 +591,16 @@ test("/api/kind/day: 지난 날짜는 KIND에 날짜를 골라 요청한다", as
   assert.equal(sent.get("todayFlag"), "N");
   assert.equal((await handle(req("/api/kind/day?date=29991231"), env(), ctx)).status, 400);
 });
+
+test("증자 일정: 결정 뒤 투자설명서·정정 서류까지 읽어 가장 최근 값을 쓴다", async () => {
+  const { fetchCapital } = await import("../src/events.js");
+  const docs = {
+    "20261001000449": "<P>신주의 상장 예정일 2026년 11월 30일 신주배정기준일 2026년 10월 06일 신주인수권증서의 상장여부 예</P>",
+    "20261001000485": "<P>2026년 10월 26일 신주인수권증서 상장일 5거래일 이상 동안 거래(26.10.26~26.10.30) 2026년 11월 02일 신주인수권증서 상장폐지</P>",
+    "20260914000001": "<P>2026년 10월 20일 신주인수권증서 상장일 (26.10.20~26.10.24)</P>", // 더 옛 투자설명서 — 무시돼야
+  };
+  const fake = async (url) => new Response(makeZip("1.xml", docs[new URL(url).searchParams.get("rcept_no")] || "<P></P>"));
+  const e = await fetchCapital("k", "20261001000449", fake, "", ["20261001000485", "20260914000001"]);
+  assert.deepEqual([e.cert_start, e.cert_end, e.listing, e.record_date], ["20261026", "20261030", "20261130", "20261006"]);
+  assert.deepEqual(e.from, ["20261001000485"]);
+});

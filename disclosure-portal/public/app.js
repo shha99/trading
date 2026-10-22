@@ -19,7 +19,7 @@
       seen: null, added: {}, released: {}, notified: new Set(),
     },
     cal: {
-      month: null, events: [], quotes: {}, loadedAt: null, loading: false, selected: null, error: null, newIds: new Set(),
+      month: null, events: [], quotes: {}, loadedAt: null, loading: false, selected: null, error: null, newIds: new Set(), changes: new Map(),
       manual: [],
     },
     ai: { loading: false, loadedAt: null, error: null, stats: null, ranked: [] },
@@ -1318,11 +1318,24 @@
       // 순서 주의: 후보(합병 등·공개매수), 증자, 거래소 공시, KIND — 아래 구조분해와 같은 순서
       const fetched = await Promise.all([
         fetchJSON(`/api/events/candidates?x=1${q}`),
-        fetchJSON(`/api/events/capital-candidates?x=1${q}`).catch(() => ({ items: [] })), // 증자는 실패해도 나머지는 보여준다
+        // 증자: 최근 3개월·3~6개월 전을 나눠 받아 합친다(결정이 오래돼도 남은 일정·뒤에 나온 정정 서류를 놓치지 않게)
+        Promise.all([0, 1].map((w) => fetchJSON(`/api/events/capital-candidates?w=${w}${q}`).catch(() => ({ items: [], docs: {} }))))
+          .then(([a, b]) => mergeCapitalCandidates(a, b)), // 증자는 실패해도 나머지는 보여준다
         fetchJSON(`/api/events/exchange-candidates?x=1${q}`).catch(() => ({ items: [] })),
         fresh ? fetchJSON(`/api/kind/day?date=${state.today}&fresh=1`).catch((e) => ({ error: e.message })) : Promise.resolve(null),
       ]);
       const [c, cap, exch, kindToday] = fetched;
+      // 최근 7일 KIND 공시(거래소 안내 포함)에서 증자 일정 관련 후속 공시를 찾는다 — 결정 뒤 추가·정정된 일정을 놓치지 않게
+      const kindWeek = (await Promise.all(Array.from({ length: 7 }, (_, i) => shiftDate(state.today, -i)).map((d) =>
+        fetchJSON(`/api/kind/day?date=${d}${fresh && d === state.today ? "&fresh=1" : ""}`).then((r) => r.items || [], () => [])))).flat();
+      const noticesBy = new Map(); // 종목코드 → 관련 공시(최신순)
+      for (const it of kindWeek) {
+        const title = it.report_nm.replace(/\s/g, "");
+        if (!it.stock_code || !CAP_NOTICE.test(title) || /철회/.test(title)) continue;
+        if (!noticesBy.has(it.stock_code)) noticesBy.set(it.stock_code, []);
+        noticesBy.get(it.stock_code).push({ rcept_no: it.rcept_no, title: it.report_nm, date: it.rcept_no.slice(0, 8), time: it.kind_time, name: it.corp_name, market: it.market, url: it.url });
+      }
+      for (const [code, list] of noticesBy) noticesBy.set(code, [...new Map(list.map((x) => [x.rcept_no, x])).values()].sort((a, b) => b.rcept_no.localeCompare(a.rcept_no)));
       // 액면변경(분할·병합): 거래소 공시가 많아 30일씩 세 번 나눠 받고, 회사별 최신 결정만 남긴다
       const splitLists = await Promise.all([0, 1, 2].map((w) => fetchJSON(`/api/events/split-candidates?w=${w}${q}`).catch(() => ({ items: [] }))));
       const splits = new Map();
@@ -1333,7 +1346,9 @@
       const jobs = [
         // 액면변경: 신주 효력발생일(기준일), 매매거래정지 기간, 신주권 상장예정일
         ...[...splits.values()].filter((x) => !x.withdrawn).map((x) => async () => {
-          const e = (await fetchJSON(`/api/events/split?rcept_no=${x.rcept_no}${q}`)).event;
+          const got = await fetchWithPrev(`/api/events/split?rcept_no=${x.rcept_no}${q}`, x.rcept_no, x.prev_rcept_no);
+          if (!got) return [{ type: "split", sub: "pending", id: `split:${x.corp_code}:wait`, kind: `${x.kind}(원문 대기)`, name: x.corp_name, code: x.stock_code, market: x.market, rcept_no: x.rcept_no, announced: x.first_rcept_no.slice(0, 8), start: null, end: null, waiting: true, split_kind: x.kind }];
+          const e = got.event;
           const par = e.par_before && e.par_after ? `액면 ${e.par_before.toLocaleString()}→${e.par_after.toLocaleString()}원` : "";
           const base = { type: "split", name: x.corp_name, code: x.stock_code, market: x.market, rcept_no: x.rcept_no, announced: x.first_rcept_no.slice(0, 8), par, gm_date: e.gm_date, split_kind: x.kind };
           const out = [];
@@ -1344,9 +1359,14 @@
         }),
         // 증자: 신주인수권증서 상장기간, 신주 상장예정일 → 일정 두 개로 나눈다
         ...cap.items.map((x) => async () => {
-          const r = await fetchJSON(`/api/events/capital?rcept_no=${x.rcept_no}&corp_code=${x.corp_code}${q}`);
+          // 결정 뒤 나온 공모 서류(docs)와 최근 거래소 후속 공시(n)가 바뀌면 캐시를 건너뛰고 다시 읽는다
+          const notices = noticesBy.get(x.stock_code) || [];
+          const docs = x.docs && x.docs.length ? `&docs=${x.docs.join(",")}` : "";
+          const n = notices.length ? `&n=${notices[0].rcept_no}` : "";
+          const r = await fetchWithPrev(`/api/events/capital?rcept_no=${x.rcept_no}&corp_code=${x.corp_code}${docs}${n}${q}`, x.rcept_no, null);
+          if (!r) return [{ type: "capital", sub: "pending", id: `cap:${x.corp_code}:${x.kind}:wait`, kind: `${x.kind}(원문 대기)`, name: x.corp_name, code: x.stock_code, market: x.market, rcept_no: x.rcept_no, announced: x.first_rcept_no.slice(0, 8), start: null, end: null, waiting: true, notices }];
           const e = r.event;
-          const base = { type: "capital", name: x.corp_name, code: x.stock_code, market: x.market, rcept_no: x.rcept_no, announced: x.first_rcept_no.slice(0, 8), record_date: e.record_date };
+          const base = { type: "capital", name: x.corp_name, code: x.stock_code, market: x.market, rcept_no: x.rcept_no, announced: x.first_rcept_no.slice(0, 8), record_date: e.record_date, notices, from_docs: e.from || null };
           const out = [];
           if (e.cert_start) out.push({ ...base, id: `cap:${x.corp_code}:${x.kind}:cert`, sub: "cert", kind: `증서상장·${x.kind}`, start: e.cert_start, end: e.cert_end || e.cert_start });
           if (e.listing) out.push({ ...base, id: `cap:${x.corp_code}:${x.kind}:list`, sub: "listing", kind: `신주상장·${x.kind}`, start: e.listing, end: e.listing });
@@ -1354,13 +1374,15 @@
           return out;
         }),
         ...deals.map((d) => async () => {
-          const r = await fetchJSON(`/api/events/deal?api=${d.api}&corp_code=${d.corp_code}&rcept_no=${d.rcept_no}${q}`);
+          const r = await fetchWithPrev(`/api/events/deal?api=${d.api}&corp_code=${d.corp_code}&rcept_no=${d.rcept_no}${q}`, d.rcept_no, d.prev_rcept_no);
+          if (!r) return { type: "buyback", kind: d.kind, id: `deal:${d.corp_code}:${d.api === "doc" ? d.kind : d.api}`, name: d.corp_name, code: d.stock_code, market: d.market, rcept_no: d.rcept_no, announced: (d.first_rcept_no || d.rcept_no).slice(0, 8), start: null, end: null, waiting: true, from_exchange: d.source === "거래소" };
           const e = r.event;
           if (!e || e.none) return null;
           return { ...e, kind: d.api === "doc" ? d.kind : e.kind, from_exchange: d.source === "거래소", id: `deal:${d.corp_code}:${d.api === "doc" ? d.kind : d.api}`, name: d.corp_name, code: d.stock_code, market: d.market, withdrawn: Boolean(d.withdrawn_rcept_no), announced: (d.first_rcept_no || d.rcept_no).slice(0, 8) };
         }),
         ...c.tenders.map((t) => async () => {
-          const r = await fetchJSON(`/api/events/tender?rcept_no=${t.rcept_no}${q}`);
+          const r = await fetchWithPrev(`/api/events/tender?rcept_no=${t.rcept_no}${q}`, t.rcept_no, t.first_rcept_no !== t.rcept_no ? t.first_rcept_no : null);
+          if (!r) return { type: "tender", id: `tender:${t.first_rcept_no}`, announced: t.first_rcept_no.slice(0, 8), kind: "공개매수", name: t.corp_name, code: t.stock_code, market: t.market, offeror: t.offeror, done: t.done, rcept_no: t.rcept_no, start: null, end: null, waiting: true };
           return { ...r.event, id: `tender:${t.first_rcept_no}`, announced: t.first_rcept_no.slice(0, 8), kind: "공개매수", name: t.corp_name, code: t.stock_code, market: t.market, offeror: t.offeror, done: t.done };
         }),
       ];
@@ -1409,6 +1431,29 @@
           cal.kindNote = `KIND 확인 ${nowKst().slice(0, 5)}${pending.length ? ` · DART 반영 전 ${pending.length}건` : ""}`;
         }
       }
+      // 증자 관련 거래소 후속 공시가 있는데 캘린더에 그 회사 증자 일정이 없으면 "확인 필요"로 띄운다(빠뜨리지 않게)
+      const capCodes = new Set(out.filter((e) => e.type === "capital").map((e) => e.code));
+      for (const [code, list] of noticesBy) {
+        if (capCodes.has(code)) continue;
+        const nt = list.find((x) => CAP_SCHEDULE_NOTICE.test(x.title.replace(/\s/g, ""))); // 결정 공시는 DART 쪽에서 잡는다
+        if (!nt) continue;
+        out.push({
+          type: "capital", sub: "pending", id: `kindcap:${code}`, kind: `${nt.title} (KIND)`, name: nt.name, code, market: nt.market,
+          start: null, end: null, rcept_no: nt.rcept_no, from_kind: true, announced: nt.date, notices: list,
+        });
+      }
+      // 지난번에 본 일정과 비교해 바뀐 일정 표시(날짜·가격)
+      const snap = loadCalSnap();
+      const changed = [];
+      cal.changes = new Map();
+      for (const e of out) {
+        const now = calSig(e);
+        const was = snap[e.id];
+        if (was !== undefined && was !== now) { cal.changes.set(e.id, was); changed.push(e); }
+        snap[e.id] = now;
+      }
+      saveCalSnap(snap);
+      if (changed.length) toast(`📅 일정 변경 ${changed.length}건: ${changed.slice(0, 3).map((e) => `${e.name}(${e.kind})`).join(", ")}`);
       cal.events = out;
       cal.failed = failed;
       cal.loadedAt = nowKst();
@@ -1419,6 +1464,48 @@
       cal.loading = false;
       renderCal();
     }
+  }
+
+  // 공시 본문이 아직 DART에 없을 때(거래소 공시 직후 등): 전 보고서로 다시 시도하고, 그것도 없으면 null
+  const docMissing = (e) => /파일이 존재하지|원문을 받지 못/.test(String(e && e.message));
+  async function fetchWithPrev(url, rcept, prev) {
+    try { return await fetchJSON(url); } catch (e) {
+      if (!docMissing(e)) throw e;
+      if (prev) { try { return { ...(await fetchJSON(url.replace(rcept, prev))), from_prev: true }; } catch (e2) { if (!docMissing(e2)) throw e2; } }
+      return null;
+    }
+  }
+  const WAIT_NOTE = "원문 대기 — DART 본문이 아직 없어 다음 새로고침 때 다시 읽음";
+
+  // 두 기간 후보 합치기: 같은 회사·종류면 최근 기간의 최신 보고서 + 옛 기간의 처음 공시, 공모 서류는 두 기간 모두
+  function mergeCapitalCandidates(recent, older) {
+    const by = new Map();
+    for (const x of older.items || []) by.set(`${x.corp_code}:${x.kind}`, x);
+    for (const x of recent.items || []) {
+      const k = `${x.corp_code}:${x.kind}`;
+      const o = by.get(k);
+      by.set(k, o ? { ...x, first_rcept_no: o.first_rcept_no } : x);
+    }
+    const docs = {};
+    for (const src of [older.docs || {}, recent.docs || {}]) for (const [c, list] of Object.entries(src)) docs[c] = [...(docs[c] || []), ...list];
+    const items = [...by.values()];
+    for (const x of items) { // src/events.js attachCapitalDocs와 같은 규칙
+      const d = [...new Set(docs[x.corp_code] || [])].filter((r) => r >= x.first_rcept_no.slice(0, 8)).sort().reverse().slice(0, 3);
+      if (d.length) x.docs = d;
+    }
+    return { items };
+  }
+
+  // 증자 일정과 관련된 거래소 후속 공시 제목(신주인수권증서 상장·폐지, 신주 추가상장, 발행가액 확정, 권리락 등)
+  const CAP_NOTICE = /신주인수권증서|추가상장\(?(?:유상|무상|유무상)|유상증자|무상증자|권리락|신주발행가액|발행가액(?:확정|결정)/;
+  const CAP_SCHEDULE_NOTICE = /신주인수권증서|추가상장|권리락|발행가액/;
+  const CAL_SNAP_KEY = "disclosure-portal.calendar-snap.v1";
+  const calSig = (e) => [e.start || "", e.end || "", e.price || ""].join("|");
+  function loadCalSnap() {
+    try { return JSON.parse(localStorage.getItem(CAL_SNAP_KEY) || "{}") || {}; } catch { return {}; }
+  }
+  function saveCalSnap(snap) {
+    try { localStorage.setItem(CAL_SNAP_KEY, JSON.stringify(snap)); } catch { /* 저장 불가 */ }
   }
 
   async function loadQuotes() {
@@ -1498,6 +1585,15 @@
     return dt.toISOString().slice(0, 10).replaceAll("-", "");
   }
 
+  function calChangeBadge(e) {
+    const was = state.cal.changes && state.cal.changes.get(e.id);
+    if (was === undefined) return "";
+    const [s0, e0, p0] = was.split("|");
+    const f = (d) => (d ? fmtMD(d) : "미정");
+    const before = `${f(s0)}${e0 && e0 !== s0 ? `~${f(e0)}` : ""}${p0 ? ` · ${Number(p0).toLocaleString()}원` : ""}`;
+    return `<span class="badge chg" title="이전: ${esc(before)}">변경</span>`;
+  }
+
   function calRowHTML(e, pinned = false) {
     const st = status(e);
     const watched = isWatchedCode(e.code);
@@ -1520,6 +1616,9 @@
       e.withdrawn ? "결정 뒤 철회 공시 — 원문 확인" : "",
       e.from_kind ? "KIND 공시 — DART 반영 전이라 일정 확인 중" :
       e.from_exchange ? "거래소 공시 기준(DART 주요사항보고서 나오면 대체)" : e.source === "본문" ? "기간은 보고서 본문 기준" : "",
+      e.waiting ? WAIT_NOTE : "",
+      e.from_docs ? "일정은 정정·투자설명서 기준" : "",
+      e.notices && e.notices.length ? `거래소 후속: ${e.notices.slice(0, 2).map((n) => `<a href="${esc(n.url)}" target="_blank" rel="noopener">${esc(n.title)}(${fmtMD(n.date)})</a>`).join(", ")}` : "",
       e.memo ? esc(e.memo) : "",
       e.manual ? "직접 추가" : "",
     ].filter(Boolean).join(" · ");
@@ -1529,7 +1628,7 @@
       <td class="kind-cell"><span class="kind ev ${e.type}">${esc(kindLabel)}</span></td>
       <td><div class="corp">
         ${e.code ? `<button class="star ${watched ? "on" : ""}" data-calstar="${esc(e.code)}" data-name="${esc(e.name)}">${watched ? "★" : "☆"}</button>` : ""}
-        <span class="nm" title="${esc(e.name)}">${esc(e.name)}</span>${e.code ? `<span class="cd">${esc(e.code)}</span>` : ""}${idxBadge(e.code)}${state.cal.newIds.has(e.id) ? '<span class="badge new">NEW</span>' : ""}${flagBadges(e.code)}
+        <span class="nm" title="${esc(e.name)}">${esc(e.name)}</span>${e.code ? `<span class="cd">${esc(e.code)}</span>` : ""}${idxBadge(e.code)}${state.cal.newIds.has(e.id) ? '<span class="badge new">NEW</span>' : ""}${calChangeBadge(e)}${flagBadges(e.code)}
       </div></td>
       <td class="period">${period}</td>
       <td class="num">${e.price ? e.price.toLocaleString() : "–"}</td>

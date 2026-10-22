@@ -131,14 +131,23 @@ async function handleEvents(url, env, ctx, fetchImpl) {
   }
   if (part === "capital-candidates") {
     const today = todayKst();
-    return cached(`events/capital-candidates?d=${today}`, EVENTS_TTL, fresh, ctx, async () => ({ today, items: await fetchCapitalCandidates(env.DART_API_KEY, today, fetchImpl) }));
+    const w = url.searchParams.get("w");
+    if (w !== null && !["0", "1"].includes(w)) return json({ detail: "w는 0 또는 1이어야 합니다." }, 400);
+    if (w === null) { // 예전 방식(두 기간 한 번에) — 화면은 w=0,1로 나눠 부른다
+      return cached(`events/capital-candidates?d=${today}`, EVENTS_TTL, fresh, ctx, async () => ({ today, items: await fetchCapitalCandidates(env.DART_API_KEY, today, fetchImpl) }));
+    }
+    return cached(`events/capital-candidates?d=${today}&w=${w}`, w === "0" ? EVENTS_TTL : DEAL_TTL, fresh, ctx,
+      async () => ({ today, ...(await fetchCapitalCandidates(env.DART_API_KEY, today, fetchImpl, Number(w))) }));
   }
   if (part === "capital") {
     const rcept = url.searchParams.get("rcept_no") || "";
     if (!/^\d{14}$/.test(rcept)) return json({ detail: "rcept_no가 잘못됐습니다." }, 400);
     const corp = url.searchParams.get("corp_code") || "";
+    const docs = (url.searchParams.get("docs") || "").split(",").filter((r) => /^\d{14}$/.test(r)).slice(0, 3);
+    const notice = url.searchParams.get("n") || ""; // 최근 거래소 후속 공시 — 캐시 키에만 쓴다(새 공시가 나오면 다시 읽게)
     if (corp && !/^\d{8}$/.test(corp)) return json({ detail: "corp_code가 잘못됐습니다." }, 400);
-    return cached(`events/capital?r=${rcept}&c=${corp}`, DEAL_TTL, fresh, ctx, async () => ({ event: await fetchCapital(env.DART_API_KEY, rcept, fetchImpl, corp) }));
+    return cached(`events/capital?r=${rcept}&c=${corp}&docs=${docs.join(",")}&n=${notice.slice(0, 16)}`, DEAL_TTL, fresh, ctx,
+      async () => ({ event: await fetchCapital(env.DART_API_KEY, rcept, fetchImpl, corp, docs.length ? docs : null) }));
   }
   if (part === "deal") {
     const api = url.searchParams.get("api") || "";

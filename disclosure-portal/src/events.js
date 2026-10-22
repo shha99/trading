@@ -270,15 +270,30 @@ export const CAPITAL_KINDS = [
   ["유상증자결정", "유상증자"],
 ];
 
-export async function fetchCapitalCandidates(apiKey, today, fetchImpl = fetch) {
-  const bgn = addDays(today, -89);
-  const lists = await Promise.all([
-    ...[...SCOPE].map((cls) => listAll(apiKey, { bgn_de: bgn, end_de: today, corp_cls: cls, pblntf_ty: "B" }, fetchImpl)),
-    listAll(apiKey, { bgn_de: bgn, end_de: today, pblntf_detail_ty: "C001" }, fetchImpl), // 증권신고서(지분증권)
-  ]);
+// 증자 일정은 결정(주요사항보고서) 뒤에 나오는 증권신고서 정정·[발행조건확정]·투자설명서에서 바뀌거나 채워진다.
+// 그래서 결정 공시만이 아니라 같은 회사의 이 서류들을 모두 묶어(docs) 가장 최근 서류의 일정을 쓴다.
+// 결정이 오래돼도 일정이 남아 있을 수 있어 6개월(3개월 창 두 개)을 본다.
+const OFFER_DOC = /증권신고서\(지분증권\)|투자설명서/;
+// w: 0 = 최근 3개월, 1 = 3~6개월 전(요청당 외부 호출 한도 때문에 나눠 부른다), 없으면 둘 다.
+// 돌려주는 docs는 그 기간에 나온 회사별 공모 서류 — 화면이 두 기간을 합쳐 결정에 붙인다(attachCapitalDocs).
+export async function fetchCapitalCandidates(apiKey, today, fetchImpl = fetch, w = null) {
+  const all = [[addDays(today, -89), today], [addDays(today, -179), addDays(today, -90)]];
+  const windows = w === null ? all : [all[w]];
+  const lists = await Promise.all(windows.flatMap(([bgn, end]) => [
+    ...[...SCOPE].map((cls) => listAll(apiKey, { bgn_de: bgn, end_de: end, corp_cls: cls, pblntf_ty: "B" }, fetchImpl)),
+    listAll(apiKey, { bgn_de: bgn, end_de: end, pblntf_detail_ty: "C001" }, fetchImpl), // 지분증권 증권신고서·투자설명서(정정·발행조건확정 포함)
+  ]));
   const rows = lists.flat().filter((r) => SCOPE.has(r.corp_cls));
   rows.sort((a, b) => a.rcept_no.localeCompare(b.rcept_no));
   const offering = new Set(rows.filter((r) => r.report_nm.replace(/\s/g, "").includes("증권신고서(지분증권)")).map((r) => r.corp_code));
+  // 회사별 공모 서류(최신순): 첨부정정·일괄신고는 일정이 없어 뺀다
+  const docsOf = new Map();
+  for (const r of rows) {
+    const title = r.report_nm.replace(/\s/g, "");
+    if (!OFFER_DOC.test(title) || attachOnly(title) || title.includes("일괄") || title.includes("철회")) continue;
+    if (!docsOf.has(r.corp_code)) docsOf.set(r.corp_code, []);
+    docsOf.get(r.corp_code).push(r.rcept_no);
+  }
   const out = new Map();
   for (const r of rows) {
     const title = r.report_nm.replace(/\s/g, "");
@@ -293,7 +308,20 @@ export async function fetchCapitalCandidates(apiKey, today, fetchImpl = fetch) {
       kind: hit[1], rcept_no: attachOnly(title) && prev ? prev.rcept_no : r.rcept_no, first_rcept_no: prev ? prev.first_rcept_no : r.rcept_no,
     });
   }
-  return [...out.values()];
+  const items = [...out.values()];
+  const docs = Object.fromEntries(docsOf);
+  if (w === null) attachCapitalDocs(items, docs);
+  return w === null ? items : { items, docs };
+}
+
+// 결정마다 그 뒤에 나온 공모 서류(최신 3건)와 "버전"(일정에 영향을 주는 가장 최근 서류)을 붙인다.
+export function attachCapitalDocs(items, docsByCorp) {
+  for (const x of items) {
+    const docs = [...new Set(docsByCorp[x.corp_code] || [])].filter((r) => r >= x.first_rcept_no.slice(0, 8)).sort().reverse().slice(0, 3);
+    if (docs.length) x.docs = docs;
+    x.version = [x.rcept_no, ...docs].sort().pop();
+  }
+  return items;
 }
 
 // 정정 보고서 본문엔 정정 전·후가 다 들어 있고 정정 후(현재 일정)가 뒤에 나온다 — 마지막 값을 쓴다.
@@ -322,8 +350,10 @@ export function parseCapitalText(text) {
       cert = { table: true, start: ymdOf(start, 1), end };
     }
   }
-  const listing = lastMatch(t, new RegExp(`신주의\\s*상장\\s*예정일\\s*:?\\s*${DATE}`, "g"));
-  const record = lastMatch(t, new RegExp(`신주\\s*배정\\s*기준일\\s*:?\\s*\\(?\\s*${DATE}`, "g"));
+  const listing = lastMatch(t, new RegExp(`신주의\\s*상장\\s*예정일\\s*:?\\s*${DATE}`, "g"))
+    || lastMatch(t, new RegExp(`${DATE}\\s*(?:신주권|신주|주권)\\s*(?:의\\s*)?(?:신규\\s*|추가\\s*)?상장(?!\\s*폐지)`, "g")); // 주요일정 표: "2026년 11월 30일 신주 상장"
+  const record = lastMatch(t, new RegExp(`신주\\s*배정\\s*기준일\\s*:?\\s*\\(?\\s*${DATE}`, "g"))
+    || lastMatch(t, new RegExp(`${DATE}\\s*신주\\s*배정\\s*기준일`, "g"));
   return {
     cert_start: cert ? (cert.table ? cert.start : ymdOf(cert, 1)) : null,
     cert_end: cert ? (cert.table ? cert.end : ymdOf(cert, 4)) : null,
@@ -332,25 +362,30 @@ export function parseCapitalText(text) {
   };
 }
 
-// corpCode를 주면, 주요사항보고서에 신주인수권증서 상장기간이 없을 때(공모 유상증자는 흔하다) 같은 회사의
-// 최근 투자설명서·증권신고서(지분증권) "주요일정" 표에서 찾는다.
-export async function fetchCapital(apiKey, rceptNo, fetchImpl = fetch, corpCode = "") {
-  const base = parseCapitalText(await documentText(apiKey, rceptNo, fetchImpl));
-  if (base.cert_start || !corpCode) return { rcept_no: rceptNo, ...base };
-  const d = rceptNo.slice(0, 8);
-  const list = await dartRequest(apiKey, "list.json", { corp_code: corpCode, bgn_de: addDays(d, -60), end_de: addDays(d, 60), pblntf_ty: "C", page_count: "100" }, fetchImpl);
-  const docs = ((list && list.list) || [])
-    .filter((r) => /투자설명서|증권신고서\(지분증권\)/.test(r.report_nm) && !r.report_nm.includes("첨부정정") && !r.report_nm.includes("일괄"))
-    .sort((a, b) => b.rcept_no.localeCompare(a.rcept_no));
-  for (const r of docs.slice(0, 2)) {
-    try {
-      const more = parseCapitalText(await documentText(apiKey, r.rcept_no, fetchImpl));
-      if (more.cert_start) {
-        return { rcept_no: rceptNo, ...base, cert_start: more.cert_start, cert_end: more.cert_end, listing: base.listing || more.listing, record_date: base.record_date || more.record_date, cert_from: r.rcept_no };
-      }
-    } catch { /* 다음 문서 */ }
+// 결정 보고서 + 그 뒤 공모 서류(docs, 최신순)를 모두 읽어, 항목마다 가장 최근 서류에 있는 값을 쓴다.
+// docs를 안 주고 corpCode만 주면 같은 회사의 최근 공모 서류를 직접 찾는다(예전 방식).
+export async function fetchCapital(apiKey, rceptNo, fetchImpl = fetch, corpCode = "", docs = null) {
+  let docList = docs;
+  if (!docList && corpCode) {
+    const d = rceptNo.slice(0, 8);
+    const list = await dartRequest(apiKey, "list.json", { corp_code: corpCode, bgn_de: d, end_de: addDays(d, 120), pblntf_detail_ty: "C001", page_count: "100" }, fetchImpl);
+    docList = ((list && list.list) || [])
+      .filter((r) => OFFER_DOC.test(r.report_nm.replace(/\s/g, "")) && !attachOnly(r.report_nm) && !r.report_nm.includes("일괄"))
+      .map((r) => r.rcept_no).sort().reverse().slice(0, 3);
   }
-  return { rcept_no: rceptNo, ...base };
+  const sources = [...new Set([rceptNo, ...(docList || [])])].sort().reverse(); // 최신 먼저
+  const parsed = [];
+  for (const r of sources) {
+    try { parsed.push({ r, ...parseCapitalText(await documentText(apiKey, r, fetchImpl)) }); } catch (e) {
+      if (r === rceptNo) throw e; // 결정 보고서를 못 읽으면 실패로
+    }
+  }
+  const pick = (k) => parsed.find((p) => p[k]);
+  const cert = parsed.find((p) => p.cert_start);
+  const out = { rcept_no: rceptNo, cert_start: cert?.cert_start || null, cert_end: cert?.cert_end || null, listing: pick("listing")?.listing || null, record_date: pick("record_date")?.record_date || null };
+  const from = [...new Set([cert?.r, pick("listing")?.r, pick("record_date")?.r].filter((r) => r && r !== rceptNo))];
+  if (from.length) out.from = from; // 결정 보고서가 아닌 서류에서 읽은 값이 있으면 그 접수번호
+  return out;
 }
 
 // ---- 거래소(KIND) 공시로 먼저 뜬 결정 ----
@@ -383,7 +418,8 @@ export async function fetchExchangeCandidates(apiKey, today, fetchImpl = fetch) 
     const prev = out.get(key);
     out.set(key, {
       corp_code: r.corp_code, corp_name: r.corp_name.trim(), stock_code: (r.stock_code || "").trim(), market: MARKET[r.corp_cls],
-      api: "doc", kind: hit[1], rcept_no: attachOnly(title) && prev ? prev.rcept_no : r.rcept_no, rcept_dt: r.rcept_dt, first_rcept_no: prev ? prev.first_rcept_no : r.rcept_no, source: "거래소",
+      api: "doc", kind: hit[1], rcept_no: attachOnly(title) && prev ? prev.rcept_no : r.rcept_no, rcept_dt: r.rcept_dt,
+      prev_rcept_no: prev && !attachOnly(title) ? prev.rcept_no : prev?.prev_rcept_no, first_rcept_no: prev ? prev.first_rcept_no : r.rcept_no, source: "거래소",
     });
   }
   return [...out.values()];
@@ -409,6 +445,8 @@ export async function fetchSplitCandidates(apiKey, today, w = 0, fetchImpl = fet
     out.set(r.corp_code, {
       corp_code: r.corp_code, corp_name: r.corp_name.trim(), stock_code: (r.stock_code || "").trim(), market: MARKET[r.corp_cls],
       kind, rcept_no: (title.includes("철회") || attachOnly(title)) && prev ? prev.rcept_no : r.rcept_no,
+      // 바로 전 보고서 — 최신 보고서 본문이 아직 DART에 없으면 이걸로 일정을 읽는다
+      prev_rcept_no: prev && !(title.includes("철회") || attachOnly(title)) ? prev.rcept_no : prev?.prev_rcept_no,
       first_rcept_no: prev ? prev.first_rcept_no : r.rcept_no,
       withdrawn: title.includes("철회") || Boolean(prev && prev.withdrawn && !title.includes("결정")),
     });

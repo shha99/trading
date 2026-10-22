@@ -458,3 +458,4 @@ td.flr { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: 
 .idx { display: inline-block; margin-left: 5px; padding: 0 4px; border-radius: 4px; font-size: 10px; font-weight: 700; line-height: 16px; letter-spacing: 0.2px; white-space: nowrap; vertical-align: 1px; }
 .idx.ks { color: #1b64da; background: #e8f3ff; }
 .idx.kq { color: #0f7b52; background: #eefbf4; }
+.badge.chg { background: #fff4e5; color: #b45309; border: 1px solid #f5d9a8; }
