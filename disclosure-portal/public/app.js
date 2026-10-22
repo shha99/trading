@@ -39,6 +39,7 @@
     limit: PAGE,
     freshIds: new Set(),
     watch: loadWatch(),
+    idx: new Map(),   // 종목코드 → "KS200" | "KQ150"
     timer: null,
   };
 
@@ -485,7 +486,7 @@
       <td><div class="corp">
         <button class="star ${watched ? "on" : ""}" data-star="${it.rcept_no}" title="${watched ? "관심종목 해제" : "관심종목 추가"}">${watched ? "★" : "☆"}</button>
         <span class="nm" title="${esc(it.corp_name)}">${hl(it.corp_name, st)}</span>
-        ${it.stock_code ? `<span class="cd">${hl(it.stock_code, st)}</span>` : ""}${flagBadges(it.stock_code)}
+        ${it.stock_code ? `<span class="cd">${hl(it.stock_code, st)}</span>` : ""}${idxBadge(it.stock_code)}${flagBadges(it.stock_code)}
       </div></td>
       <td class="title"><a href="${esc(it.url)}" target="_blank" rel="noopener">${hl(it.report_nm, st)}</a>${tags}</td>
       <td class="flr" title="${esc(it.flr_nm)}">${hl(it.flr_nm, st)}</td>
@@ -564,7 +565,7 @@
       const n = counts.get(k) || 0;
       return `<li data-key="${esc(k)}" class="${state.selected === k ? "sel" : ""}">
         <span class="nm">${esc(w.name || w.code)}</span>
-        ${w.code && w.name ? `<span class="cd">${esc(w.code)}</span>` : ""}
+        ${w.code && w.name ? `<span class="cd">${esc(w.code)}</span>` : ""}${idxBadge(w.code)}
         <span class="n ${n ? "has" : ""}">${n}건</span>
         <button class="x" data-remove="${esc(k)}" title="삭제">×</button>
       </li>`;
@@ -710,6 +711,24 @@
   }
 
   // 공시 목록의 회사 옆에 붙이는 표시 (경고·관리·정지 등)
+  // 코스피200·코스닥150 구성종목 표시(종목명 오른쪽 작게)
+  function idxBadge(code) {
+    const k = code && state.idx.get(code);
+    return k ? `<span class="idx ${k === "KS200" ? "ks" : "kq"}" title="${k === "KS200" ? "코스피200 구성종목" : "코스닥150 구성종목"}">${k}</span>` : "";
+  }
+  async function loadIndexMembers() {
+    try {
+      const r = await fetchJSON("/api/index-members");
+      for (const c of r.ks200 || []) state.idx.set(c, "KS200");
+      for (const c of r.kq150 || []) state.idx.set(c, "KQ150");
+    } catch { return; } // 없어도 나머지는 그대로
+    renderWatch();
+    if (state.view === "disc") render();
+    else if (state.view === "market") renderMarket();
+    else if (state.view === "cal") renderCal();
+    else if (state.view === "ai") renderAi();
+  }
+
   function flagBadges(code, except) {
     const f = code && state.mk.flags.get(code);
     if (!f) return "";
@@ -731,7 +750,7 @@
     return `<tr class="${watched ? "watched" : ""} ${fresh ? "mk-new" : ""}">
       <td><div class="corp">
         <button class="star ${watched ? "on" : ""}" data-mkstar="${esc(it.code)}" data-name="${esc(it.name)}" title="${watched ? "관심종목 해제" : "관심종목 추가"}">${watched ? "★" : "☆"}</button>
-        <span class="nm" title="${esc(it.name)}">${hl(it.name, st)}</span><span class="cd">${hl(it.code, st)}</span>
+        <span class="nm" title="${esc(it.name)}">${hl(it.name, st)}</span><span class="cd">${hl(it.code, st)}</span>${idxBadge(it.code)}
         ${fresh ? '<span class="badge new">NEW</span>' : ""}
       </div></td>
       <td class="mkt-cell"><span class="mkt ${esc(it.market)}">${esc(it.market)}</span></td>
@@ -1080,7 +1099,7 @@
         <td class="num ai-rank">${i + 1}</td>
         <td><div class="corp">
           <button class="star ${watched ? "on" : ""}" data-aistar="${esc(code)}" data-name="${esc(name)}" title="${watched ? "관심종목 해제" : "관심종목 추가"}">${watched ? "★" : "☆"}</button>
-          <span class="nm" title="${esc(name)}">${esc(name)}</span><span class="cd">${esc(code)}</span><span class="mkt ${esc(m)}">${esc(m)}</span>
+          <span class="nm" title="${esc(name)}">${esc(name)}</span><span class="cd">${esc(code)}</span>${idxBadge(code)}<span class="mkt ${esc(m)}">${esc(m)}</span>
         </div></td>
         <td class="num"><b class="ai-hot">${(f * 100).toFixed(1)}%</b></td>
         <td class="ai-parts">${evs.length ? evs.map((e) => `${esc(AI_LABEL[e.t] || e.t)} <span>${ymd2(e.date)} · ${aiWhen(e.date)}</span>`).join("<br>") : '<span>최근 60일·앞으로 30일 이벤트 없음</span>'}</td>
@@ -1106,7 +1125,7 @@
         <td class="num ai-rank">${i + 1}</td>
         <td><div class="corp">
           <button class="star ${watched ? "on" : ""}" data-aistar="${esc(o.c)}" data-name="${esc(o.n)}" title="${watched ? "관심종목 해제" : "관심종목 추가"}">${watched ? "★" : "☆"}</button>
-          <span class="nm" title="${esc(o.n)}">${esc(o.n)}</span><span class="cd">${esc(o.c)}</span><span class="mkt ${esc(o.m)}">${esc(o.m)}</span>
+          <span class="nm" title="${esc(o.n)}">${esc(o.n)}</span><span class="cd">${esc(o.c)}</span>${idxBadge(o.c)}<span class="mkt ${esc(o.m)}">${esc(o.m)}</span>
         </div></td>
         <td class="num"><b class="${(o.totalFloat ?? o.total) >= 30 ? "ai-hot" : ""}">${o.totalFloat !== null ? `${o.totalFloat.toFixed(1)}%` : "–"}</b></td>
         <td class="num">${o.total.toFixed(1)}%</td>
@@ -1143,7 +1162,7 @@
         <td class="num ai-rank">${i + 1}</td>
         <td><div class="corp">
           <button class="star ${watched ? "on" : ""}" data-aistar="${esc(r.code)}" data-name="${esc(r.name)}" title="${watched ? "관심종목 해제" : "관심종목 추가"}">${watched ? "★" : "☆"}</button>
-          <span class="nm" title="${esc(r.name)}">${esc(r.name)}</span><span class="cd">${esc(r.code)}</span>
+          <span class="nm" title="${esc(r.name)}">${esc(r.name)}</span><span class="cd">${esc(r.code)}</span>${idxBadge(r.code)}
           ${r.market ? `<span class="mkt ${esc(r.market)}">${esc(r.market)}</span>` : ""}
           ${r.fl !== null && r.fl !== undefined ? `<span class="ai-fl ${r.fl < 0.2 ? "low" : ""}" title="유통주식 비율(최대주주·특수관계인·자사주 제외)">유통 ${Math.round(r.fl * 100)}%</span>` : ""}
         </div></td>
@@ -1449,7 +1468,7 @@
       <td class="kind-cell"><span class="kind ev ${e.type}">${esc(kindLabel)}</span></td>
       <td><div class="corp">
         ${e.code ? `<button class="star ${watched ? "on" : ""}" data-calstar="${esc(e.code)}" data-name="${esc(e.name)}">${watched ? "★" : "☆"}</button>` : ""}
-        <span class="nm" title="${esc(e.name)}">${esc(e.name)}</span>${e.code ? `<span class="cd">${esc(e.code)}</span>` : ""}${state.cal.newIds.has(e.id) ? '<span class="badge new">NEW</span>' : ""}${flagBadges(e.code)}
+        <span class="nm" title="${esc(e.name)}">${esc(e.name)}</span>${e.code ? `<span class="cd">${esc(e.code)}</span>` : ""}${idxBadge(e.code)}${state.cal.newIds.has(e.id) ? '<span class="badge new">NEW</span>' : ""}${flagBadges(e.code)}
       </div></td>
       <td class="period">${period}</td>
       <td class="num">${e.price ? e.price.toLocaleString() : "–"}</td>
@@ -1913,6 +1932,7 @@
       state.apiKeySet = st.api_key_set;
       if (st.user) { $("userName").textContent = st.user; $("userBox").hidden = false; }
       buildCatBar(st.categories || []);
+      loadIndexMembers(); // 기다리지 않는다 — 오면 다시 그린다
     } catch (e) {
       state.error = `서버 연결 실패 · ${e.message}`;
     }

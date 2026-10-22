@@ -566,3 +566,18 @@ test("액면변경 후보: [첨부정정]은 본문이 없어 그 전 보고서�
   assert.equal(items[0].rcept_no, "20260811900499");
   assert.equal(items[0].first_rcept_no, "20260728900305");
 });
+
+test("코스피200·코스닥150 구성종목", async () => {
+  const { parseEtfHoldings, fetchIndexMembers } = await import("../src/market.js");
+  const html = 'x var CU_data = {"grid_data":[{"STK_NM_KOR":"알테오젠"},{"STK_NM_KOR":"원화현금"},{"STK_NM_KOR":"HLB"}],"chart_data":[]}; y';
+  assert.deepEqual(parseEtfHoldings(html), ["알테오젠", "HLB"]);
+  const fake = async (url) => {
+    const u = String(url);
+    if (u.includes("KPI200")) return Response.json(u.includes("page=1&") ? [{ itemCode: "005930" }, { itemCode: "000660" }] : []);
+    if (u.includes("wisereport")) return new Response(html);
+    if (u.includes("marketValue")) return Response.json(u.includes("page=1&") ? { stocks: [{ stockName: "알테오젠", itemCode: "196170" }, { stockName: "HLB", itemCode: "028300" }] } : {});
+    return new Response("", { status: 404 });
+  };
+  const r = await fetchIndexMembers(fake);
+  assert.deepEqual([r.ks200, r.kq150, r.kq_missing], [["005930", "000660"], ["196170", "028300"], []]);
+});

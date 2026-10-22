@@ -91,3 +91,47 @@ export async function fetchQuotes(codes, fetchImpl = fetch) {
   }
   return out;
 }
+
+// 지수 구성종목: 코스피200(네이버 지수 편입종목), 코스닥150(KODEX 코스닥150 ETF 구성종목 — 지수를 완전복제).
+// 코스닥150은 이름만 나와서 네이버 코스닥 시가총액 상위 500종목으로 종목코드를 찾는다. 공개 API가 아니라 바뀔 수 있다.
+const WISE_ETF_URL = "https://navercomp.wisereport.co.kr/v2/ETF/index.aspx?cmp_cd=229200";
+
+async function getJson(url, fetchImpl) {
+  const resp = await fetchImpl(url, { headers: { Accept: "application/json", "User-Agent": USER_AGENT } });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
+export function parseEtfHoldings(html) {
+  const m = html.match(/var CU_data\s*=\s*(\{[\s\S]*?\});/);
+  if (!m) return [];
+  try {
+    return (JSON.parse(m[1]).grid_data || []).map((g) => String(g.STK_NM_KOR || "").trim()).filter((n) => n && n !== "원화현금");
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchIndexMembers(fetchImpl = fetch) {
+  const ks200 = [];
+  try {
+    const pages = await Promise.all([1, 2, 3, 4, 5].map((p) =>
+      getJson(`https://m.stock.naver.com/api/index/KPI200/enrollStocks?page=${p}&pageSize=50`, fetchImpl).catch(() => [])));
+    for (const list of pages) for (const x of Array.isArray(list) ? list : []) if (/^[0-9A-Z]{6}$/.test(x.itemCode || "")) ks200.push(x.itemCode);
+  } catch { /* 아래에서 개수로 판단 */ }
+  let kq150 = [];
+  let kqMissing = [];
+  try {
+    const [html, ...caps] = await Promise.all([
+      fetchImpl(WISE_ETF_URL, { headers: { "User-Agent": USER_AGENT } }).then((r) => (r.ok ? r.text() : "")),
+      ...[1, 2, 3, 4, 5].map((p) => getJson(`https://m.stock.naver.com/api/stocks/marketValue/KOSDAQ?page=${p}&pageSize=100`, fetchImpl).catch(() => ({}))),
+    ]);
+    const codeOf = new Map();
+    for (const c of caps) for (const x of c.stocks || []) codeOf.set(x.stockName, x.itemCode);
+    const names = parseEtfHoldings(html);
+    kq150 = names.map((n) => codeOf.get(n)).filter(Boolean);
+    kqMissing = names.filter((n) => !codeOf.has(n));
+  } catch { /* 코스닥150 실패해도 코스피200은 돌려준다 */ }
+  if (!ks200.length && !kq150.length) throw new MarketError("지수 구성종목을 불러오지 못했습니다.");
+  return { ks200: [...new Set(ks200)], kq150: [...new Set(kq150)], kq_missing: kqMissing };
+}

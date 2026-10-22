@@ -8,7 +8,7 @@
 //   DART_API_KEY     OpenDART 인증키 (필수)
 //   PORTAL_PASSWORD  설정하면 접속할 때 비밀번호를 묻는다(아이디는 아무거나) — "나만 보기"
 import { DartError, TRADE_CATEGORIES, fetchDay, fetchPage } from "./dart.js";
-import { MARKET_KINDS, MarketError, fetchMarketList, fetchQuotes } from "./market.js";
+import { MARKET_KINDS, MarketError, fetchIndexMembers, fetchMarketList, fetchQuotes } from "./market.js";
 import { KindError, fetchKindToday } from "./kind.js";
 import { checkLogin, clearCookie, loginPage, makeSession, readSession, safeNext, sessionCookie, timingSafeEqual } from "./auth.js";
 import { HISTORY_BLOCKS, blockOf, fetchAiHistory, fetchAiMetrics, fetchDilution, parseMetricsQuery } from "./ai.js";
@@ -236,6 +236,11 @@ export async function handle(request, env, ctx, fetchImpl = fetch) {
     // 오늘 KIND 공시 전체(새로고침 때 DART와 맞춰보기용). 1분 캐시, fresh=1이면 바로 받는다.
     return cached(`kind/today?d=${todayKst()}`, 60, url.searchParams.get("fresh") === "1", ctx,
       async () => ({ date: todayKst(), ...(await fetchKindToday(fetchImpl)), fetched_at: new Date().toISOString() }));
+  }
+  if (url.pathname === "/api/index-members" && request.method === "GET") {
+    // 코스피200·코스닥150 구성종목(종목명 옆 KS200/KQ150 표시용). 하루 두 번이면 충분하다.
+    return cached(`index-members?d=${todayKst()}`, 12 * 3600, url.searchParams.get("fresh") === "1", ctx,
+      async () => ({ ...(await fetchIndexMembers(fetchImpl)), fetched_at: new Date().toISOString() }));
   }
   if (url.pathname === "/api/status") {
     return json({ today: todayKst(), user, api_key_set: Boolean(env.DART_API_KEY), categories: TRADE_CATEGORIES.map(([name]) => name) });
