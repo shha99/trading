@@ -143,7 +143,7 @@ td.reason { font-size: 13px; color: var(--muted); }
 .cal-grid .day .act { font-size: 11px; color: var(--faint); }
 .ev {
   display: block; font-size: 11.5px; line-height: 1.35; padding: 2px 6px; border-radius: 5px;
-  background: var(--bg); color: var(--c); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  background: var(--bg); color: var(--c); font-weight: 600; overflow-wrap: anywhere; /* 종목명은 줄이지 않고 줄바꿈 */
 }
 .ev.end { background: var(--c); color: #fff; }
 .ev.watched::before { content: "★ "; }
@@ -350,11 +350,12 @@ td.flr { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: 
 .mkt.코스피 { background: #e8f3ff; color: #1b64da; }
 .mkt.코스닥 { background: #e9f9f2; color: #0c8a62; }
 
-.corp { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.corp { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; min-width: 0; }
 .star { border: 0; background: none; padding: 0; font-size: 16px; line-height: 1; color: #c9cdd2; }
 .star.on { color: var(--star); }
 .star:hover { color: var(--star); }
-.corp .nm { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 종목명은 줄이지 않는다 — 칸이 좁으면 코드·표시가 다음 줄로 내려간다 */
+.corp .nm { font-weight: 600; overflow-wrap: anywhere; }
 .corp .cd { color: var(--faint); font-size: 12px; flex: none; }
 
 .title a { color: var(--text); text-decoration: none; }
