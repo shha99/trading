@@ -604,3 +604,15 @@ test("증자 일정: 결정 뒤 투자설명서·정정 서류까지 읽어 가�
   assert.deepEqual([e.cert_start, e.cert_end, e.listing, e.record_date], ["20261026", "20261030", "20261130", "20261006"]);
   assert.deepEqual(e.from, ["20261001000485"]);
 });
+
+test("증자 일정: 결정 보고서 본문이 아직 없어도 공모 서류에서 읽는다", async () => {
+  const { fetchCapital } = await import("../src/events.js");
+  const fake = async (url) => {
+    const r = new URL(url).searchParams.get("rcept_no");
+    if (r === "20261001000449") return new Response("<result><status>014</status><message>파일이 존재하지 않습니다.</message></result>");
+    return new Response(makeZip("1.xml", "<P>2026년 10월 26일 신주인수권증서 상장일 (26.10.26~26.10.30) 2026년 11월 30일 신주 상장</P>"));
+  };
+  const e = await fetchCapital("k", "20261001000449", fake, "", ["20261001000485"]);
+  assert.deepEqual([e.cert_start, e.cert_end, e.listing], ["20261026", "20261030", "20261130"]);
+  await assert.rejects(fetchCapital("k", "20261001000449", fake, "", []), /파일이 존재하지/);
+});

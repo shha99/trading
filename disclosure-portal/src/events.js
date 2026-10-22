@@ -375,11 +375,13 @@ export async function fetchCapital(apiKey, rceptNo, fetchImpl = fetch, corpCode 
   }
   const sources = [...new Set([rceptNo, ...(docList || [])])].sort().reverse(); // 최신 먼저
   const parsed = [];
+  let decisionError = null;
   for (const r of sources) {
     try { parsed.push({ r, ...parseCapitalText(await documentText(apiKey, r, fetchImpl)) }); } catch (e) {
-      if (r === rceptNo) throw e; // 결정 보고서를 못 읽으면 실패로
+      if (r === rceptNo) decisionError = e; // 결정 보고서 본문이 아직 없어도 공모 서류에서 일정을 읽을 수 있으면 그걸 쓴다
     }
   }
+  if (decisionError && !parsed.some((p) => p.cert_start || p.listing || p.record_date)) throw decisionError;
   const pick = (k) => parsed.find((p) => p[k]);
   const cert = parsed.find((p) => p.cert_start);
   const out = { rcept_no: rceptNo, cert_start: cert?.cert_start || null, cert_end: cert?.cert_end || null, listing: pick("listing")?.listing || null, record_date: pick("record_date")?.record_date || null };
