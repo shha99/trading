@@ -143,7 +143,7 @@ export function parseAppraisalText(text) {
   };
 }
 
-async function documentText(apiKey, rceptNo, fetchImpl) {
+export async function documentText(apiKey, rceptNo, fetchImpl = fetch) {
   const buf = await dartRequest(apiKey, "document.xml", { rcept_no: rceptNo }, fetchImpl);
   const head = new TextDecoder().decode(new Uint8Array(buf).subarray(0, 200));
   if (!head.startsWith("PK")) {
@@ -304,21 +304,53 @@ function lastMatch(t, re) {
 }
 const ymdOf = (m, i) => `${m[i]}${m[i + 1].padStart(2, "0")}${m[i + 2].padStart(2, "0")}`;
 
+const prevWeekday = (d) => {
+  let x = addDays(d, -1);
+  while ([0, 6].includes(new Date(Date.UTC(+x.slice(0, 4), +x.slice(4, 6) - 1, +x.slice(6, 8))).getUTCDay())) x = addDays(x, -1);
+  return x;
+};
+
 export function parseCapitalText(text) {
   const t = text.replace(/<[^>]+>/g, " ").replace(/&nbsp;|&#160;/g, " ").replace(/\s+/g, " ");
-  const cert = lastMatch(t, new RegExp(`신주인수권\\s*증서\\s*(?:의\\s*)?상장\\s*(?:예정)?\\s*기간\\s*:?\\s*${DATE}\\s*[~\\-]\\s*${DATE}`, "g"));
+  let cert = lastMatch(t, new RegExp(`신주인수권\\s*증서\\s*(?:의\\s*)?상장\\s*(?:예정)?\\s*기간\\s*:?\\s*${DATE}\\s*[~\\-]\\s*${DATE}`, "g"));
+  // 증권신고서·투자설명서 "주요일정" 표: "2026년 10월 26일 신주인수권증서 상장일 … (26.10.26~26.10.30)", "2026년 11월 02일 신주인수권증서 상장폐지"
+  if (!cert) {
+    const start = lastMatch(t, new RegExp(`${DATE}\\s*신주인수권\\s*증서\\s*(?:의\\s*)?상장(?!\\s*폐지)(?:\\s*(?:일|예정일))?([^)]{0,40}\\(\\s*(\\d{2})\\.(\\d{1,2})\\.(\\d{1,2})\\s*~\\s*(\\d{2})\\.(\\d{1,2})\\.(\\d{1,2})\\s*\\))?`, "g"));
+    const delist = lastMatch(t, new RegExp(`${DATE}\\s*신주인수권\\s*증서\\s*(?:의\\s*)?상장\\s*폐지`, "g"));
+    if (start) {
+      const end = start[8] ? `20${start[8]}${start[9].padStart(2, "0")}${start[10].padStart(2, "0")}` : delist ? prevWeekday(ymdOf(delist, 1)) : null;
+      cert = { table: true, start: ymdOf(start, 1), end };
+    }
+  }
   const listing = lastMatch(t, new RegExp(`신주의\\s*상장\\s*예정일\\s*:?\\s*${DATE}`, "g"));
   const record = lastMatch(t, new RegExp(`신주\\s*배정\\s*기준일\\s*:?\\s*\\(?\\s*${DATE}`, "g"));
   return {
-    cert_start: cert ? ymdOf(cert, 1) : null,
-    cert_end: cert ? ymdOf(cert, 4) : null,
+    cert_start: cert ? (cert.table ? cert.start : ymdOf(cert, 1)) : null,
+    cert_end: cert ? (cert.table ? cert.end : ymdOf(cert, 4)) : null,
     listing: listing ? ymdOf(listing, 1) : null,
     record_date: record ? ymdOf(record, 1) : null,
   };
 }
 
-export async function fetchCapital(apiKey, rceptNo, fetchImpl = fetch) {
-  return { rcept_no: rceptNo, ...parseCapitalText(await documentText(apiKey, rceptNo, fetchImpl)) };
+// corpCode를 주면, 주요사항보고서에 신주인수권증서 상장기간이 없을 때(공모 유상증자는 흔하다) 같은 회사의
+// 최근 투자설명서·증권신고서(지분증권) "주요일정" 표에서 찾는다.
+export async function fetchCapital(apiKey, rceptNo, fetchImpl = fetch, corpCode = "") {
+  const base = parseCapitalText(await documentText(apiKey, rceptNo, fetchImpl));
+  if (base.cert_start || !corpCode) return { rcept_no: rceptNo, ...base };
+  const d = rceptNo.slice(0, 8);
+  const list = await dartRequest(apiKey, "list.json", { corp_code: corpCode, bgn_de: addDays(d, -60), end_de: addDays(d, 60), pblntf_ty: "C", page_count: "100" }, fetchImpl);
+  const docs = ((list && list.list) || [])
+    .filter((r) => /투자설명서|증권신고서\(지분증권\)/.test(r.report_nm) && !r.report_nm.includes("첨부정정") && !r.report_nm.includes("일괄"))
+    .sort((a, b) => b.rcept_no.localeCompare(a.rcept_no));
+  for (const r of docs.slice(0, 2)) {
+    try {
+      const more = parseCapitalText(await documentText(apiKey, r.rcept_no, fetchImpl));
+      if (more.cert_start) {
+        return { rcept_no: rceptNo, ...base, cert_start: more.cert_start, cert_end: more.cert_end, listing: base.listing || more.listing, record_date: base.record_date || more.record_date, cert_from: r.rcept_no };
+      }
+    } catch { /* 다음 문서 */ }
+  }
+  return { rcept_no: rceptNo, ...base };
 }
 
 // ---- 거래소(KIND) 공시로 먼저 뜬 결정 ----

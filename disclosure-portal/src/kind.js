@@ -64,11 +64,14 @@ export function toItem(k) {
   return { ...it, source: "KIND", kind_time: k.time, url: KIND_VIEWER_URL + k.rcept_no };
 }
 
-async function fetchKindPage(page, fetchImpl) {
+// date: YYYYMMDD(없으면 오늘). KIND "오늘의 공시" 화면은 날짜를 골라 지난 날 목록도 보여준다.
+export const kindDateParams = (date, today) => (!date || date === today ? { todayFlag: "Y", selDate: "" } : { todayFlag: "N", selDate: `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}` });
+
+async function fetchKindPage(page, fetchImpl, dateParams = { todayFlag: "Y", selDate: "" }) {
   const body = new URLSearchParams({
     method: "searchTodayDisclosureSub", currentPageSize: "100", pageIndex: String(page), orderMode: "0", orderStat: "D",
-    forward: "todaydisclosure_sub", marketType: "", searchMode: "", searchCodeType: "", chose: "S", todayFlag: "Y",
-    repIsuSrtCd: "", kosdaqSegment: "", selDate: "",
+    forward: "todaydisclosure_sub", marketType: "", searchMode: "", searchCodeType: "", chose: "S",
+    repIsuSrtCd: "", kosdaqSegment: "", ...dateParams,
   });
   let html;
   try {
@@ -88,15 +91,21 @@ async function fetchKindPage(page, fetchImpl) {
   return parsed;
 }
 
-// 오늘 KIND 공시 전부(최신순)
-export async function fetchKindToday(fetchImpl = fetch, maxPages = 15) {
-  const first = await fetchKindPage(1, fetchImpl);
+// 하루치 KIND 공시 전부(최신순). 지난 날짜도 된다.
+export async function fetchKindDay(date, today, fetchImpl = fetch, maxPages = 20) {
+  const dp = kindDateParams(date, today);
+  const first = await fetchKindPage(1, fetchImpl, dp);
   const pages = Math.min(Math.ceil(first.total / 100), maxPages);
-  const rest = await Promise.all(Array.from({ length: Math.max(0, pages - 1) }, (_, i) => fetchKindPage(i + 2, fetchImpl)));
+  const rest = await Promise.all(Array.from({ length: Math.max(0, pages - 1) }, (_, i) => fetchKindPage(i + 2, fetchImpl, dp)));
   const seen = new Set();
   const items = [];
   for (const k of [first, ...rest].flatMap((p) => p.items)) {
+    // 다른 날짜 공시가 섞여 오면(화면 방식이 바뀐 경우) 버린다 — 접수번호 앞 8자리가 날짜
+    if (date && date !== today && !k.rcept_no.startsWith(date)) continue;
     if (!seen.has(k.rcept_no)) { seen.add(k.rcept_no); items.push(toItem(k)); }
   }
-  return { total: first.total, items };
+  return { date, total: first.total, items };
 }
+
+// 오늘 KIND 공시 전부(최신순)
+export const fetchKindToday = (fetchImpl = fetch, maxPages = 15, today = "") => fetchKindDay(today, today, fetchImpl, maxPages);

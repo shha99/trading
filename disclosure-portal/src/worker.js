@@ -9,7 +9,7 @@
 //   PORTAL_PASSWORD  설정하면 접속할 때 비밀번호를 묻는다(아이디는 아무거나) — "나만 보기"
 import { DartError, TRADE_CATEGORIES, fetchDay, fetchPage } from "./dart.js";
 import { MARKET_KINDS, MarketError, fetchIndexMembers, fetchMarketList, fetchQuotes } from "./market.js";
-import { KindError, fetchKindToday } from "./kind.js";
+import { KindError, fetchKindDay } from "./kind.js";
 import { checkLogin, clearCookie, loginPage, makeSession, readSession, safeNext, sessionCookie, timingSafeEqual } from "./auth.js";
 import { HISTORY_BLOCKS, blockOf, fetchAiHistory, fetchAiMetrics, fetchDilution, parseMetricsQuery } from "./ai.js";
 import { DEAL_APIS, fetchCandidates, fetchCapital, fetchCapitalCandidates, fetchDeal, fetchExchangeCandidates, fetchSplit, fetchSplitCandidates, fetchTender } from "./events.js";
@@ -136,7 +136,9 @@ async function handleEvents(url, env, ctx, fetchImpl) {
   if (part === "capital") {
     const rcept = url.searchParams.get("rcept_no") || "";
     if (!/^\d{14}$/.test(rcept)) return json({ detail: "rcept_no가 잘못됐습니다." }, 400);
-    return cached(`events/capital?r=${rcept}`, DEAL_TTL, fresh, ctx, async () => ({ event: await fetchCapital(env.DART_API_KEY, rcept, fetchImpl) }));
+    const corp = url.searchParams.get("corp_code") || "";
+    if (corp && !/^\d{8}$/.test(corp)) return json({ detail: "corp_code가 잘못됐습니다." }, 400);
+    return cached(`events/capital?r=${rcept}&c=${corp}`, DEAL_TTL, fresh, ctx, async () => ({ event: await fetchCapital(env.DART_API_KEY, rcept, fetchImpl, corp) }));
   }
   if (part === "deal") {
     const api = url.searchParams.get("api") || "";
@@ -193,23 +195,6 @@ async function handleQuotes(url, env, ctx, fetchImpl) {
 export async function handle(request, env, ctx, fetchImpl = fetch) {
   const url = new URL(request.url);
   if (url.pathname === "/healthz") return json({ ok: true });
-  if (url.pathname === "/healthz/kind-probe") { // 임시: KIND 지난 날짜 조회 방식 확인용(공개 공시 목록만, 확인 뒤 삭제)
-    const sel = url.searchParams.get("d") || "2026-10-21";
-    const out = [];
-    for (const [flag, sd] of [["N", sel], ["Y", sel], ["", sel], ["N", sel.replaceAll("-", "")]]) {
-      const body = new URLSearchParams({ method: "searchTodayDisclosureSub", currentPageSize: "100", pageIndex: "1", orderMode: "0", orderStat: "D",
-        forward: "todaydisclosure_sub", marketType: "", searchMode: "", searchCodeType: "", chose: "S", todayFlag: flag, repIsuSrtCd: "", kosdaqSegment: "", selDate: sd });
-      try {
-        const r = await fetchImpl("https://kind.krx.co.kr/disclosure/todaydisclosure.do", { method: "POST", headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36", "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", Referer: "https://kind.krx.co.kr/disclosure/todaydisclosure.do?method=searchTodayDisclosureMain" }, body });
-        const html = await r.text();
-        const { parseKindList } = await import("./kind.js");
-        const p = parseKindList(html);
-        out.push({ flag, sd, status: r.status, total: p.total, first: p.items.slice(0, 3).map((x) => [x.rcept_no, x.time, x.corp_name, x.report_nm]), samsung: p.items.filter((x) => /삼성바이오/.test(x.corp_name)).map((x) => [x.rcept_no, x.time, x.report_nm]) });
-      } catch (e) { out.push({ flag, sd, error: String(e.message) }); }
-    }
-    return json(out);
-  }
-
   // 사람별 로그인(PORTAL_USERS가 있으면). 없으면 예전 방식(PORTAL_PASSWORD 하나, 브라우저 팝업)으로.
   let user = null;
   if (env.PORTAL_USERS) {
@@ -248,10 +233,15 @@ export async function handle(request, env, ctx, fetchImpl = fetch) {
   if (url.pathname.startsWith("/api/events/") && request.method === "GET") return handleEvents(url, env, ctx, fetchImpl);
   if (url.pathname.startsWith("/api/ai/") && request.method === "GET") return handleAi(url, env, ctx, fetchImpl);
   if (url.pathname === "/api/quotes" && request.method === "GET") return handleQuotes(url, env, ctx, fetchImpl);
-  if (url.pathname === "/api/kind/today" && request.method === "GET") {
-    // 오늘 KIND 공시 전체(새로고침 때 DART와 맞춰보기용). 1분 캐시, fresh=1이면 바로 받는다.
-    return cached(`kind/today?d=${todayKst()}`, 60, url.searchParams.get("fresh") === "1", ctx,
-      async () => ({ date: todayKst(), ...(await fetchKindToday(fetchImpl)), fetched_at: new Date().toISOString() }));
+  if ((url.pathname === "/api/kind/today" || url.pathname === "/api/kind/day") && request.method === "GET") {
+    // 하루치 KIND 공시 전체(DART에 없는 거래소 공시를 채우려고 공시 화면이 항상 같이 받는다).
+    // 오늘은 1분, 지난 날짜는 6시간 캐시. fresh=1이면 바로 받는다.
+    const today = todayKst();
+    const date = url.pathname === "/api/kind/today" ? today : url.searchParams.get("date") || today;
+    const bad = checkDate(date, today);
+    if (bad) return json({ detail: bad }, 400);
+    return cached(`kind/day?d=${date}${date === today ? "" : "&p=1"}`, date === today ? 60 : 6 * 3600, url.searchParams.get("fresh") === "1", ctx,
+      async () => ({ ...(await fetchKindDay(date, today, fetchImpl)), fetched_at: new Date().toISOString() }));
   }
   if (url.pathname === "/api/index-members" && request.method === "GET") {
     // 코스피200·코스닥150 구성종목(종목명 옆 KS200/KQ150 표시용). 하루 두 번이면 충분하다.

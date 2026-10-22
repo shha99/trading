@@ -144,6 +144,47 @@
     }
   }
 
+  // ---------- KIND 합치기 ----------
+  // DART와 KIND 어느 한쪽에만 올라온 공시도 반드시 보여준다. KIND 접수번호는 DART 접수번호와 같아서
+  // 같은 공시는 하나로 합쳐지고, KIND에만 있는 공시(거래소가 KIND에만 낸 안내 등)는 KIND 목록의
+  // 순서(시각)를 따라 DART 목록 사이에 끼워 넣는다.
+  async function fetchKindDay(date, fresh) {
+    try {
+      const r = await fetchJSON(`/api/kind/day?date=${date}${fresh ? "&fresh=1" : ""}`);
+      state.kindStatus = { ok: true, at: nowKst() };
+      return r.items || [];
+    } catch (e) {
+      state.kindStatus = { ok: false, at: nowKst(), error: e.message };
+      return null; // KIND가 안 돼도 DART 목록은 보여준다
+    }
+  }
+
+  function mergeKind(dart, kind) {
+    if (!kind || !kind.length) return dart;
+    const byId = new Map(dart.map((it) => [it.rcept_no, it]));
+    // 다음에 나오는(더 이른) "DART에도 있는" 공시 앞에 넣는다
+    const before = new Map(); // dart rcept → 그 앞에 넣을 KIND 전용 공시들
+    let pending = [];
+    const tail = [];
+    for (const k of kind) {
+      const d = byId.get(k.rcept_no);
+      if (d && d.corp_name.replace(/\s/g, "") === k.corp_name.replace(/\s/g, "")) {
+        if (pending.length) { before.set(k.rcept_no, pending); pending = []; }
+        if (!d.kind_time) d.kind_time = k.kind_time;
+        continue;
+      }
+      // 같은 번호인데 회사가 다르면(번호 체계가 겹친 경우) 다른 공시로 본다
+      pending.push(d ? { ...k, rcept_no: `${k.rcept_no}K` } : k);
+    }
+    tail.push(...pending);
+    const out = [];
+    for (const it of dart) {
+      if (before.has(it.rcept_no)) out.push(...before.get(it.rcept_no));
+      out.push(it);
+    }
+    return [...out, ...tail];
+  }
+
   async function loadDate(date) {
     const token = ++loadToken;
     setMode("day");
@@ -161,9 +202,11 @@
     updateLive();
     busy = true;
     try {
-      const list = await fetchAll(date, false);
+      const [dart, kind] = await Promise.all([fetchAll(date, false), fetchKindDay(date, false)]);
       if (token !== loadToken) return;
-      setAll(list, () => null); // 처음 불러온 것은 감지 시각을 비워둔다
+      const list = mergeKind(dart, kind);
+      // 처음 불러온 것은 감지 시각을 비워둔다(KIND 전용은 KIND 게시 시각)
+      setAll(list, (it) => (it.source === "KIND" && it.kind_time ? `${it.kind_time}:00` : null));
       state.lastChecked = nowKst();
     } catch (e) {
       if (token !== loadToken) return;
@@ -201,7 +244,7 @@
 
   async function fetchRange(from, to, fresh, onProgress) {
     const days = daysBetween(from, to);
-    const jobs = days.flatMap((d) => ["Y", "K"].map((c) => ({ d, c })));
+    const jobs = days.flatMap((d) => ["Y", "K", "KIND"].map((c) => ({ d, c })));
     const got = new Map();
     let next = 0;
     let done = 0;
@@ -210,6 +253,11 @@
       while (next < jobs.length && !failed) {
         const { d, c } = jobs[next++];
         try {
+          if (c === "KIND") { // KIND는 실패해도 DART 목록은 그대로(받은 날짜만 합친다)
+            got.set(d + c, await fetchKindDay(d, fresh && d === state.today));
+            onProgress(++done, jobs.length);
+            continue;
+          }
           const r = await fetchJSON(`/api/day?date=${d}&cls=${c}${fresh ? "&fresh=1" : ""}`);
           got.set(d + c, r.items);
           onProgress(++done, jobs.length);
@@ -220,7 +268,9 @@
     };
     await Promise.all(Array.from({ length: RANGE_CONCURRENCY }, run));
     if (failed) throw failed;
-    return days.flatMap((d) => interleave(got.get(d + "Y") || [], got.get(d + "K") || []));
+    const kindFailed = days.filter((d) => got.get(d + "KIND") === null).length;
+    if (kindFailed) state.kindStatus = { ok: false, at: nowKst(), error: `${kindFailed}일 KIND 확인 실패` };
+    return days.flatMap((d) => mergeKind(interleave(got.get(d + "Y") || [], got.get(d + "K") || []), got.get(d + "KIND")));
   }
 
   function validRange(from, to) {
@@ -263,7 +313,7 @@
         showEmpty(progressText(d, t));
       });
       if (token !== loadToken) return;
-      setAll(list, () => null);
+      setAll(list, (it) => (it.source === "KIND" && it.kind_time ? `${it.kind_time}:00` : null));
       state.lastChecked = nowKst();
       $("rangeProgress").textContent = `${list.length.toLocaleString()}건`;
     } catch (e) {
@@ -313,6 +363,7 @@
   }
 
   // 오늘 화면이면 1페이지부터 받아, 이미 아는 공시가 섞인 페이지에서 멈춘다(평소 요청 1번)
+  let pollCount = 0;
   async function poll() {
     const today = todayKst();
     if (today !== state.today) {
@@ -337,6 +388,14 @@
         fresh.push(...nw);
         if (nw.length < d.items.length) break;
         page++;
+      }
+      // KIND도 1분에 한 번 확인 — DART에 없는 공시(거래소가 KIND에만 낸 것)를 바로 채운다
+      if (++pollCount % 2 === 1) {
+        const kind = await fetchKindDay(state.date, false);
+        if (kind) {
+          const merged = mergeKind([...state.items.values()].sort((a, b) => b.seq - a.seq), kind);
+          for (const it of merged) if (!known.has(it.rcept_no)) { known.add(it.rcept_no); fresh.unshift(it); }
+        }
       }
       if (token !== loadToken) return;
       const t = nowKst();
@@ -394,10 +453,12 @@
   // 필터 줄의 "N건 · 마지막 업데이트" (투자경고·관리종목 탭과 같은 자리)
   function renderDiscMeta(count = scoped().length) {
     const t = state.lastChecked;
+    const k = state.kindStatus;
+    const kindText = !k ? "" : k.ok ? ` · KIND 확인 ${k.at.slice(0, 5)}` : ` · KIND 확인 실패(DART만 표시 중)`;
     $("discMeta").textContent = !t ? ""
-      : state.mode === "range" ? `${count.toLocaleString()}건 · ${t} 불러옴`
-      : state.date === state.today ? `${count.toLocaleString()}건 · ${t} 업데이트 (30초마다 확인)`
-      : `${count.toLocaleString()}건 · ${t} 불러옴`;
+      : (state.mode === "range" ? `${count.toLocaleString()}건 · ${t} 불러옴`
+        : state.date === state.today ? `${count.toLocaleString()}건 · ${t} 업데이트 (DART 30초·KIND 1분마다 확인)`
+          : `${count.toLocaleString()}건 · ${t} 불러옴`) + kindText;
   }
 
   function setLive(cls, text) {
@@ -1259,7 +1320,7 @@
         fetchJSON(`/api/events/candidates?x=1${q}`),
         fetchJSON(`/api/events/capital-candidates?x=1${q}`).catch(() => ({ items: [] })), // 증자는 실패해도 나머지는 보여준다
         fetchJSON(`/api/events/exchange-candidates?x=1${q}`).catch(() => ({ items: [] })),
-        fresh ? fetchJSON("/api/kind/today?fresh=1").catch((e) => ({ error: e.message })) : Promise.resolve(null),
+        fresh ? fetchJSON(`/api/kind/day?date=${state.today}&fresh=1`).catch((e) => ({ error: e.message })) : Promise.resolve(null),
       ]);
       const [c, cap, exch, kindToday] = fetched;
       // 액면변경(분할·병합): 거래소 공시가 많아 30일씩 세 번 나눠 받고, 회사별 최신 결정만 남긴다
@@ -1283,7 +1344,7 @@
         }),
         // 증자: 신주인수권증서 상장기간, 신주 상장예정일 → 일정 두 개로 나눈다
         ...cap.items.map((x) => async () => {
-          const r = await fetchJSON(`/api/events/capital?rcept_no=${x.rcept_no}${q}`);
+          const r = await fetchJSON(`/api/events/capital?rcept_no=${x.rcept_no}&corp_code=${x.corp_code}${q}`);
           const e = r.event;
           const base = { type: "capital", name: x.corp_name, code: x.stock_code, market: x.market, rcept_no: x.rcept_no, announced: x.first_rcept_no.slice(0, 8), record_date: e.record_date };
           const out = [];
@@ -1833,18 +1894,19 @@
     $("refreshText").textContent = "대사 중…";
     try {
       // 오늘이 포함되면 KIND 오늘 공시도 같이 받아 DART에 아직 안 올라온 공시를 채운다(접수번호가 같다)
-      const withKind = isRange ? range.to >= state.today : date === state.today;
-      const [dart, kind] = await Promise.all([
+      // 기간 조회는 날마다 KIND를 이미 합쳐서 받는다. 하루 화면은 그날 KIND를 캐시 없이 받아 합친다.
+      const [merged, kindItems] = await Promise.all([
         isRange
           ? fetchRange(range.from, range.to, true, (d, t) => { $("refreshText").textContent = `대사 중 ${Math.round((d / t) * 100)}%`; })
           : fetchAll(date, true),
-        withKind ? fetchJSON("/api/kind/today?fresh=1").catch((e) => ({ error: e.message })) : Promise.resolve(null),
+        isRange ? Promise.resolve(undefined) : fetchKindDay(date, true),
       ]);
       if (token !== loadToken) return;
       const t = nowKst();
-      const dartOnlyIds = new Set(dart.map((it) => it.rcept_no));
-      const kindOnly = kind && kind.items ? kind.items.filter((it) => !dartOnlyIds.has(it.rcept_no)) : [];
-      const list = [...kindOnly, ...dart]; // KIND에만 있는 건 가장 최근 것이라 맨 앞
+      const list = isRange ? merged : mergeKind(merged, kindItems);
+      const dart = list.filter((it) => it.source !== "KIND");
+      const kindOnly = list.filter((it) => it.source === "KIND");
+      const kind = isRange ? { items: kindOnly, range: true } : kindItems === null ? { error: state.kindStatus?.error || "실패" } : { items: kindItems };
       const dartIds = new Set(list.map((it) => it.rcept_no));
       const added = list.filter((it) => inScope(it) && !before.has(it.rcept_no)).map((it) => it.rcept_no);
       const gone = [...before.values()].filter((it) => inScope(it) && !dartIds.has(it.rcept_no));
@@ -1856,9 +1918,10 @@
       state.lastChecked = t;
       state.error = null;
       render();
-      const kindNote = !kind ? "" : kind.error ? `실패 (${kind.error})`
-        : `${kind.items.filter(inScope).length.toLocaleString()}건 · DART에 아직 없는 공시 ${kindOnly.filter(inScope).length}건${kindOnly.filter(inScope).length ? " 추가" : ""}`;
-      showRecon({ dart_count: dart.filter(inScope).length, checked_at: t, kind: kindNote || null, kind_skipped: !kind }, added, gone, null, beforeScoped);
+      const kindNote = kind.error ? `실패 (${kind.error})`
+        : kind.range ? `KIND에만 있는 공시 ${kindOnly.filter(inScope).length}건 포함`
+        : `${kind.items.filter(inScope).length.toLocaleString()}건 · DART에 없는 공시 ${kindOnly.filter(inScope).length}건${kindOnly.filter(inScope).length ? " 추가" : ""}`;
+      showRecon({ dart_count: dart.filter(inScope).length, checked_at: t, kind: kindNote }, added, gone, null, beforeScoped);
     } catch (e) {
       if (token === loadToken) showRecon(null, [], [], e.message);
     } finally {
@@ -1889,7 +1952,7 @@
       `<b>${match ? "✓ 일치" : "차이 있음 → DART 기준으로 맞춤"}</b> · ${res.checked_at} 대사 · ` +
       `DART 원본(코스피·코스닥) <b class="num">${res.dart_count.toLocaleString()}</b>건` +
       ` (그중 거래소·KIND 공시 ${scoped().filter((it) => it.is_exchange).length.toLocaleString()}건)` +
-      `${res.kind ? ` · KIND 직접 확인(코스피·코스닥 오늘) ${res.kind}` : res.kind_skipped ? " · KIND는 오늘 공시만 확인" : ""} / ` +
+      `${res.kind ? ` · KIND 직접 확인(코스피·코스닥) ${res.kind}` : ""} / ` +
       `화면 <b class="num">${shown.toLocaleString()}</b>건 (새로고침 전 ${beforeCount.toLocaleString()}건)`,
     ];
     if (added.length) lines.push(`새로 채워진 공시 <b>${added.length}</b>건 (파란색 표시)<br>${names(added)}${added.length > 5 ? "<br>…" : ""}`);

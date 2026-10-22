@@ -581,3 +581,13 @@ test("코스피200·코스닥150 구성종목", async () => {
   const r = await fetchIndexMembers(fake);
   assert.deepEqual([r.ks200, r.kq150, r.kq_missing], [["005930", "000660"], ["196170", "028300"], []]);
 });
+
+test("/api/kind/day: 지난 날짜는 KIND에 날짜를 골라 요청한다", async () => {
+  let posted;
+  const r = await handle(req("/api/kind/day?date=20261021&fresh=1"), env(), ctx, async (url, o) => { posted = o; return new Response(KIND_HTML); });
+  assert.equal(r.status, 200);
+  const sent = new URLSearchParams(posted.body);
+  assert.equal(sent.get("selDate"), "2026-10-21");
+  assert.equal(sent.get("todayFlag"), "N");
+  assert.equal((await handle(req("/api/kind/day?date=29991231"), env(), ctx)).status, 400);
+});
