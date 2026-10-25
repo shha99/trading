@@ -268,6 +268,7 @@ export const CAPITAL_KINDS = [
   ["유무상증자결정", "유무상증자"],
   ["무상증자결정", "무상증자"],
   ["유상증자결정", "유상증자"],
+  ["감자결정", "감자"], // 감자(자본감소): 매매거래정지 예정기간·신주상장예정일·감자기준일
 ];
 
 // 증자 일정은 결정(주요사항보고서) 뒤에 나오는 증권신고서 정정·[발행조건확정]·투자설명서에서 바뀌거나 채워진다.
@@ -350,11 +351,16 @@ export function parseCapitalText(text) {
       cert = { table: true, start: ymdOf(start, 1), end };
     }
   }
-  const listing = lastMatch(t, new RegExp(`신주의\\s*상장\\s*예정일\\s*:?\\s*${DATE}`, "g"))
+  const listing = lastMatch(t, new RegExp(`신주(?:의|권)?\\s*상장\\s*예정일\\s*:?\\s*${DATE}`, "g"))
     || lastMatch(t, new RegExp(`${DATE}\\s*(?:신주권|신주|주권)\\s*(?:의\\s*)?(?:신규\\s*|추가\\s*)?상장(?!\\s*폐지)`, "g")); // 주요일정 표: "2026년 11월 30일 신주 상장"
-  const record = lastMatch(t, new RegExp(`신주\\s*배정\\s*기준일\\s*:?\\s*\\(?\\s*${DATE}`, "g"))
+  const record = lastMatch(t, new RegExp(`(?:신주\\s*배정|감자)\\s*기준일\\s*:?\\s*\\(?\\s*${DATE}`, "g"))
     || lastMatch(t, new RegExp(`${DATE}\\s*신주\\s*배정\\s*기준일`, "g"));
+  // 감자: 매매거래정지 예정기간, 주주총회 예정일
+  const halt = lastMatch(t, new RegExp(`매매\\s*거래\\s*정지\\s*(?:예정)?\\s*기간\\s*시작일\\s*${DATE}\\s*종료일\\s*${DATE}`, "g"));
+  const gm = lastMatch(t, new RegExp(`주주\\s*총회\\s*(?:예정)?일\\s*:?\\s*${DATE}`, "g"));
   return {
+    ...(halt ? { halt_start: ymdOf(halt, 1), halt_end: ymdOf(halt, 4) } : {}),
+    ...(gm ? { gm_date: ymdOf(gm, 1) } : {}),
     cert_start: cert ? (cert.table ? cert.start : ymdOf(cert, 1)) : null,
     cert_end: cert ? (cert.table ? cert.end : ymdOf(cert, 4)) : null,
     listing: listing ? ymdOf(listing, 1) : null,
@@ -381,10 +387,14 @@ export async function fetchCapital(apiKey, rceptNo, fetchImpl = fetch, corpCode 
       if (r === rceptNo) decisionError = e; // 결정 보고서 본문이 아직 없어도 공모 서류에서 일정을 읽을 수 있으면 그걸 쓴다
     }
   }
-  if (decisionError && !parsed.some((p) => p.cert_start || p.listing || p.record_date)) throw decisionError;
+  if (decisionError && !parsed.some((p) => p.cert_start || p.listing || p.record_date || p.halt_start)) throw decisionError;
   const pick = (k) => parsed.find((p) => p[k]);
   const cert = parsed.find((p) => p.cert_start);
-  const out = { rcept_no: rceptNo, cert_start: cert?.cert_start || null, cert_end: cert?.cert_end || null, listing: pick("listing")?.listing || null, record_date: pick("record_date")?.record_date || null };
+  const halt = parsed.find((p) => p.halt_start);
+  const out = {
+    rcept_no: rceptNo, cert_start: cert?.cert_start || null, cert_end: cert?.cert_end || null, listing: pick("listing")?.listing || null, record_date: pick("record_date")?.record_date || null,
+    halt_start: halt?.halt_start || null, halt_end: halt?.halt_end || null, gm_date: pick("gm_date")?.gm_date || null,
+  };
   const from = [...new Set([cert?.r, pick("listing")?.r, pick("record_date")?.r].filter((r) => r && r !== rceptNo))];
   if (from.length) out.from = from; // 결정 보고서가 아닌 서류에서 읽은 값이 있으면 그 접수번호
   return out;
@@ -477,4 +487,53 @@ export function parseSplitText(text) {
 
 export async function fetchSplit(apiKey, rceptNo, fetchImpl = fetch) {
   return { rcept_no: rceptNo, ...parseSplitText(await documentText(apiKey, rceptNo, fetchImpl)) };
+}
+
+// ---- 거래정지 공시(거래소 시장조치) ----
+// 잠깐 걸렸다 풀리는 정지(장 마감 뒤 중요공시로 시간외만 정지 등)는 현재 정지 종목 목록에 안 남는다.
+// 그래서 최근 공시(정지·해제·기간변경)를 따로 모아 본문에서 정지일시·만료/해제일시·사유를 읽는다.
+const HALT_TITLE = /매매거래정지|정지해제/;
+export async function fetchHaltNotices(apiKey, today, days = 7, fetchImpl = fetch) {
+  const bgn = addDays(today, -(days - 1));
+  const rows = (await Promise.all([...SCOPE].map((cls) =>
+    listAll(apiKey, { bgn_de: bgn, end_de: today, corp_cls: cls, pblntf_detail_ty: "I003" }, fetchImpl)))).flat();
+  return rows
+    .filter((r) => HALT_TITLE.test(r.report_nm.replace(/\s/g, "")))
+    .sort((a, b) => b.rcept_no.localeCompare(a.rcept_no))
+    .map((r) => ({ rcept_no: r.rcept_no, corp_name: r.corp_name.trim(), stock_code: (r.stock_code || "").trim(), market: MARKET[r.corp_cls], title: r.report_nm.replace(/\s+/g, " ").trim(), date: r.rcept_dt }));
+}
+
+const DT = "(\\d{4})[-.년\\s]+(\\d{1,2})[-.월\\s]+(\\d{1,2})일?(?:\\s*(\\d{1,2}):(\\d{2})(?::\\d{2})?)?";
+const dtOf = (m, i) => (m && m[i] ? `${m[i]}${m[i + 1].padStart(2, "0")}${m[i + 2].padStart(2, "0")}${m[i + 3] ? ` ${m[i + 3].padStart(2, "0")}:${m[i + 4]}` : ""}` : null);
+const field = (t, label, stop) => {
+  const m = t.match(new RegExp(`${label}\\s*:?\\s*(.{0,120}?)\\s*(?:${stop})`));
+  return m ? m[1].trim() : null;
+};
+export function parseHaltNotice(html) {
+  const t = String(html).replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&nbsp;|&#160;/g, " ").replace(/\s+/g, " ");
+  const kind = /정지\s*기간\s*변경/.test(t) ? "change" : /매매거래정지\s*및\s*정지해제/.test(t) ? "both" : /정지\s*해제/.test(t.slice(0, 200)) ? "release" : "halt";
+  const reason = field(t, "(?:정지|해제|변경)\\s*사유", "\\d\\.\\s*[가-힣]|$") || field(t, "매매거래정지\\s*사유", "\\d\\.\\s*[가-힣]|$");
+  const out = { kind, reason };
+  if (kind === "change") {
+    const after = t.match(new RegExp(`변경\\s*후\\s*${DT}\\s*~?\\s*(.{0,80}?)\\s*(?:\\d\\.\\s*근거|4\\.|$)`));
+    if (after) { out.start = dtOf(after, 1); out.end_text = after[6].trim() || null; }
+  } else if (kind === "release") {
+    const m = t.match(new RegExp(`해제\\s*일시\\s*:?\\s*${DT}`));
+    out.release = dtOf(m, 1);
+  } else {
+    const s1 = t.match(new RegExp(`(?:정지\\s*일시|매매거래정지\\s*일시)\\s*:?\\s*${DT}`));
+    out.start = dtOf(s1, 1);
+    const rel = t.match(new RegExp(`(?:정지\\s*해제\\s*일시)\\s*:?\\s*${DT}`));
+    if (rel) out.release = dtOf(rel, 1);
+    const exp = field(t, "만료\\s*일시", "\\d\\.\\s*근거|4\\.|$");
+    if (exp && exp !== "-") {
+      const d = exp.match(new RegExp(DT));
+      if (d) out.end = dtOf(d, 1); else out.end_text = exp;
+    }
+  }
+  return out;
+}
+
+export async function fetchHaltNotice(apiKey, rceptNo, fetchImpl = fetch) {
+  return { rcept_no: rceptNo, ...parseHaltNotice(await documentText(apiKey, rceptNo, fetchImpl)) };
 }

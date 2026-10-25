@@ -91,6 +91,25 @@
       </table>
       <p class="empty" id="mkEmpty" hidden></p>
     </div>
+    <div class="mk-halt" id="mkHaltBox" hidden>
+      <h3 class="ai-h3">최근 7일 거래정지 공시 <small>잠깐 걸렸다 풀린 정지(장 마감 뒤 중요공시 등)까지 — DART·KIND 거래소 공시 기준</small> <span class="mk-meta" id="mkHaltMeta"></span></h3>
+      <div class="table-wrap">
+        <table class="list mk">
+          <thead>
+            <tr>
+              <th class="c-st">상태</th>
+              <th class="c-corp">종목</th>
+              <th>공시</th>
+              <th>사유</th>
+              <th>정지 기간</th>
+              <th class="c-date">공시일</th>
+            </tr>
+          </thead>
+          <tbody id="mkHaltRows"></tbody>
+        </table>
+        <p class="empty" id="mkHaltEmpty" hidden></p>
+      </div>
+    </div>
     <p class="hint mk-src">출처: 네이버 증권(한국거래소 자료), 코스피·코스닥 주식만. 지정일·사유는 관리종목과 거래정지만 제공됩니다. 가격은 지연될 수 있습니다.</p>
   </section>
 
@@ -105,7 +124,7 @@
       <div class="cal-legend">
         <label class="chk"><input type="checkbox" id="calTender" checked /> <span class="sw tender"></span>공개매수</label>
         <label class="chk"><input type="checkbox" id="calBuyback" checked /> <span class="sw buyback"></span>매수청구</label>
-        <label class="chk" title="유상·무상증자의 신주배정기준일, 신주인수권증서 상장기간, 신주 상장예정일"><input type="checkbox" id="calCapital" checked /> <span class="sw capital"></span>증자(기준일·증서·신주상장)</label>
+        <label class="chk" title="유상·무상증자의 신주배정기준일, 신주인수권증서 상장기간, 신주 상장예정일 / 감자의 매매거래정지 예정기간·감자기준일·신주 상장예정일"><input type="checkbox" id="calCapital" checked /> <span class="sw capital"></span>증자·감자(기준일·증서·정지·신주상장)</label>
         <label class="chk" title="액면분할·병합의 신주 효력발생일(기준일), 매매거래정지 기간, 신주권 변경상장일"><input type="checkbox" id="calSplit" checked /> <span class="sw split"></span>액면변경</label>
         <label class="chk"><input type="checkbox" id="calHidePast" checked /> 끝난 일정 숨기기</label>
         <label class="chk"><input type="checkbox" id="calWatchOnly" /> 관심종목만</label>

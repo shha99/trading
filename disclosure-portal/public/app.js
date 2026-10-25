@@ -17,6 +17,7 @@
     mk: {
       kind: "all", market: "", lists: {}, errors: {}, flags: new Map(), loadedAt: null,
       seen: null, added: {}, released: {}, notified: new Set(),
+      halts: { items: [], detail: {}, loading: false, loadedAt: null, error: null },
     },
     cal: {
       month: null, events: [], quotes: {}, loadedAt: null, loading: false, selected: null, error: null, newIds: new Set(), changes: new Map(),
@@ -159,30 +160,57 @@
     }
   }
 
+// 같은 공시인지: KIND와 DART는 같은 공시라도 접수번호가 다를 수 있다.
+  //  - 거래소 공시: DART 80/90번대(코스피/코스닥) ↔ KIND 00번대, 뒤 4자리는 같다
+  //  - 일반 공시: 번호가 아예 다르기도 하다 → 같은 날·같은 회사·같은 제목이면 같은 공시로 본다
+  //    (제목은 [기재정정] 같은 꼬리표·띄어쓰기·"주요사항보고서( )" 껍데기를 떼고, 그래도 다르면 괄호 설명까지 떼고 비교)
+  const corpKey = (n) => String(n || "").replace(/\s/g, "");
+  const numKey = (r) => (/^\d{8}(?:00|70|80|90)\d{4}$/.test(r) ? `${r.slice(0, 8)}~${r.slice(10)}` : r);
+  const titleKey = (t) => {
+    const x = String(t || "").replace(/\[[^\]]*\]/g, "").replace(/[\sㆍ·.,]/g, "");
+    const m = x.match(/^주요사항보고서\((.*)\)$/);
+    return m ? m[1] : x;
+  };
+  const looseKey = (t) => titleKey(t).replace(/\([^()]*\)/g, "").replace(/[()]/g, "");
+  function filingIndex(list, get = (x) => x) {
+    const ix = new Map();
+    for (const x of list) {
+      const f = get(x);
+      const c = corpKey(f.corp_name);
+      const day = f.rcept_no.slice(0, 8);
+      for (const k of [`n|${numKey(f.rcept_no)}|${c}`, `t|${day}|${c}|${titleKey(f.report_nm)}`, `l|${day}|${c}|${looseKey(f.report_nm)}`]) if (!ix.has(k)) ix.set(k, x);
+    }
+    return ix;
+  }
+  function findSame(ix, f) {
+    const c = corpKey(f.corp_name);
+    const day = f.rcept_no.slice(0, 8);
+    return ix.get(`n|${numKey(f.rcept_no)}|${c}`) || ix.get(`t|${day}|${c}|${titleKey(f.report_nm)}`) || ix.get(`l|${day}|${c}|${looseKey(f.report_nm)}`) || null;
+  }
+
   function mergeKind(dart, kind) {
     if (!kind || !kind.length) return dart;
-    const byId = new Map(dart.map((it) => [it.rcept_no, it]));
+    const ix = filingIndex(dart);
+    const ids = new Set(dart.map((it) => it.rcept_no));
     // 다음에 나오는(더 이른) "DART에도 있는" 공시 앞에 넣는다
     const before = new Map(); // dart rcept → 그 앞에 넣을 KIND 전용 공시들
     let pending = [];
-    const tail = [];
     for (const k of kind) {
-      const d = byId.get(k.rcept_no);
-      if (d && d.corp_name.replace(/\s/g, "") === k.corp_name.replace(/\s/g, "")) {
-        if (pending.length) { before.set(k.rcept_no, pending); pending = []; }
+      const d = findSame(ix, k);
+      if (d) {
+        if (pending.length) { before.set(d.rcept_no, [...(before.get(d.rcept_no) || []), ...pending]); pending = []; }
         if (!d.kind_time) d.kind_time = k.kind_time;
         continue;
       }
-      // 같은 번호인데 회사가 다르면(번호 체계가 겹친 경우) 다른 공시로 본다
-      pending.push(d ? { ...k, rcept_no: `${k.rcept_no}K` } : k);
+      // 번호만 겹치고 다른 공시면 키를 바꿔 둘 다 남긴다
+      pending.push(ids.has(k.rcept_no) ? { ...k, rcept_no: `${k.rcept_no}K` } : k);
     }
-    tail.push(...pending);
     const out = [];
     for (const it of dart) {
       if (before.has(it.rcept_no)) out.push(...before.get(it.rcept_no));
       out.push(it);
     }
-    return [...out, ...tail];
+    return [...out, ...pending];
   }
 
   async function loadDate(date) {
@@ -399,8 +427,22 @@
       }
       if (token !== loadToken) return;
       const t = nowKst();
-            for (let i = fresh.length - 1; i >= 0; i--) {
+      // KIND로 먼저 보인 공시가 DART에 다른 번호로 올라오면 새 공시로 치지 않고 DART 것으로 바꿔 끼운다
+      const kindOnly = [...state.items.values()].filter((it) => it.source === "KIND");
+      const kix = filingIndex(kindOnly);
+      for (let i = fresh.length - 1; i >= 0; i--) {
         const it = fresh[i];
+        const prevKind = it.source !== "KIND" ? findSame(kix, it) : null;
+        if (prevKind && state.items.has(prevKind.rcept_no)) {
+          state.items.delete(prevKind.rcept_no);
+          it.seq = prevKind.seq;
+          it.first_seen = prevKind.first_seen;
+          it.kind_time = prevKind.kind_time;
+          state.items.set(it.rcept_no, it);
+          if (state.freshIds.delete(prevKind.rcept_no)) state.freshIds.add(it.rcept_no);
+          fresh.splice(i, 1);
+          continue;
+        }
         it.seq = ++state.seq;
         it.first_seen = t;
         state.items.set(it.rcept_no, it);
@@ -684,6 +726,88 @@
     diffWithSeen();
     renderMarket();
     if (state.view === "disc") render();
+    loadHaltNotices(fresh); // 기다리지 않는다
+  }
+
+  // ---------- 최근 7일 거래정지 공시 ----------
+  // 현재 정지 목록(네이버)에는 잠깐 걸렸다 풀린 정지가 안 남는다. DART 거래소 시장조치 공시와
+  // KIND에만 올라온 정지 공시를 모아 본문의 정지일시·만료/해제일시·사유를 보여준다.
+  async function loadHaltNotices(fresh) {
+    const hn = state.mk.halts;
+    hn.loading = true;
+    renderHaltNotices();
+    try {
+      const days = Array.from({ length: 7 }, (_, i) => shiftDate(state.today, -i));
+      const [dart, ...kindDays] = await Promise.all([
+        fetchJSON(`/api/market/halt-notices${fresh ? "?fresh=1" : ""}`),
+        ...days.map((d) => fetchJSON(`/api/kind/day?date=${d}${fresh && d === state.today ? "&fresh=1" : ""}`).then((r) => r.items || [], () => [])),
+      ]);
+      const items = [...dart.items];
+      const ix = filingIndex(items, (x) => ({ rcept_no: x.rcept_no, corp_name: x.corp_name, report_nm: x.title }));
+      const have = new Set(items.map((x) => x.rcept_no));
+      for (const k of kindDays.flat()) { // KIND에만 있는 정지 공시(같은 공시는 번호가 달라도 하나로)
+        if (have.has(k.rcept_no) || findSame(ix, k) || !/매매거래정지|정지해제/.test(k.report_nm.replace(/\s/g, "")) || !inScope(k)) continue;
+        have.add(k.rcept_no);
+        items.push({ rcept_no: k.rcept_no, corp_name: k.corp_name, stock_code: k.stock_code, market: k.market, title: k.report_nm, date: k.rcept_no.slice(0, 8), time: k.kind_time, kind_only: true, url: k.url });
+      }
+      items.sort((a, b) => b.rcept_no.localeCompare(a.rcept_no));
+      hn.items = items;
+      renderHaltNotices();
+      // 본문(정지일시·만료/해제일시) — 종목마다 따로, 오래 캐시된다
+      await runPool(items.filter((x) => !x.kind_only && !hn.detail[x.rcept_no]).map((x) => async () => {
+        hn.detail[x.rcept_no] = (await fetchJSON(`/api/market/halt-notice?rcept_no=${x.rcept_no}`)).notice;
+      }), 6, () => {});
+      hn.loadedAt = nowKst();
+      hn.error = null;
+    } catch (e) {
+      hn.error = e.message;
+    } finally {
+      hn.loading = false;
+      renderHaltNotices();
+    }
+  }
+
+  const fmtDT = (v) => (v ? `${+v.slice(4, 6)}/${+v.slice(6, 8)}${v.length > 8 ? ` ${v.slice(9)}` : ""}` : "");
+  function haltStatus(x, d) {
+    const now = `${state.today} ${nowKst().slice(0, 5)}`;
+    const halted = (state.mk.lists.halt || []).some((it) => it.code === x.stock_code);
+    if (!d) return halted ? ["on", "정지 중"] : ["", "확인 중"];
+    if (d.kind === "release") return d.release && d.release > now ? ["soon", "해제 예정"] : ["done", "해제"];
+    if (d.kind === "both") return ["done", "정지 후 해제"];
+    if (halted) return ["on", "정지 중"];
+    if (d.start && d.start > now) return ["soon", "정지 예정"];
+    return ["done", "해제됨(거래 중)"];
+  }
+
+  function renderHaltNotices() {
+    const box = $("mkHaltBox");
+    const show = ["halt", "all"].includes(state.mk.kind);
+    box.hidden = !show;
+    if (!show) return;
+    const hn = state.mk.halts;
+    const q = $("mkSearch").value.trim().toLowerCase();
+    const mkt = state.mk.market;
+    const rows = hn.items.filter((x) => (!mkt || x.market === mkt) && (!q || `${x.corp_name} ${x.stock_code} ${x.title}`.toLowerCase().includes(q)) &&
+      (!$("mkWatchOnly").checked || isWatchedCode(x.stock_code)));
+    $("mkHaltRows").innerHTML = rows.map((x) => {
+      const d = hn.detail[x.rcept_no];
+      const [cls, label] = haltStatus(x, d);
+      const period = !d ? (x.kind_only ? `KIND ${x.time || ""}` : "…")
+        : d.kind === "release" ? `해제 ${fmtDT(d.release)}`
+        : `${fmtDT(d.start) || "?"} ~ ${d.release ? fmtDT(d.release) : d.end ? fmtDT(d.end) : esc(d.end_text || "미정")}`;
+      const url = x.url || `https://dart.fss.or.kr/dsaf001/main.do?rcpNo=${x.rcept_no}`;
+      return `<tr class="${isWatchedCode(x.stock_code) ? "watched" : ""}">
+        <td><span class="st ${cls}">${label}</span></td>
+        <td><div class="corp"><span class="nm">${esc(x.corp_name)}</span><span class="cd">${esc(x.stock_code)}</span>${idxBadge(x.stock_code)}${x.market ? `<span class="mkt ${esc(x.market)}">${esc(x.market)}</span>` : ""}</div></td>
+        <td><a href="${esc(url)}" target="_blank" rel="noopener">${esc(x.title.replace(/\s+/g, " "))}</a>${x.kind_only ? ' <span class="tag kindsrc">KIND</span>' : ""}</td>
+        <td>${d && d.reason ? esc(d.reason) : ""}</td>
+        <td>${period}</td>
+        <td class="date">${fmtMD(x.date)}</td>
+      </tr>`;
+    }).join("");
+    $("mkHaltEmpty").hidden = rows.length > 0;
+    $("mkHaltEmpty").textContent = hn.loading ? "불러오는 중…" : hn.error ? `불러오지 못했습니다: ${hn.error}` : "최근 7일 거래정지 공시가 없습니다.";
+    $("mkHaltMeta").textContent = hn.loadedAt ? `${rows.length}건 · ${hn.loadedAt} 확인` : hn.loading ? "불러오는 중…" : "";
   }
 
   // 지난 확인 이후 새로 지정된/해제된 종목. 처음 보는 목록은 조용히 기준으로 저장한다.
@@ -875,6 +999,7 @@
     else if (!rows.length) { empty.hidden = false; empty.textContent = source.length ? "조건에 맞는 종목이 없습니다." : "지금 지정된 종목이 없습니다."; }
     else empty.hidden = true;
     $("mkMeta").textContent = state.mk.loadedAt ? `${rows.length}종목 · ${state.mk.loadedAt} 확인` : "";
+    renderHaltNotices();
   }
 
   // ---------- AI분석: 과거 이벤트 뒤 실제 변동성 통계로 지금 이벤트 종목의 변동성 예상 ----------
@@ -1370,7 +1495,9 @@
           const out = [];
           if (e.cert_start) out.push({ ...base, id: `cap:${x.corp_code}:${x.kind}:cert`, sub: "cert", kind: `증서상장·${x.kind}`, start: e.cert_start, end: e.cert_end || e.cert_start });
           if (e.listing) out.push({ ...base, id: `cap:${x.corp_code}:${x.kind}:list`, sub: "listing", kind: `신주상장·${x.kind}`, start: e.listing, end: e.listing });
-          if (e.record_date) out.push({ ...base, id: `cap:${x.corp_code}:${x.kind}:rec`, sub: "record", kind: `배정기준일·${x.kind}`, start: e.record_date, end: e.record_date });
+          if (e.record_date) out.push({ ...base, id: `cap:${x.corp_code}:${x.kind}:rec`, sub: "record", kind: `${x.kind === "감자" ? "감자기준일" : "배정기준일"}·${x.kind}`, start: e.record_date, end: e.record_date });
+          // 감자: 매매거래정지 예정기간(구주권 제출·병합 처리)
+          if (e.halt_start) out.push({ ...base, id: `cap:${x.corp_code}:${x.kind}:halt`, sub: "halt", kind: `거래정지·${x.kind}`, start: e.halt_start, end: e.halt_end || e.halt_start, gm_date: e.gm_date });
           return out;
         }),
         ...deals.map((d) => async () => {
@@ -1497,8 +1624,8 @@
   }
 
   // 증자 일정과 관련된 거래소 후속 공시 제목(신주인수권증서 상장·폐지, 신주 추가상장, 발행가액 확정, 권리락 등)
-  const CAP_NOTICE = /신주인수권증서|추가상장\(?(?:유상|무상|유무상)|유상증자|무상증자|권리락|신주발행가액|발행가액(?:확정|결정)/;
-  const CAP_SCHEDULE_NOTICE = /신주인수권증서|추가상장|권리락|발행가액/;
+  const CAP_NOTICE = /신주인수권증서|추가상장\(?(?:유상|무상|유무상)|유상증자|무상증자|권리락|신주발행가액|발행가액(?:확정|결정)|감자|자본감소/;
+  const CAP_SCHEDULE_NOTICE = /신주인수권증서|추가상장|권리락|발행가액|감자|자본감소/;
   const CAL_SNAP_KEY = "disclosure-portal.calendar-snap.v1";
   const calSig = (e) => [e.start || "", e.end || "", e.price || ""].join("|");
   function loadCalSnap() {

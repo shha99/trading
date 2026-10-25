@@ -616,3 +616,14 @@ test("증자 일정: 결정 보고서 본문이 아직 없어도 공모 서류�
   assert.deepEqual([e.cert_start, e.cert_end, e.listing], ["20261026", "20261030", "20261130"]);
   await assert.rejects(fetchCapital("k", "20261001000449", fake, "", []), /파일이 존재하지/);
 });
+
+test("거래정지 공시 본문: 정지·해제·기간변경, 감자 일정", async () => {
+  const { parseHaltNotice, parseCapitalText } = await import("../src/events.js");
+  assert.deepEqual(parseHaltNotice("주권매매거래정지 1.대상종목 (주)퀀텀레일 보통주 2.정지사유 자본감소 3.정지기간 가.정지일시 2026-10-23 18:12:00 나.만료일시 장종료시까지 4.근거규정"),
+    { kind: "halt", reason: "자본감소", start: "20261023 18:12", end_text: "장종료시까지" });
+  assert.deepEqual(parseHaltNotice("매매거래정지 및 정지해제(중요내용공시) 1. 종목명 현대위아(주) 주권 3. 매매거래정지 일시 2026-10-19 10:19 4. 매매거래정지 해제일시 2026-10-19 10:49 5. 매매거래정지 사유 영업양도 6. 근거"),
+    { kind: "both", reason: "영업양도", start: "20261019 10:19", release: "20261019 10:49" });
+  assert.equal(parseHaltNotice("주권매매거래정지해제 1.대상종목 옴니시스템(주) 보통주 2.해제사유 액면병합 주권 변경상장 3.해제일시 2026-10-20 - 4.근거규정").release, "20261020");
+  const c = parseCapitalText("감자일정 주주총회 예정일 2026년 11월 20일 매매거래정지예정기간 시작일 2026년 12월 03일 종료일 2026년 12월 22일 신주권교부예정일 - 신주상장예정일 2026년 12월 23일 감자기준일 2026년 12월 05일");
+  assert.deepEqual([c.halt_start, c.halt_end, c.listing, c.record_date, c.gm_date], ["20261203", "20261222", "20261223", "20261205", "20261120"]);
+});
