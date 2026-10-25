@@ -12,7 +12,7 @@ import { MARKET_KINDS, MarketError, fetchIndexMembers, fetchMarketList, fetchQuo
 import { KindError, fetchKindDay } from "./kind.js";
 import { checkLogin, clearCookie, loginPage, makeSession, readSession, safeNext, sessionCookie, timingSafeEqual } from "./auth.js";
 import { HISTORY_BLOCKS, blockOf, fetchAiHistory, fetchAiMetrics, fetchDilution, parseMetricsQuery } from "./ai.js";
-import { DEAL_APIS, fetchCandidates, fetchCapital, fetchCapitalCandidates, fetchDeal, fetchExchangeCandidates, fetchSplit, fetchSplitCandidates, fetchTender } from "./events.js";
+import { DEAL_APIS, fetchHaltNotice, fetchHaltNotices, fetchCandidates, fetchCapital, fetchCapitalCandidates, fetchDeal, fetchExchangeCandidates, fetchSplit, fetchSplitCandidates, fetchTender } from "./events.js";
 
 const TODAY_TTL = 15; // 오늘 목록 캐시(초) — 탭 여러 개를 열어도 DART 호출이 늘지 않게
 const PAST_TTL = 600; // 지난 날짜는 거의 안 바뀐다
@@ -204,6 +204,29 @@ async function handleQuotes(url, env, ctx, fetchImpl) {
 export async function handle(request, env, ctx, fetchImpl = fetch) {
   const url = new URL(request.url);
   if (url.pathname === "/healthz") return json({ ok: true });
+  if (url.pathname === "/healthz/kind-doc-probe") { // 임시: KIND 원문 구조 확인(공개 공시만, 확인 뒤 삭제)
+    const acpt = (url.searchParams.get("a") || "20261023001009").replace(/\D/g, "").slice(0, 14);
+    const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
+    const out = {};
+    try {
+      const r = await fetchImpl(`https://kind.krx.co.kr/common/disclsviewer.do?method=search&acptno=${acpt}&docno=&viewerhost=&viewerport=`, { headers: { "User-Agent": UA, Referer: "https://kind.krx.co.kr/disclosure/todaydisclosure.do" } });
+      const h = await r.text();
+      out.viewer = { status: r.status, len: h.length, options: [...h.matchAll(/<option[^>]*value=['"]([^'"]*)['"][^>]*>([^<]*)/g)].slice(0, 5).map((m) => [m[1], m[2].trim()]), scripts: [...h.matchAll(/(searchContents|docNo|viewDoc|setPath)[^;\n]{0,160}/g)].slice(0, 8).map((m) => m[0]) };
+      const docNo = (out.viewer.options.find((o) => /^\d+/.test(o[0])) || [])[0]?.split("|")[0];
+      if (docNo) {
+        const c = await fetchImpl(`https://kind.krx.co.kr/common/disclsviewer.do?method=searchContents&docNo=${docNo}`, { headers: { "User-Agent": UA, Referer: "https://kind.krx.co.kr/common/disclsviewer.do" } });
+        const ct = await c.text();
+        out.contents = { status: c.status, len: ct.length, head: ct.slice(0, 600) };
+        const path = (ct.match(/setPath\([^)]*['"]([^'"]+\.htm)['"]/) || ct.match(/['"](\/external\/[^'"]+\.htm)['"]/) || [])[1];
+        if (path) {
+          const d = await fetchImpl(new URL(path, "https://kind.krx.co.kr").href, { headers: { "User-Agent": UA, Referer: "https://kind.krx.co.kr/common/disclsviewer.do" } });
+          const dt = (await d.text()).replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ");
+          out.doc = { path, status: d.status, text: dt.slice(0, 1500) };
+        }
+      }
+    } catch (e) { out.error = String(e.message); }
+    return json(out);
+  }
   // 사람별 로그인(PORTAL_USERS가 있으면). 없으면 예전 방식(PORTAL_PASSWORD 하나, 브라우저 팝업)으로.
   let user = null;
   if (env.PORTAL_USERS) {
@@ -251,6 +274,17 @@ export async function handle(request, env, ctx, fetchImpl = fetch) {
     if (bad) return json({ detail: bad }, 400);
     return cached(`kind/day?d=${date}${date === today ? "" : "&p=1"}`, date === today ? 60 : 6 * 3600, url.searchParams.get("fresh") === "1", ctx,
       async () => ({ ...(await fetchKindDay(date, today, fetchImpl)), fetched_at: new Date().toISOString() }));
+  }
+  if (url.pathname === "/api/market/halt-notices" && request.method === "GET") {
+    // 최근 7일 거래정지·해제·기간변경 공시 목록(DART 거래소 시장조치). 5분 캐시.
+    const today = todayKst();
+    return cached(`market/halt-notices?d=${today}`, MARKET_TTL, url.searchParams.get("fresh") === "1", ctx,
+      async () => ({ today, items: await fetchHaltNotices(env.DART_API_KEY, today, 7, fetchImpl) }));
+  }
+  if (url.pathname === "/api/market/halt-notice" && request.method === "GET") {
+    const rcept = url.searchParams.get("rcept_no") || "";
+    if (!/^\d{14}$/.test(rcept)) return json({ detail: "rcept_no가 잘못됐습니다." }, 400);
+    return cached(`market/halt-notice?r=${rcept}`, 7 * 86400, false, ctx, async () => ({ notice: await fetchHaltNotice(env.DART_API_KEY, rcept, fetchImpl) }));
   }
   if (url.pathname === "/api/index-members" && request.method === "GET") {
     // 코스피200·코스닥150 구성종목(종목명 옆 KS200/KQ150 표시용). 하루 두 번이면 충분하다.
