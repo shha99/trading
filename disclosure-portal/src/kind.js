@@ -109,3 +109,27 @@ export async function fetchKindDay(date, today, fetchImpl = fetch, maxPages = 20
 
 // 오늘 KIND 공시 전부(최신순)
 export const fetchKindToday = (fetchImpl = fetch, maxPages = 15, today = "") => fetchKindDay(today, today, fetchImpl, maxPages);
+
+// KIND 공시 원문(DART에 아직 없는 공시용). 뷰어 → 본문 문서번호 → 본문 경로 → 본문 HTML 순서로 읽는다.
+// 화면용 페이지를 읽는 것이라 KIND 화면이 바뀌면 깨질 수 있다(그러면 KindError).
+export async function fetchKindDocHtml(acptno, fetchImpl = fetch) {
+  const headers = { "User-Agent": UA, Referer: "https://kind.krx.co.kr/disclosure/todaydisclosure.do" };
+  const get = async (url) => {
+    const r = await fetchImpl(url, { headers, redirect: "manual" });
+    if (!r.ok) throw new KindError(`KIND 원문 요청 실패: HTTP ${r.status}`);
+    return r.text();
+  };
+  try {
+    const viewer = await get(`https://kind.krx.co.kr/common/disclsviewer.do?method=search&acptno=${acptno}&docno=&viewerhost=&viewerport=`);
+    // <option value="20261023001893|Y">감자결정 (2026.10.23)</option> — 첫 본문 문서
+    const docNo = ([...viewer.matchAll(/<option[^>]*value=['"](\d{10,})(?:\|[^'"]*)?['"]/g)][0] || [])[1];
+    if (!docNo) throw new KindError("KIND 원문 문서번호를 찾지 못했습니다.");
+    const contents = await get(`https://kind.krx.co.kr/common/disclsviewer.do?method=searchContents&docNo=${docNo}`);
+    const path = (contents.match(/['"](\/?external\/[^'"]+\.htm)['"]/) || contents.match(/setPath\([^)]*['"]([^'"]+\.htm)['"]/) || [])[1];
+    if (!path) throw new KindError("KIND 원문 경로를 찾지 못했습니다.");
+    return await get(new URL(path, "https://kind.krx.co.kr/").href);
+  } catch (e) {
+    if (e instanceof KindError) throw e;
+    throw new KindError(`KIND 원문 요청 실패: ${String(e.message).slice(0, 200)}`);
+  }
+}

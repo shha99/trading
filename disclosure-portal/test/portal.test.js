@@ -627,3 +627,19 @@ test("거래정지 공시 본문: 정지·해제·기간변경, 감자 일정", 
   const c = parseCapitalText("감자일정 주주총회 예정일 2026년 11월 20일 매매거래정지예정기간 시작일 2026년 12월 03일 종료일 2026년 12월 22일 신주권교부예정일 - 신주상장예정일 2026년 12월 23일 감자기준일 2026년 12월 05일");
   assert.deepEqual([c.halt_start, c.halt_end, c.listing, c.record_date, c.gm_date], ["20261203", "20261222", "20261223", "20261205", "20261120"]);
 });
+
+test("KIND 원문: 뷰어 → 문서번호 → 본문 경로 → 본문, 감자 일정 읽기", async () => {
+  const body = "감자 결정 6. 감자기준일 2026년 12월 10일 9. 감자일정 주주총회 예정일 2026년 11월 09일 매매거래 정지예정기간 시작일 2026년 12월 09일 종료일 2027년 01월 05일 신주권교부예정일 - 신주상장예정일 2027년 01월 06일";
+  const fake = async (url) => {
+    const u = String(url);
+    if (u.includes("method=search&")) return new Response(`<select><option value="">본문선택</option><option value='20261023001893|Y'>감자결정 (2026.10.23)</option></select>`);
+    if (u.includes("searchContents")) return new Response(`<script>setPath('tran', '/external/2026/10/23/001009/20261023001893/11309.htm', 'x');</script>`);
+    if (u.includes("/external/")) return new Response(`<html><body>${body}</body></html>`);
+    return new Response("", { status: 404 });
+  };
+  const r = await handle(req("/api/kind/doc?acptno=20261023001009&t=capital&fresh=1"), env(), ctx, fake);
+  assert.equal(r.status, 200);
+  const e = await r.json();
+  assert.deepEqual([e.record_date, e.gm_date, e.halt_start, e.halt_end, e.listing], ["20261210", "20261109", "20261209", "20270105", "20270106"]);
+  assert.equal((await handle(req("/api/kind/doc?acptno=1&t=capital"), env(), ctx)).status, 400);
+});

@@ -754,8 +754,10 @@
       hn.items = items;
       renderHaltNotices();
       // 본문(정지일시·만료/해제일시) — 종목마다 따로, 오래 캐시된다
-      await runPool(items.filter((x) => !x.kind_only && !hn.detail[x.rcept_no]).map((x) => async () => {
-        hn.detail[x.rcept_no] = (await fetchJSON(`/api/market/halt-notice?rcept_no=${x.rcept_no}`)).notice;
+      await runPool(items.filter((x) => !hn.detail[x.rcept_no]).map((x) => async () => {
+        hn.detail[x.rcept_no] = x.kind_only
+          ? await fetchJSON(`/api/kind/doc?acptno=${x.rcept_no}&t=halt`) // KIND에만 있는 정지 공시는 KIND 원문에서
+          : (await fetchJSON(`/api/market/halt-notice?rcept_no=${x.rcept_no}`)).notice;
       }), 6, () => {});
       hn.loadedAt = nowKst();
       hn.error = null;
@@ -771,7 +773,7 @@
   function haltStatus(x, d) {
     const now = `${state.today} ${nowKst().slice(0, 5)}`;
     const halted = (state.mk.lists.halt || []).some((it) => it.code === x.stock_code);
-    if (!d) return halted ? ["on", "정지 중"] : ["", "확인 중"];
+    if (!d) return halted ? ["on", "정지 중"] : x.kind_only ? ["", "KIND 공시"] : ["", "확인 중"];
     if (d.kind === "release") return d.release && d.release > now ? ["soon", "해제 예정"] : ["done", "해제"];
     if (d.kind === "both") return ["done", "정지 후 해제"];
     if (halted) return ["on", "정지 중"];
@@ -1560,6 +1562,22 @@
       }
       // 증자 관련 거래소 후속 공시가 있는데 캘린더에 그 회사 증자 일정이 없으면 "확인 필요"로 띄운다(빠뜨리지 않게)
       const capCodes = new Set(out.filter((e) => e.type === "capital").map((e) => e.code));
+      // KIND에만 있는 증자·감자 "결정" 공시: KIND 원문에서 일정을 읽어 바로 캘린더에 넣는다(DART 반영 전)
+      const kindDecisions = [...noticesBy].filter(([code]) => !capCodes.has(code))
+        .map(([code, list]) => [code, list.find((x) => /(?:감자|유무상증자|무상증자|유상증자)결정/.test(x.title.replace(/\s/g, "")))]).filter(([, d]) => d);
+      await runPool(kindDecisions.map(([code, d]) => async () => {
+        let e;
+        try { e = await fetchJSON(`/api/kind/doc?acptno=${d.rcept_no}&t=capital${q}`); } catch { return; }
+        const t = d.title.replace(/\s/g, "");
+        const kind = /감자/.test(t) ? "감자" : /유무상/.test(t) ? "유무상증자" : /무상/.test(t) ? "무상증자" : "유상증자";
+        const base = { type: "capital", name: d.name, code, market: d.market, rcept_no: d.rcept_no, announced: d.date, record_date: e.record_date, notices: noticesBy.get(code), from_kind: true, kind_url: d.url };
+        const add = [];
+        if (e.cert_start) add.push({ ...base, id: `kcap:${code}:${kind}:cert`, sub: "cert", kind: `증서상장·${kind}`, start: e.cert_start, end: e.cert_end || e.cert_start });
+        if (e.listing) add.push({ ...base, id: `kcap:${code}:${kind}:list`, sub: "listing", kind: `신주상장·${kind}`, start: e.listing, end: e.listing });
+        if (e.record_date) add.push({ ...base, id: `kcap:${code}:${kind}:rec`, sub: "record", kind: `${kind === "감자" ? "감자기준일" : "배정기준일"}·${kind}`, start: e.record_date, end: e.record_date });
+        if (e.halt_start) add.push({ ...base, id: `kcap:${code}:${kind}:halt`, sub: "halt", kind: `거래정지·${kind}`, start: e.halt_start, end: e.halt_end || e.halt_start, gm_date: e.gm_date });
+        if (add.length) { out.push(...add); capCodes.add(code); }
+      }), 4, () => {});
       for (const [code, list] of noticesBy) {
         if (capCodes.has(code)) continue;
         const nt = list.find((x) => CAP_SCHEDULE_NOTICE.test(x.title.replace(/\s/g, ""))); // 결정 공시는 DART 쪽에서 잡는다
@@ -1741,7 +1759,7 @@
       e.sub === "effective" ? "신주 효력발생일 — 이날 기준으로 주식 수가 바뀜" : "",
       e.sub === "halt" ? "매매거래정지 기간" : "",
       e.withdrawn ? "결정 뒤 철회 공시 — 원문 확인" : "",
-      e.from_kind ? "KIND 공시 — DART 반영 전이라 일정 확인 중" :
+      e.from_kind ? (e.start ? "KIND 원문 기준 — DART 반영 전" : "KIND 공시 — DART 반영 전이라 일정 확인 중") :
       e.from_exchange ? "거래소 공시 기준(DART 주요사항보고서 나오면 대체)" : e.source === "본문" ? "기간은 보고서 본문 기준" : "",
       e.waiting ? WAIT_NOTE : "",
       e.from_docs ? "일정은 정정·투자설명서 기준" : "",
