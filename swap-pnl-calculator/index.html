@@ -1,0 +1,790 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>스왑 손익 계산기</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='13' font-size='14'%3E%E2%87%84%3C/text%3E%3C/svg%3E" />
+<style>
+:root {
+  --bg: #f6f7f9; --card: #ffffff; --ink: #1b1f24; --muted: #5d6673; --line: #dfe3e8;
+  --accent: #2456c9; --accent-soft: #e7eefc; --pos: #0f7b45; --neg: #c2312b; --warn: #8a5a00;
+  --input: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121519; --card: #1b1f25; --ink: #e8eaed; --muted: #9aa3ae; --line: #2c323a;
+    --accent: #7ea2ff; --accent-soft: #1f2a44; --pos: #4cc98a; --neg: #ff7b72; --warn: #e3b341;
+    --input: #14181d;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #121519; --card: #1b1f25; --ink: #e8eaed; --muted: #9aa3ae; --line: #2c323a;
+  --accent: #7ea2ff; --accent-soft: #1f2a44; --pos: #4cc98a; --neg: #ff7b72; --warn: #e3b341;
+  --input: #14181d;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "Segoe UI", sans-serif; }
+header { padding: 20px 16px 8px; max-width: 1280px; margin: 0 auto; }
+h1 { font-size: 20px; margin: 0 0 4px; }
+header p { margin: 0; color: var(--muted); font-size: 13px; }
+nav { display: flex; gap: 6px; flex-wrap: wrap; padding: 8px 16px; max-width: 1280px; margin: 0 auto; }
+nav button { border: 1px solid var(--line); background: var(--card); color: var(--ink); padding: 7px 12px;
+  border-radius: 8px; cursor: pointer; font: inherit; }
+nav button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+main { max-width: 1280px; margin: 0 auto; padding: 8px 16px 40px; }
+.panel { display: none; }
+.panel.on { display: grid; grid-template-columns: minmax(300px, 380px) 1fr; gap: 16px; align-items: start; }
+@media (max-width: 860px) { .panel.on { grid-template-columns: 1fr; } }
+form, .out > section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+.out { display: grid; gap: 14px; min-width: 0; }
+fieldset { border: 0; padding: 0; margin: 0 0 14px; }
+legend { font-weight: 600; font-size: 13px; color: var(--accent); margin-bottom: 6px; padding: 0; }
+.row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+label.wide { grid-column: 1 / -1; }
+input, select, textarea { width: 100%; margin-top: 3px; padding: 7px 8px; font: inherit; color: var(--ink);
+  background: var(--input); border: 1px solid var(--line); border-radius: 6px; }
+textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; min-height: 120px; resize: vertical; }
+input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+h2 { font-size: 15px; margin: 0 0 10px; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
+.kpi { background: var(--bg); border-radius: 8px; padding: 10px; min-width: 0; }
+.kpi .k { font-size: 12px; color: var(--muted); }
+.kpi .v { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.kpi .s { font-size: 11px; color: var(--muted); }
+.kpi.main { background: var(--accent-soft); }
+.pos { color: var(--pos); } .neg { color: var(--neg); }
+.tw { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; font-size: 12.5px; }
+th, td { padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; text-align: right; }
+th { color: var(--muted); font-weight: 500; background: var(--bg); position: sticky; top: 0; }
+td.l, th.l { text-align: left; }
+tr.base td { font-weight: 600; background: var(--accent-soft); }
+tr.done td { color: var(--muted); }
+.err { color: var(--neg); font-weight: 600; }
+.note { color: var(--muted); font-size: 12px; }
+details { font-size: 12.5px; color: var(--muted); }
+details summary { cursor: pointer; color: var(--ink); font-weight: 600; }
+details li { margin: 3px 0; }
+.btns { display: flex; gap: 6px; }
+.btns button { font: inherit; font-size: 12px; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); cursor: pointer; }
+footer { max-width: 1280px; margin: 0 auto; padding: 0 16px 30px; color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>장외파생 스왑 손익 계산기</h1>
+  <p>IRS · CRS · FX 스왑 · TRS · CDS · 상품스왑의 평가손익(MTM), 민감도, 시나리오, 현금흐름을 계산합니다. 입력을 바꾸면 즉시 다시 계산됩니다.</p>
+</header>
+<nav id="tabs"></nav>
+<main id="main"></main>
+<footer>
+  참고용 단순화 모델입니다. 영업일/휴일 조정, 멀티커브(OIS 할인 vs. 투영 커브 분리), CSA·담보, XVA, 컨벡시티, IMM 날짜 규칙 등은 반영하지 않습니다.
+  실제 장부 평가·회계 처리에는 공식 평가 시스템/평가사 값을 사용하세요.
+</footer>
+
+<script>
+"use strict";
+/* ============================================================
+ * 날짜 / 일수계산
+ * ============================================================ */
+const DAY = 86400000;
+const now = new Date();
+const TODAY = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+const iso = t => new Date(t).toISOString().slice(0, 10);
+function parseDate(s) {
+  const m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(String(s).trim());
+  if (!m) throw new Error(`날짜 형식 오류: "${s}" (YYYY-MM-DD)`);
+  return Date.UTC(+m[1], +m[2] - 1, +m[3]);
+}
+function addMonths(t, n) {
+  const d = new Date(t), y = d.getUTCFullYear(), m = d.getUTCMonth() + n, day = d.getUTCDate();
+  const last = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+  return Date.UTC(y, m, Math.min(day, last));
+}
+const addDays = (t, n) => t + n * DAY;
+const eom = (t, n) => { const d = new Date(addMonths(t, n)); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0); };
+
+/** 연환산 기간(Year fraction) */
+function yf(a, b, dc) {
+  if (dc === "30/360") {
+    const x = new Date(a), y = new Date(b);
+    let d1 = Math.min(x.getUTCDate(), 30), d2 = y.getUTCDate();
+    if (d1 === 30 && d2 === 31) d2 = 30;
+    return ((y.getUTCFullYear() - x.getUTCFullYear()) * 360 + (y.getUTCMonth() - x.getUTCMonth()) * 30 + (d2 - d1)) / 360;
+  }
+  return (b - a) / DAY / (dc === "ACT/360" ? 360 : 365);
+}
+
+/** 만기에서 역산해 지급일 스케줄 생성 (앞쪽 short stub, 7일 미만 stub은 합침) */
+function schedule(start, end, months) {
+  if (!(end > start)) throw new Error("만기일은 시작일 이후여야 합니다.");
+  const out = [end];
+  for (let k = 1; k < 2000; k++) {
+    const d = addMonths(end, -months * k);
+    if (d - start < 7 * DAY) break;
+    out.unshift(d);
+  }
+  out.unshift(start);
+  return out;
+}
+
+/* ============================================================
+ * 커브: "기간 금리%" 줄 단위 입력 → 제로금리 선형보간, 연속복리 할인
+ * ============================================================ */
+function parseCurve(text) {
+  const pts = [];
+  for (const raw of String(text).split(/\n/)) {
+    const line = raw.replace(/#.*/, "").trim();
+    if (!line) continue;
+    const m = /^(\d+(?:\.\d+)?)\s*([DWMY])\s*[,:\s]\s*(-?\d+(?:\.\d+)?)\s*%?$/i.exec(line);
+    if (!m) throw new Error(`커브 형식 오류: "${line}" (예: 3M 2.55)`);
+    const n = +m[1], u = m[2].toUpperCase();
+    const t = u === "D" ? n / 365 : u === "W" ? n * 7 / 365 : u === "M" ? n / 12 : n;
+    pts.push({ t, r: +m[3] / 100 });
+  }
+  if (!pts.length) throw new Error("커브에 최소 1개 이상의 금리를 입력하세요.");
+  return pts.sort((a, b) => a.t - b.t);
+}
+function makeCurve(pts, shiftBp = 0) {
+  const sh = shiftBp / 10000;
+  const z = t => {
+    if (t <= pts[0].t) return pts[0].r;
+    const L = pts[pts.length - 1];
+    if (t >= L.t) return L.r;
+    for (let i = 1; i < pts.length; i++) {
+      if (t <= pts[i].t) {
+        const a = pts[i - 1], b = pts[i];
+        return a.r + (b.r - a.r) * (t - a.t) / (b.t - a.t);
+      }
+    }
+  };
+  return { z: t => z(t) + sh, df: t => Math.exp(-(z(t) + sh) * Math.max(t, 0)) };
+}
+
+/* ============================================================
+ * 공통 레그 평가 (고정/변동 이자 + 원금교환)
+ *  sign: +1 = 수취, -1 = 지급
+ * ============================================================ */
+function priceLeg(o) {
+  const T = d => (d - o.v) / DAY / 365;
+  const rows = [];
+  let pv = 0, accrued = 0;
+  const ds = o.dates;
+  for (let i = 1; i < ds.length; i++) {
+    const s = ds[i - 1], e = ds[i];
+    if (e <= o.v) continue;                         // 이미 지급된 기간
+    const tau = yf(s, e, o.dc);
+    let r, known = true;
+    if (o.type === "fixed") r = o.rate;
+    else if (s <= o.v) {                             // 진행 중인 기간: 확정금리 사용
+      r = (Number.isFinite(o.fixing) ? o.fixing : (1 / o.curve.df(T(e)) - 1) / Math.max(yf(o.v, e, o.dc), 1e-9)) + o.spread;
+    } else {                                         // 미래 기간: 선도금리
+      r = (o.curve.df(T(s)) / o.curve.df(T(e)) - 1) / tau + o.spread;
+      known = false;
+    }
+    const amt = o.N * r * tau, df = o.curve.df(T(e));
+    pv += amt * df;
+    if (s <= o.v) accrued = o.N * r * yf(s, o.v, o.dc);
+    rows.push({ date: e, leg: o.label, kind: known ? "이자(확정)" : "이자(예상)", rate: r, amt: o.sign * amt, df, pv: o.sign * amt * df, ccy: o.ccy });
+  }
+  const start = ds[0], end = ds[ds.length - 1];
+  if (o.initEx && start > o.v) {
+    const df = o.curve.df(T(start));
+    pv += -o.N * df;
+    rows.push({ date: start, leg: o.label, kind: "원금(초기교환)", rate: NaN, amt: -o.sign * o.N, df, pv: -o.sign * o.N * df, ccy: o.ccy });
+  }
+  if (o.finalEx && end > o.v) {
+    const df = o.curve.df(T(end));
+    pv += o.N * df;
+    rows.push({ date: end, leg: o.label, kind: "원금(만기교환)", rate: NaN, amt: o.sign * o.N, df, pv: o.sign * o.N * df, ccy: o.ccy });
+  }
+  return { pv: o.sign * pv, accrued: o.sign * accrued, rows };
+}
+
+/* ============================================================
+ * 출력 헬퍼
+ * ============================================================ */
+const num = (x, d = 0) => Number.isFinite(x)
+  ? (x < 0 ? "−" : "") + Math.abs(x).toLocaleString("ko-KR", { minimumFractionDigits: d, maximumFractionDigits: d }) : "–";
+const sig = (x, d = 0) => Number.isFinite(x) ? (x > 0 ? "+" : "") + num(x, d) : "–";
+const cls = x => x > 0 ? "pos" : x < 0 ? "neg" : "";
+const pct = (x, d = 4) => Number.isFinite(x) ? num(x * 100, d) + "%" : "–";
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const kpi = (k, v, c = "", s = "", main = false) =>
+  `<div class="kpi${main ? " main" : ""}"><div class="k">${k}</div><div class="v ${c}">${v}</div>${s ? `<div class="s">${s}</div>` : ""}</div>`;
+const card = (title, body) => `<section><h2>${title}</h2>${body}</section>`;
+function table(heads, rows, rowCls = () => "") {
+  const th = heads.map((h, i) => `<th class="${i === 0 ? "l" : ""}">${h}</th>`).join("");
+  const tr = rows.map((r, j) => `<tr class="${rowCls(j)}">${r.map((c, i) => `<td class="${i === 0 || (typeof c === "string" && c.startsWith("@")) ? "l" : ""}">${typeof c === "string" && c.startsWith("@") ? c.slice(1) : c}</td>`).join("")}</tr>`).join("");
+  return `<div class="tw"><table><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table></div>`;
+}
+const colored = (x, d = 0) => `<span class="${cls(x)}">${sig(x, d)}</span>`;
+
+function cashflowTable(rows, ccyConv) {
+  rows = rows.slice().sort((a, b) => a.date - b.date);
+  const conv = r => ccyConv ? ccyConv(r) : r.pv;
+  return table(
+    ["지급일", "레그", "구분", "금리", "현금흐름", "통화", "할인계수", ccyConv ? "현재가치(환산)" : "현재가치"],
+    rows.map(r => [iso(r.date), "@" + esc(r.leg), "@" + r.kind, Number.isFinite(r.rate) ? pct(r.rate, 4) : "–",
+      colored(r.amt), "@" + esc(r.ccy || ""), r.df.toFixed(6), colored(conv(r))])
+  );
+}
+
+/** 기간 손익: 현재 MTM − 직전 MTM + 기간 중 순현금흐름 */
+function pnlCard(g, mtm, ccy) {
+  const prevRaw = g.raw("prev"), cashRaw = g.raw("cash");
+  if (prevRaw === "" && cashRaw === "") {
+    return card("기간 손익", `<p class="note">왼쪽 ‘기간 손익’ 항목에 직전 평가금액(예: 전일/전월말 MTM)과 그 사이 실제 주고받은 순현금흐름을 넣으면 기간 손익을 분해해 보여줍니다.</p>`);
+  }
+  const prev = g.n("prev") || 0, cash = g.n("cash") || 0, d = mtm - prev;
+  return card("기간 손익", `<div class="kpis">
+    ${kpi("평가손익 변동 (ΔMTM)", sig(d), cls(d), `현재 ${num(mtm)} − 직전 ${num(prev)}`)}
+    ${kpi("실현손익 (순현금흐름)", sig(cash), cls(cash), "수취 +, 지급 −")}
+    ${kpi("기간 총손익", sig(d + cash) + " " + esc(ccy), cls(d + cash), "ΔMTM + 실현", true)}
+  </div>`);
+}
+
+/* ============================================================
+ * 입력 폼 정의
+ * ============================================================ */
+const F = (id, label, def, type = "num", extra = {}) => ({ id, label, def, type, ...extra });
+const DC = [["ACT/365", "ACT/365"], ["ACT/360", "ACT/360"], ["30/360", "30/360"]];
+const FREQ = [["1", "월 (1M)"], ["3", "분기 (3M)"], ["6", "반기 (6M)"], ["12", "연 (12M)"]];
+const KRW_CURVE = "# 기간  제로금리(%)  — 예시 값\n3M 2.55\n6M 2.55\n1Y 2.56\n2Y 2.62\n3Y 2.68\n5Y 2.78\n7Y 2.85\n10Y 2.92";
+const USD_CURVE = "# 기간  제로금리(%)  — 예시 값\n3M 3.90\n6M 3.82\n1Y 3.70\n2Y 3.58\n3Y 3.57\n5Y 3.65\n7Y 3.76\n10Y 3.92";
+const PNL_GROUP = { title: "기간 손익 (선택)", fields: [
+  F("prev", "직전 평가금액 (MTM)", "", "num", { comma: true }),
+  F("cash", "기간 중 순현금흐름 (수취+ / 지급−)", "", "num", { comma: true }),
+] };
+
+function commodityDefault() {
+  const lines = ["# 결제일  가격  [수량(생략 시 기본수량)]", "# 결제일이 평가일 이전이면 확정(실현) 평균가격, 이후면 선도가격 입력"];
+  const px = [69.8, 71.2, 73.9, 74.6, 75.1, 74.8, 74.4, 74.0, 73.7, 73.4, 73.1, 72.9];
+  for (let i = 0; i < 12; i++) lines.push(`${iso(eom(TODAY, i - 4))} ${px[i].toFixed(2)}`);
+  return lines.join("\n");
+}
+
+const START_IRS = addMonths(TODAY, -8);
+const START_CRS = addMonths(TODAY, -10);
+const NEAR_FX = addDays(TODAY, -30);
+const START_CDS = addMonths(TODAY, -5);
+
+const TABS = [
+  { key: "irs", name: "금리스왑 IRS", groups: [
+    { title: "계약 조건", fields: [
+      F("dir", "포지션", "pay", "sel", { opts: [["pay", "고정금리 지급 (Payer)"], ["rec", "고정금리 수취 (Receiver)"]] }),
+      F("ccy", "통화", "KRW", "txt"),
+      F("N", "명목원금", "10,000,000,000", "num", { comma: true, wide: true }),
+      F("fixed", "고정금리 (%)", "2.85"),
+      F("spread", "변동금리 가산금리 (bp)", "0"),
+      F("start", "시작일 (Effective)", iso(START_IRS), "date"),
+      F("end", "만기일", iso(addMonths(START_IRS, 36)), "date"),
+      F("ffreq", "고정 지급주기", "3", "sel", { opts: FREQ }),
+      F("lfreq", "변동 지급주기", "3", "sel", { opts: FREQ }),
+      F("fdc", "고정 일수계산", "ACT/365", "sel", { opts: DC }),
+      F("ldc", "변동 일수계산", "ACT/365", "sel", { opts: DC }),
+    ] },
+    { title: "시장 데이터", fields: [
+      F("val", "평가일", iso(TODAY), "date"),
+      F("fixing", "현재 기간 확정금리 (%) – CD91 등", "2.62"),
+      F("curve", "할인/선도 커브 (기간 금리%)", KRW_CURVE, "area", { wide: true }),
+    ] },
+    PNL_GROUP,
+  ], calc: calcIRS },
+
+  { key: "crs", name: "통화스왑 CRS", groups: [
+    { title: "계약 조건", fields: [
+      F("dir", "포지션", "payDom", "sel", { wide: true, opts: [["payDom", "원화 지급 / 외화 수취"], ["recDom", "원화 수취 / 외화 지급"]] }),
+      F("dccy", "원화(국내) 통화", "KRW", "txt"),
+      F("fccy", "외화 통화", "USD", "txt"),
+      F("dN", "원화 명목원금", "13,500,000,000", "num", { comma: true }),
+      F("fN", "외화 명목원금", "10,000,000", "num", { comma: true }),
+      F("dtype", "원화 레그", "fixed", "sel", { opts: [["fixed", "고정"], ["float", "변동"]] }),
+      F("drate", "원화 고정금리(%) / 가산금리(bp)", "2.70"),
+      F("ftype", "외화 레그", "float", "sel", { opts: [["fixed", "고정"], ["float", "변동"]] }),
+      F("frate", "외화 고정금리(%) / 가산금리(bp)", "0"),
+      F("start", "시작일", iso(START_CRS), "date"),
+      F("end", "만기일", iso(addMonths(START_CRS, 36)), "date"),
+      F("freq", "이자 지급주기", "3", "sel", { opts: FREQ }),
+      F("ex", "원금 교환", "both", "sel", { opts: [["both", "초기 + 만기"], ["final", "만기만"], ["none", "없음"]] }),
+      F("ddc", "원화 일수계산", "ACT/365", "sel", { opts: DC }),
+      F("fdc", "외화 일수계산", "ACT/360", "sel", { opts: DC }),
+    ] },
+    { title: "시장 데이터", fields: [
+      F("val", "평가일", iso(TODAY), "date"),
+      F("spot", "현물환율 (원화/외화)", "1,420.00", "num", { comma: true }),
+      F("dfix", "원화 현재 확정금리 (%)", "2.62"),
+      F("ffix", "외화 현재 확정금리 (%)", "3.95"),
+      F("dcurve", "원화 커브", KRW_CURVE, "area", { wide: true }),
+      F("fcurve", "외화 커브", USD_CURVE, "area", { wide: true }),
+    ] },
+    PNL_GROUP,
+  ], calc: calcCRS },
+
+  { key: "fxs", name: "FX 스왑", groups: [
+    { title: "계약 조건", fields: [
+      F("dir", "포지션", "bs", "sel", { wide: true, opts: [["bs", "Buy & Sell (근일물 외화 매입 / 원일물 매도)"], ["sb", "Sell & Buy (근일물 외화 매도 / 원일물 매입)"]] }),
+      F("fccy", "외화", "USD", "txt"),
+      F("dccy", "원화", "KRW", "txt"),
+      F("N", "외화 거래금액", "10,000,000", "num", { comma: true, wide: true }),
+      F("near", "근일물 결제일", iso(NEAR_FX), "date"),
+      F("knear", "근일물 환율", "1,395.00", "num", { comma: true }),
+      F("far", "원일물 결제일", iso(addMonths(NEAR_FX, 6)), "date"),
+      F("kfar", "원일물 환율", "1,385.50", "num", { comma: true }),
+    ] },
+    { title: "시장 데이터", fields: [
+      F("val", "평가일", iso(TODAY), "date"),
+      F("spot", "현물환율", "1,420.00", "num", { comma: true }),
+      F("rd", "원화 금리 (%, 단리 ACT/365)", "2.55"),
+      F("rf", "외화 금리 (%, 단리 ACT/360)", "3.90"),
+      F("pts", "원일물 시장 스왑포인트 (원, 선택)", "", "num", { wide: true }),
+    ] },
+    PNL_GROUP,
+  ], calc: calcFXS },
+
+  { key: "trs", name: "TRS / 주식스왑", groups: [
+    { title: "계약 조건", fields: [
+      F("dir", "포지션", "rec", "sel", { wide: true, opts: [["rec", "총수익 수취 (Long, 펀딩 지급)"], ["pay", "총수익 지급 (Short, 펀딩 수취)"]] }),
+      F("ccy", "통화", "KRW", "txt"),
+      F("N", "명목금액", "5,000,000,000", "num", { comma: true }),
+      F("p0", "기초자산 최초가격", "75,000", "num", { comma: true }),
+      F("start", "시작일 (최근 리셋일)", iso(addDays(TODAY, -120)), "date"),
+      F("dc", "펀딩 일수계산", "ACT/365", "sel", { opts: DC }),
+      F("rate", "펀딩 기준금리 (%)", "2.65"),
+      F("spread", "펀딩 가산금리 (bp)", "60"),
+    ] },
+    { title: "시장 데이터", fields: [
+      F("val", "평가일", iso(TODAY), "date"),
+      F("pt", "기초자산 현재가격", "81,200", "num", { comma: true }),
+      F("div", "누적 배당 (주당)", "361", "num", { comma: true }),
+      F("divpct", "배당 지급비율 (%)", "100"),
+    ] },
+  ], calc: calcTRS },
+
+  { key: "cds", name: "CDS", groups: [
+    { title: "계약 조건", fields: [
+      F("dir", "포지션", "buy", "sel", { wide: true, opts: [["buy", "보장 매입 (Protection Buyer)"], ["sell", "보장 매도 (Protection Seller)"]] }),
+      F("ccy", "통화", "USD", "txt"),
+      F("N", "명목금액", "10,000,000", "num", { comma: true }),
+      F("coupon", "계약 쿠폰 (bp/년)", "100"),
+      F("rec", "회수율 (%)", "40"),
+      F("start", "효력 시작일", iso(START_CDS), "date"),
+      F("end", "만기일", iso(addMonths(START_CDS, 60)), "date"),
+    ] },
+    { title: "시장 데이터", fields: [
+      F("val", "평가일", iso(TODAY), "date"),
+      F("spread", "시장 CDS 스프레드 (bp)", "145"),
+      F("r", "할인금리 (%, 연속복리)", "3.80"),
+    ] },
+    PNL_GROUP,
+  ], calc: calcCDS },
+
+  { key: "cmd", name: "상품스왑", groups: [
+    { title: "계약 조건", fields: [
+      F("dir", "포지션", "payFixed", "sel", { wide: true, opts: [["payFixed", "고정가격 지급 / 변동가격 수취 (Long)"], ["recFixed", "고정가격 수취 / 변동가격 지급 (Short)"]] }),
+      F("ccy", "통화", "USD", "txt"),
+      F("unit", "단위", "bbl", "txt"),
+      F("K", "고정가격", "72.00", "num", { comma: true }),
+      F("Q", "기간별 기본수량", "10,000", "num", { comma: true }),
+    ] },
+    { title: "시장 데이터", fields: [
+      F("val", "평가일", iso(TODAY), "date"),
+      F("r", "할인금리 (%, 연속복리)", "3.90"),
+      F("lines", "결제 스케줄 / 가격", commodityDefault(), "area", { wide: true }),
+    ] },
+  ], calc: calcCMD },
+];
+
+/* ============================================================
+ * 1) IRS
+ * ============================================================ */
+function calcIRS(g) {
+  const v = g.d("val"), start = g.d("start"), end = g.d("end"), N = g.n("N"), ccy = g.s("ccy");
+  if (end <= v) throw new Error("평가일 기준 만기가 지난 계약입니다.");
+  const pts = parseCurve(g.s("curve"));
+  const fD = schedule(start, end, +g.s("ffreq")), lD = schedule(start, end, +g.s("lfreq"));
+  const recFixed = g.s("dir") === "rec";
+  const K = g.pct("fixed"), spr = g.bp("spread"), fixing = g.pct("fixing");
+  const value = bp => {
+    const c = makeCurve(pts, bp);
+    const fx = priceLeg({ N, type: "fixed", rate: K, dates: fD, dc: g.s("fdc"), curve: c, v, sign: recFixed ? 1 : -1, label: "고정", ccy });
+    const fl = priceLeg({ N, type: "float", spread: spr, fixing, dates: lD, dc: g.s("ldc"), curve: c, v, sign: recFixed ? -1 : 1, label: "변동", ccy });
+    return { npv: fx.pv + fl.pv, fx, fl, c };
+  };
+  const b = value(0);
+  const dv01 = value(1).npv - b.npv;
+  // 잔존 기준 등가 고정금리: 변동레그 PV / 고정레그 애뉴이티
+  let annuity = 0;
+  for (let i = 1; i < fD.length; i++) if (fD[i] > v) annuity += yf(fD[i - 1], fD[i], g.s("fdc")) * b.c.df((fD[i] - v) / DAY / 365);
+  const par = Math.abs(b.fl.pv) / N / annuity;
+  const accr = b.fx.accrued + b.fl.accrued;
+  const yrs = (end - v) / DAY / 365;
+
+  const scen = [-100, -50, -25, -10, 0, 10, 25, 50, 100].map(bp => {
+    const x = bp === 0 ? b.npv : value(bp).npv; return [sig(bp) + "bp", num(x), colored(x - b.npv)];
+  });
+  return [
+    card("평가 결과", `<div class="kpis">
+      ${kpi("평가손익 MTM (Dirty)", sig(b.npv) + " " + esc(ccy), cls(b.npv), recFixed ? "고정 수취 관점" : "고정 지급 관점", true)}
+      ${kpi("Clean MTM", sig(b.npv - accr), cls(b.npv - accr), "경과이자 제외")}
+      ${kpi("순 경과이자", sig(accr), cls(accr))}
+      ${kpi("고정 레그 PV", sig(b.fx.pv), cls(b.fx.pv))}
+      ${kpi("변동 레그 PV", sig(b.fl.pv), cls(b.fl.pv))}
+      ${kpi("시장 등가 고정금리", pct(par, 4), "", `계약 ${pct(K, 4)} · 차이 ${sig((K - par) * 1e4, 1)}bp`)}
+      ${kpi("DV01 (+1bp 평행이동)", sig(dv01), cls(dv01))}
+      ${kpi("잔존만기", num(yrs, 2) + "년")}
+    </div>`),
+    pnlCard(g, b.npv, ccy),
+    card("금리 시나리오 (커브 평행이동)", table(["금리 변동", "MTM", "손익 변화"], scen, j => j === 4 ? "base" : "")),
+    card("잔존 현금흐름", cashflowTable([...b.fx.rows, ...b.fl.rows])),
+  ];
+}
+
+/* ============================================================
+ * 2) CRS
+ * ============================================================ */
+function calcCRS(g) {
+  const v = g.d("val"), start = g.d("start"), end = g.d("end");
+  if (end <= v) throw new Error("평가일 기준 만기가 지난 계약입니다.");
+  const dccy = g.s("dccy"), fccy = g.s("fccy"), spot = g.n("spot");
+  const dPts = parseCurve(g.s("dcurve")), fPts = parseCurve(g.s("fcurve"));
+  const dates = schedule(start, end, +g.s("freq"));
+  const sD = g.s("dir") === "recDom" ? 1 : -1;
+  const ex = g.s("ex");
+  const legOpt = (pre, N, curve, sign, label, ccy, dc) => {
+    const type = g.s(pre + "type");
+    return { N, type, rate: type === "fixed" ? g.pct(pre + "rate") : 0, spread: type === "float" ? g.bp(pre + "rate") : 0,
+      fixing: g.pct(pre + "fix"), dates, dc, curve, v, sign, label, ccy, initEx: ex === "both", finalEx: ex !== "none" };
+  };
+  const value = (bpD = 0, bpF = 0, fxShock = 0) => {
+    const S = spot * (1 + fxShock);
+    const d = priceLeg(legOpt("d", g.n("dN"), makeCurve(dPts, bpD), sD, dccy + " 레그", dccy, g.s("ddc")));
+    const f = priceLeg(legOpt("f", g.n("fN"), makeCurve(fPts, bpF), -sD, fccy + " 레그", fccy, g.s("fdc")));
+    return { npv: d.pv + S * f.pv, d, f, S };
+  };
+  const b = value();
+  const dv01D = value(1, 0, 0).npv - b.npv, dv01F = value(0, 1, 0).npv - b.npv, fx1 = value(0, 0, 0.01).npv - b.npv;
+  const accr = b.d.accrued + spot * b.f.accrued;
+
+  const scen = [-10, -5, -2, 0, 2, 5, 10].map(p => {
+    const x = p === 0 ? b : value(0, 0, p / 100);
+    return [sig(p) + "%", num(x.S, 2), num(x.npv), colored(x.npv - b.npv)];
+  });
+  const rows = [...b.d.rows, ...b.f.rows];
+  return [
+    card("평가 결과", `<div class="kpis">
+      ${kpi("평가손익 MTM (Dirty)", sig(b.npv) + " " + esc(dccy), cls(b.npv), sD > 0 ? "원화 수취 / 외화 지급 관점" : "원화 지급 / 외화 수취 관점", true)}
+      ${kpi("Clean MTM", sig(b.npv - accr), cls(b.npv - accr))}
+      ${kpi(esc(dccy) + " 레그 PV", sig(b.d.pv), cls(b.d.pv))}
+      ${kpi(esc(fccy) + " 레그 PV", sig(b.f.pv) + " " + esc(fccy), cls(b.f.pv), `원화환산 ${sig(b.f.pv * spot)}`)}
+      ${kpi("FX 델타 (환율 +1%)", sig(fx1), cls(fx1), `환율 1원당 ${sig(fx1 / (spot * 0.01))}`)}
+      ${kpi(esc(dccy) + " DV01", sig(dv01D), cls(dv01D))}
+      ${kpi(esc(fccy) + " DV01 (원화환산)", sig(dv01F), cls(dv01F))}
+      ${kpi("계약 환율 (명목원금 비율)", num(g.n("dN") / g.n("fN"), 2), "", `현재 ${num(spot, 2)}`)}
+    </div>`),
+    pnlCard(g, b.npv, dccy),
+    card("환율 시나리오", table(["환율 변동", "현물환율", "MTM", "손익 변화"], scen, j => j === 3 ? "base" : "")),
+    card("잔존 현금흐름", cashflowTable(rows, r => r.ccy === fccy ? r.pv * spot : r.pv)),
+  ];
+}
+
+/* ============================================================
+ * 3) FX 스왑
+ * ============================================================ */
+function calcFXS(g) {
+  const v = g.d("val"), near = g.d("near"), far = g.d("far"), N = g.n("N");
+  if (far <= near) throw new Error("원일물 결제일은 근일물 이후여야 합니다.");
+  if (far <= v) throw new Error("평가일 기준 원일물까지 결제가 끝난 계약입니다.");
+  const spot = g.n("spot"), rd = g.pct("rd"), rf = g.pct("rf"), ptsIn = g.n("pts");
+  const dccy = g.s("dccy"), fccy = g.s("fccy");
+  const qNear = g.s("dir") === "bs" ? N : -N, qFar = -qNear;
+  const dfD = d => 1 / (1 + rd * Math.max(yf(v, d, "ACT/365"), 0));
+  const fwdBy = (S, d) => S * (1 + rd * Math.max(yf(v, d, "ACT/365"), 0)) / (1 + rf * Math.max(yf(v, d, "ACT/360"), 0));
+  const fwdFar = (S, extraPts = 0) => (Number.isFinite(ptsIn) ? S + ptsIn : fwdBy(S, far)) + extraPts;
+  const value = (S, extraPts = 0) => {
+    const legs = [];
+    if (near > v) legs.push({ name: "근일물", d: near, q: qNear, K: g.n("knear"), F: fwdBy(S, near) });
+    legs.push({ name: "원일물", d: far, q: qFar, K: g.n("kfar"), F: fwdFar(S, extraPts) });
+    for (const l of legs) { l.df = dfD(l.d); l.pv = l.q * (l.F - l.K) * l.df; }
+    return { npv: legs.reduce((a, l) => a + l.pv, 0), legs };
+  };
+  const b = value(spot);
+  const ptsMkt = b.legs[b.legs.length - 1].F - spot;
+  const ptsCt = g.n("kfar") - g.n("knear");
+  const dPts = value(spot, 1).npv - b.npv;
+  const dSpot = value(spot + 1).npv - b.npv;
+  const scen = [-5, -2, -1, 0, 1, 2, 5].map(p => {
+    const S = spot * (1 + p / 100), x = p === 0 ? b : value(S);
+    return [sig(p) + "%", num(S, 2), num(x.npv), colored(x.npv - b.npv)];
+  });
+  const legRows = b.legs.map(l => ["@" + l.name, iso(l.d), sig(l.q) + " " + esc(fccy), num(l.K, 2), num(l.F, 2), l.df.toFixed(6), colored(l.pv)]);
+  return [
+    card("평가 결과", `<div class="kpis">
+      ${kpi("평가손익 MTM", sig(b.npv) + " " + esc(dccy), cls(b.npv), near <= v ? "근일물 결제 완료 → 원일물만 평가" : "근일물·원일물 모두 미결제", true)}
+      ${kpi("계약 스왑포인트", sig(ptsCt, 2), "", "원일물 − 근일물 환율")}
+      ${kpi("시장 원일물 선도환율", num(spot + ptsMkt, 2), "", `현물 대비 ${sig(ptsMkt, 2)} ${Number.isFinite(ptsIn) ? "(입력값)" : "(금리평형 계산)"}`)}
+      ${kpi("현물환율 1원 변동 시", sig(dSpot), cls(dSpot))}
+      ${kpi("원일물 스왑포인트 +1 시", sig(dPts), cls(dPts))}
+    </div>`),
+    pnlCard(g, b.npv, dccy),
+    card("레그별 평가", table(["레그", "결제일", "외화 수량", "계약환율", "시장 선도환율", "할인계수", "PV(원화)"], legRows)),
+    card("환율 시나리오 (현물 변동, 스왑포인트 고정 비율)", table(["환율 변동", "현물환율", "MTM", "손익 변화"], scen, j => j === 3 ? "base" : "")),
+  ];
+}
+
+/* ============================================================
+ * 4) TRS
+ * ============================================================ */
+function calcTRS(g) {
+  const v = g.d("val"), start = g.d("start"), N = g.n("N"), p0 = g.n("p0"), pt = g.n("pt"), ccy = g.s("ccy");
+  if (v < start) throw new Error("평가일이 시작일보다 앞섭니다.");
+  if (!(p0 > 0)) throw new Error("최초가격을 입력하세요.");
+  const sh = N / p0, sign = g.s("dir") === "rec" ? 1 : -1;
+  const fRate = g.pct("rate") + g.bp("spread"), tau = yf(start, v, g.s("dc"));
+  const dp = g.pct("divpct"), div = (g.n("div") || 0) * sh * (Number.isFinite(dp) ? dp : 1);
+  const fund = N * fRate * tau;
+  const val = P => { const eq = sh * (P - p0); return { eq, total: sign * (eq + div - fund) }; };
+  const b = val(pt);
+  const be = p0 + (fund - div) / sh;
+  const scen = [-20, -10, -5, 0, 5, 10, 20].map(p => {
+    const P = pt * (1 + p / 100), x = val(P); return [sig(p) + "%", num(P, 2), colored(x.total), colored(x.total - b.total)];
+  });
+  return [
+    card("평가 결과", `<div class="kpis">
+      ${kpi("누적 손익 (리셋일 이후)", sig(b.total) + " " + esc(ccy), cls(b.total), sign > 0 ? "총수익 수취(Long) 관점" : "총수익 지급(Short) 관점", true)}
+      ${kpi("명목 대비 수익률", sig(b.total / N * 100, 3) + "%", cls(b.total), `연환산 ${tau > 0 ? sig(b.total / N / tau * 100, 2) + "%" : "–"}`)}
+      ${kpi("가격 손익", sig(sign * b.eq), cls(sign * b.eq), `${num(sh, 2)}주 × (${num(pt, 2)} − ${num(p0, 2)})`)}
+      ${kpi("배당 손익", sig(sign * div), cls(sign * div))}
+      ${kpi("펀딩 비용/수익", sig(-sign * fund), cls(-sign * fund), `${pct(fRate, 3)} × ${num(tau * 365)}일/${g.s("dc").slice(4)}`)}
+      ${kpi("손익분기 가격", num(be, 2), "", `현재가 대비 ${sig((be / pt - 1) * 100, 2)}%`)}
+      ${kpi("델타 (가격 1% 변동)", sig(sign * sh * pt * 0.01), cls(sign))}
+      ${kpi("경과일수", num((v - start) / DAY) + "일")}
+    </div>`),
+    card("기초자산 가격 시나리오", table(["가격 변동", "기초자산 가격", "누적 손익", "손익 변화"], scen, j => j === 3 ? "base" : "")),
+  ];
+}
+
+/* ============================================================
+ * 5) CDS  (평탄 hazard rate를 시장 스프레드에 맞춰 보정)
+ * ============================================================ */
+function cdsLegs(dates, v, lambda, R, r) {
+  const T = d => Math.max((d - v) / DAY / 365, 0), df = t => Math.exp(-r * t), Q = t => Math.exp(-lambda * t);
+  let rpv01 = 0, prot = 0;
+  for (let i = 1; i < dates.length; i++) {
+    const e = dates[i]; if (e <= v) continue;
+    const s = Math.max(dates[i - 1], v), t0 = T(s), t1 = T(e), tau = yf(s, e, "ACT/360");
+    rpv01 += tau * df(t1) * (Q(t0) + Q(t1)) / 2;            // 부도 시 경과 프리미엄 근사 포함
+    const n = 6;
+    for (let k = 0; k < n; k++) {
+      const a = t0 + (t1 - t0) * k / n, b = t0 + (t1 - t0) * (k + 1) / n;
+      prot += (1 - R) * df((a + b) / 2) * (Q(a) - Q(b));
+    }
+  }
+  return { rpv01, prot };
+}
+function calibrateHazard(S, dates, v, R, r) {
+  let lo = 0, hi = 5;
+  const f = l => { const x = cdsLegs(dates, v, l, R, r); return x.prot - S * x.rpv01; };
+  for (let i = 0; i < 80; i++) { const m = (lo + hi) / 2; if (f(m) > 0) hi = m; else lo = m; }
+  return (lo + hi) / 2;
+}
+function calcCDS(g) {
+  const v = g.d("val"), start = g.d("start"), end = g.d("end"), N = g.n("N"), ccy = g.s("ccy");
+  if (end <= v) throw new Error("평가일 기준 만기가 지난 계약입니다.");
+  const C = g.bp("coupon"), S = g.bp("spread"), R = g.pct("rec"), r = g.pct("r");
+  if (!(R >= 0 && R < 1)) throw new Error("회수율은 0~100% 미만이어야 합니다.");
+  const dates = schedule(start, end, 3);
+  const sign = g.s("dir") === "buy" ? 1 : -1;
+  const value = spr => {
+    const lam = calibrateHazard(spr, dates, v, R, r);
+    const x = cdsLegs(dates, v, lam, R, r);
+    return { lam, ...x, clean: sign * N * (x.prot - C * x.rpv01) };
+  };
+  const b = value(S);
+  let accrued = 0;
+  for (let i = 1; i < dates.length; i++) if (dates[i - 1] <= v && dates[i] > v) accrued = sign * -N * C * yf(dates[i - 1], v, "ACT/360");
+  const dirty = b.clean + accrued;
+  const cs01 = value(S + 0.0001).clean - b.clean;
+  const yrs = (end - v) / DAY / 365;
+  const pd = 1 - Math.exp(-b.lam * yrs);
+  const jtd = sign * N * (1 - R) - b.clean; // 부도 즉시 손익(clean 기준)
+  const scen = [-50, -25, -10, 0, 10, 25, 50, 100, 200].map(d => {
+    const s2 = S + d / 1e4; if (s2 <= 0) return null;
+    const x = d === 0 ? b : value(s2); return [sig(d) + "bp", num(s2 * 1e4, 1), num(x.clean), colored(x.clean - b.clean)];
+  }).filter(Boolean);
+  const baseIdx = scen.findIndex(r => r[0] === "0bp");
+  return [
+    card("평가 결과", `<div class="kpis">
+      ${kpi("평가손익 MTM (Clean)", sig(b.clean) + " " + esc(ccy), cls(b.clean), sign > 0 ? "보장 매입 관점" : "보장 매도 관점", true)}
+      ${kpi("Dirty MTM", sig(dirty), cls(dirty), `경과 프리미엄 ${sig(accrued)}`)}
+      ${kpi("Upfront (명목 대비)", sig(b.clean / N * 100, 3) + "%", cls(b.clean), "포지션 가치 기준 (+면 상대방이 지급)")}
+      ${kpi("Risky PV01 (RPV01)", num(b.rpv01, 4), "", `1bp 프리미엄 가치 ${num(N * b.rpv01 / 1e4)}`)}
+      ${kpi("CS01 (스프레드 +1bp)", sig(cs01), cls(cs01))}
+      ${kpi("부도 시 즉시손익 (JTD)", sig(jtd), cls(jtd))}
+      ${kpi("내재 부도강도 λ", pct(b.lam, 3), "", `만기까지 누적부도확률 ${pct(pd, 2)}`)}
+      ${kpi("보장 레그 PV", num(N * b.prot), "", `프리미엄 레그 PV ${num(N * C * b.rpv01)}`)}
+    </div>`),
+    pnlCard(g, b.clean, ccy),
+    card("스프레드 시나리오", table(["스프레드 변동", "시장 스프레드(bp)", "Clean MTM", "손익 변화"], scen, j => j === baseIdx ? "base" : "")),
+  ];
+}
+
+/* ============================================================
+ * 6) 상품스왑
+ * ============================================================ */
+function calcCMD(g) {
+  const v = g.d("val"), K = g.n("K"), Q0 = g.n("Q"), r = g.pct("r"), ccy = g.s("ccy"), unit = g.s("unit");
+  const sign = g.s("dir") === "payFixed" ? 1 : -1;
+  const items = [];
+  for (const raw of g.s("lines").split(/\n/)) {
+    const line = raw.replace(/#.*/, "").trim(); if (!line) continue;
+    const p = line.split(/[\s,]+/);
+    if (p.length < 2) throw new Error(`스케줄 형식 오류: "${line}"`);
+    const q = p[2] !== undefined ? +p[2].replace(/,/g, "") : Q0;
+    const P = +p[1].replace(/,/g, "");
+    if (!Number.isFinite(P) || !Number.isFinite(q)) throw new Error(`숫자 형식 오류: "${line}"`);
+    items.push({ d: parseDate(p[0]), P, q });
+  }
+  if (!items.length) throw new Error("결제 스케줄을 1줄 이상 입력하세요.");
+  items.sort((a, b) => a.d - b.d);
+  const value = shock => {
+    let real = 0, unreal = 0, delta = 0;
+    const rows = items.map(it => {
+      const done = it.d <= v;
+      const P = done ? it.P : it.P * (1 + shock);
+      const cf = sign * (P - K) * it.q;
+      const df = done ? 1 : Math.exp(-r * (it.d - v) / DAY / 365);
+      if (done) real += cf; else { unreal += cf * df; delta += sign * it.q * df; }
+      return { ...it, P, cf, df, pv: cf * df, done };
+    });
+    return { real, unreal, delta, rows };
+  };
+  const b = value(0);
+  const rem = b.rows.filter(x => !x.done);
+  const avgF = rem.length ? rem.reduce((a, x) => a + x.P * x.q, 0) / rem.reduce((a, x) => a + x.q, 0) : NaN;
+  const scen = [-20, -10, -5, 0, 5, 10, 20].map(p => {
+    const x = p === 0 ? b : value(p / 100); return [sig(p) + "%", num(x.unreal), colored(x.real + x.unreal), colored(x.unreal - b.unreal)];
+  });
+  return [
+    card("평가 결과", `<div class="kpis">
+      ${kpi("총손익 (실현 + 평가)", sig(b.real + b.unreal) + " " + esc(ccy), cls(b.real + b.unreal), sign > 0 ? "고정 지급(Long) 관점" : "고정 수취(Short) 관점", true)}
+      ${kpi("실현손익 (결제 완료)", sig(b.real), cls(b.real), `${b.rows.length - rem.length}개 기간`)}
+      ${kpi("평가손익 (미결제 MTM)", sig(b.unreal), cls(b.unreal), `${rem.length}개 기간`)}
+      ${kpi("잔존 가중평균 선도가격", num(avgF, 2), "", `고정가격 ${num(K, 2)} · 차이 ${sig(avgF - K, 2)}`)}
+      ${kpi(`가격 1 ${esc(ccy)}/${esc(unit)} 상승 시`, sig(b.delta), cls(b.delta))}
+      ${kpi("잔존 수량", num(rem.reduce((a, x) => a + x.q, 0)) + " " + esc(unit))}
+    </div>`),
+    card("선도가격 시나리오 (미결제 기간에만 적용)", table(["가격 변동", "평가손익", "총손익", "평가손익 변화"], scen, j => j === 3 ? "base" : "")),
+    card("기간별 정산", table(["결제일", "상태", "가격", "수량", "정산금액", "할인계수", "현재가치"],
+      b.rows.map(x => [iso(x.d), "@" + (x.done ? "확정(실현)" : "예상(선도)"), num(x.P, 2), num(x.q), colored(x.cf), x.df.toFixed(6), colored(x.pv)]),
+      j => b.rows[j].done ? "done" : "")),
+  ];
+}
+
+/* ============================================================
+ * 화면 구성 / 이벤트
+ * ============================================================ */
+const METHOD = {
+  irs: ["입력한 제로금리 커브(선형보간, 연속복리)로 할인하고 같은 커브에서 선도금리를 산출합니다(단일 커브).",
+    "진행 중인 변동 기간은 입력한 확정금리를 쓰고, 이후 기간은 선도금리 + 가산금리를 씁니다.",
+    "Dirty MTM은 잔존 현금흐름 PV의 합, Clean은 경과이자를 뺀 값입니다. DV01은 커브 전체 +1bp 이동 시 MTM 변화입니다."],
+  crs: ["원화/외화 레그를 각자의 커브로 할인한 뒤 외화 레그 PV에 현물환율을 곱해 원화로 합산합니다.",
+    "원금교환은 레그를 수취하는 쪽이 초기에 원금을 지급(−)하고 만기에 돌려받는(+) 방식입니다.",
+    "베이시스 스프레드는 별도 커브 없이 각 레그의 가산금리 입력으로 반영합니다."],
+  fxs: ["레그별 가치 = 외화수량 × (시장 선도환율 − 계약환율) × 원화 할인계수.",
+    "선도환율은 시장 스왑포인트를 넣으면 그 값을, 비우면 금리평형(단리)으로 계산합니다.",
+    "근일물 결제일이 평가일 이전이면 근일물은 결제된 것으로 보고 원일물만 평가합니다."],
+  trs: ["총수익 레그 = 주식수 × (현재가 − 최초가) + 배당, 펀딩 레그 = 명목 × (기준금리 + 가산금리) × 경과기간.",
+    "최근 리셋일 이후 한 기간(펀딩금리 고정)을 가정한 누적 손익입니다. 리셋 시 확정·정산된 금액은 별도로 관리하세요."],
+  cds: ["평탄 부도강도 λ를 시장 스프레드에 맞춰 보정(보장 레그 PV = 스프레드 × RPV01)한 뒤 계약 쿠폰으로 MTM을 계산합니다.",
+    "프리미엄은 분기, ACT/360 지급이며 부도 시 경과 프리미엄은 기간 중간 부도로 근사합니다. 표준 ISDA 모델과 미세한 차이가 있습니다.",
+    "Clean MTM = 명목 × (보장 레그 − 쿠폰 × RPV01). 보장 매입자 기준 양수면 이익입니다."],
+  cmd: ["결제일이 평가일 이전인 기간은 입력 가격을 확정 평균가격으로 보고 실현손익으로 집계합니다.",
+    "이후 기간은 (선도가격 − 고정가격) × 수량을 연속복리 할인금리로 현재가치화합니다."],
+};
+
+const nav = document.getElementById("tabs"), main = document.getElementById("main");
+function fieldHTML(tab, f) {
+  const id = `${tab}-${f.id}`, wide = f.wide || f.type === "area";
+  let input;
+  if (f.type === "sel") input = `<select id="${id}">${f.opts.map(([v, l]) => `<option value="${v}"${v === f.def ? " selected" : ""}>${l}</option>`).join("")}</select>`;
+  else if (f.type === "area") input = `<textarea id="${id}" spellcheck="false" rows="${Math.min(14, f.def.split("\n").length + 1)}">${esc(f.def)}</textarea>`;
+  else if (f.type === "date") input = `<input id="${id}" type="date" value="${f.def}">`;
+  else input = `<input id="${id}" type="text" ${f.type === "num" ? 'inputmode="decimal"' : ""} value="${esc(f.def)}"${f.comma ? ' data-comma="1"' : ""}>`;
+  return `<label class="${wide ? "wide" : ""}">${f.label}${input}</label>`;
+}
+for (const t of TABS) {
+  const b = document.createElement("button");
+  b.textContent = t.name; b.dataset.tab = t.key; nav.appendChild(b);
+  const sec = document.createElement("div");
+  sec.className = "panel"; sec.id = "p-" + t.key;
+  sec.innerHTML = `<form autocomplete="off" onsubmit="return false">
+      ${t.groups.map(gr => `<fieldset><legend>${gr.title}</legend><div class="row">${gr.fields.map(f => fieldHTML(t.key, f)).join("")}</div></fieldset>`).join("")}
+      <div class="btns"><button type="button" data-reset>기본값으로</button></div>
+    </form>
+    <div class="out" id="o-${t.key}"></div>`;
+  main.appendChild(sec);
+}
+
+function getter(tab) {
+  const el = id => { const e = document.getElementById(`${tab}-${id}`); if (!e) throw new Error("필드 없음: " + id); return e; };
+  const raw = id => el(id).value.trim();
+  const n = id => { const s = raw(id).replace(/,/g, ""); return s === "" ? NaN : Number(s); };
+  return {
+    raw, s: raw, n,
+    pct: id => n(id) / 100,
+    bp: id => (Number.isFinite(n(id)) ? n(id) : 0) / 10000,
+    d: id => parseDate(raw(id)),
+  };
+}
+
+function compute(t) {
+  const out = document.getElementById("o-" + t.key);
+  let html;
+  try {
+    html = t.calc(getter(t.key)).join("");
+  } catch (e) {
+    html = card("입력 확인", `<p class="err">${esc(e.message)}</p>`);
+  }
+  html += card("계산 방법 / 가정", `<details><summary>펼쳐 보기</summary><ul>${METHOD[t.key].map(x => `<li>${x}</li>`).join("")}</ul></details>`);
+  out.innerHTML = html;
+}
+
+function show(key) {
+  for (const b of nav.children) b.classList.toggle("on", b.dataset.tab === key);
+  for (const p of main.children) p.classList.toggle("on", p.id === "p-" + key);
+  try { localStorage.setItem("swap-pnl-tab", key); } catch (e) {}
+  if (location.hash.slice(1) !== key) history.replaceState(null, "", "#" + key);
+}
+nav.addEventListener("click", e => { const k = e.target.dataset && e.target.dataset.tab; if (k) show(k); });
+
+for (const t of TABS) {
+  const sec = document.getElementById("p-" + t.key), form = sec.querySelector("form");
+  form.addEventListener("input", () => compute(t));
+  form.addEventListener("change", () => compute(t));
+  form.addEventListener("focusout", e => {
+    const el = e.target;
+    if (el.dataset && el.dataset.comma) {
+      const s = el.value.replace(/,/g, "").trim();
+      if (s !== "" && Number.isFinite(+s)) {
+        const dec = (s.split(".")[1] || "").length;
+        el.value = (+s).toLocaleString("en-US", { minimumFractionDigits: dec, maximumFractionDigits: dec });
+      }
+    }
+  });
+  sec.querySelector("[data-reset]").addEventListener("click", () => {
+    for (const gr of t.groups) for (const f of gr.fields) document.getElementById(`${t.key}-${f.id}`).value = f.def;
+    compute(t);
+  });
+  compute(t);
+}
+
+let initial = location.hash.slice(1);
+if (!TABS.some(t => t.key === initial)) { try { initial = localStorage.getItem("swap-pnl-tab") || ""; } catch (e) { initial = ""; } }
+show(TABS.some(t => t.key === initial) ? initial : "irs");
+</script>
+</body>
+</html>
