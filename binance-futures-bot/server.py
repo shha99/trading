@@ -30,6 +30,8 @@ from app.config import settings
 from app.binance_account import get_live_status as get_binance_live_status
 from app.db import SessionLocal, SignalRecord, TradeRecord, init_db
 from app.history import is_candle_closed
+from app.combo_weights import COMBO_WEIGHTS_FILE
+from app.combo_weights import recompute_and_save as recompute_combo_weights
 from app.indicator_catalog import build_catalog, compute_indicator
 from app.lab_stats_builder import LAB_STATS_FILE
 from app.lab_stats_builder import build_all as build_lab_stats
@@ -143,6 +145,10 @@ def _build_missing_stats_in_background() -> None:
     if not MULTI_SCREEN_TRADES_FILE.exists():
         # 4개 조합을 각각 3년 이상 받아와야 해서 셋 중 가장 오래 걸릴 수 있다.
         threading.Thread(target=build_multi_screen_trades, daemon=True).start()
+    if settings.wick_reliability_weighting_enabled and not COMBO_WEIGHTS_FILE.exists():
+        # 기능이 켜져 있는데 아직 한 번도 계산 안 됐으면(최초 배포 등) 매월 1일
+        # 정기 재계산을 기다리지 않고 바로 한 번 만든다 - 꺼져 있으면 아예 스킵.
+        threading.Thread(target=recompute_combo_weights, daemon=True).start()
 
 
 def _refresh_all_stats() -> None:
@@ -230,6 +236,11 @@ def _start_scheduler() -> BackgroundScheduler:
         run_paper_trading_once, trigger="interval", seconds=settings.scan_interval_seconds,
         id="paper_trading_scan", max_instances=1, coalesce=True,
     )
+    if settings.wick_reliability_weighting_enabled:
+        _scheduler.add_job(
+            recompute_combo_weights, trigger="cron", day=1, hour=0, minute=5,
+            id="combo_weights_monthly", max_instances=1, coalesce=True,
+        )
     _scheduler.start()
     logger.info(
         "스케줄러 시작: 시그널 스캔 %d초(켈트너+wick), 포지션 점검 %d초, "

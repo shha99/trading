@@ -246,3 +246,19 @@ def test_remotely_disabled_skips_entry(patch_data, monkeypatch):
 
     assert entered == 0
     assert broker.calls == []
+
+
+def test_combo_weight_multiplies_risk_usdt(patch_data, monkeypatch):
+    """조합별 신뢰도 가중치(app/combo_weights.get_combo_weight)가 기본
+    리스크 금액(risk.compute_risk_usdt)에 곱해져서 실제 주문에 전달돼야
+    한다 - 이 기능이 꺼져있으면 get_combo_weight()가 항상 1.0을 돌려주니
+    (app/combo_weights.py의 안전 기본값) 기존 거래 금액이 그대로 유지된다."""
+    settings.wick_auto_trade_enabled = True
+    settings.wick_auto_trade_whitelist = {("BTCUSDT", "15m")}
+    monkeypatch.setattr("app.risk.compute_risk_usdt", lambda broker: 10.0)
+    monkeypatch.setattr(wick_engine_module, "get_combo_weight", lambda symbol, tf: 1.6)
+    broker = FakeBroker()
+
+    WickSignalEngine(strategy=FakeWickStrategy(), broker=broker).run_once()
+
+    assert broker.calls[0][4] == pytest.approx(16.0)

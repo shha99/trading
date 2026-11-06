@@ -17,6 +17,7 @@ import logging
 
 from . import db, risk
 from .broker import BinanceFuturesBroker, BrokerError
+from .combo_weights import get_combo_weight
 from .config import settings
 from .db import SessionLocal, TradeRecord
 from .history import fetch_klines, is_candle_closed
@@ -92,11 +93,12 @@ class WickSignalEngine:
         broker = self.broker or BinanceFuturesBroker()
         session = SessionLocal()
         try:
+            risk_usdt = risk.compute_risk_usdt(broker) * get_combo_weight(symbol, timeframe)
             try:
                 result = broker.enter_position(
                     direction=direction, symbol=symbol,
                     entry_price_hint=entry["entry_price"], stop_price=entry["stop_price"],
-                    risk_usdt=risk.compute_risk_usdt(broker), leverage=settings.leverage,
+                    risk_usdt=risk_usdt, leverage=settings.leverage,
                 )
             except BrokerError as exc:
                 logger.error("wick 자동매매 진입 실패: %s %s - %s", symbol, timeframe, exc)

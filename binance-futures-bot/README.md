@@ -416,6 +416,31 @@ RISK_PERCENT_MAX_USDT=100     # 상한 (0이면 상한 없음 - 권장하지 않
    등록을 원자적으로 묶어주지 않음) — 극히 드문 경우지만 그 사이에 급격한
    가격 변동이 있으면 보호가 안 될 수 있다.
 
+### 조합별 신뢰도 기반 리스크 가중치 (선택, 기본 꺼짐)
+
+`WICK_AUTO_TRADE_WHITELIST`에 여러 조합(예: BTC/ETH × 15m/5m)을 넣고
+돌릴 때, 기본값은 모든 조합이 `RISK_PER_TRADE_USDT`를 동일하게 쓴다.
+`WICK_RELIABILITY_WEIGHTING_ENABLED=true`로 켜면, **매월 1일 00:05 UTC에**
+각 조합을 과거 `COMBO_WEIGHTS_LOOKBACK_DAYS`일(기본 210일≈7개월) 데이터로
+독립 백테스트해서 "거래당 평균수익률 ÷ 표준편차"(변동성 대비 꾸준함)를
+신뢰도 점수로 매기고, 그 점수에 비례해서 조합별 리스크 배수를 다시
+계산한다(상한 400%/하한 25% — 4조합 기준 동일가중치는 각 25%이므로, 이
+배수는 "그 기준선 대비 몇 배"를 뜻한다. 예: 가중치 40% → 배수 1.6배).
+결과는 `data/combo_weights.json`에 저장되고 `app/combo_weights.py`의
+`get_combo_weight()`가 신규 진입마다 `risk.compute_risk_usdt()`의 결과에
+곱해진다.
+
+- 재계산이 실패하거나(네트워크 오류 등) 파일이 35일보다 오래되면, 또는
+  저장된 조합 구성이 지금 화이트리스트와 다르면, 자동으로 "조합별 동일
+  가중치"로 폴백한다 — 이 기능을 안 쓰는 것과 동일하게 안전하게 동작한다.
+- ⚠️ 과거 데이터 기준이라 미래에도 같은 순위가 유지된다는 보장은 없다.
+  매월 재평가하는 이유도 이것 때문 — 그래도 순위가 급격히 바뀔 수 있으니
+  정기적으로 `data/combo_weights.json`을 직접 확인하는 걸 권장한다.
+- 수동으로 바로 재계산하고 싶으면:
+  ```bash
+  python -c "from app.combo_weights import recompute_and_save; print(recompute_and_save())"
+  ```
+
 ## 헤드리스로 24시간 돌리기 (웹서버 없이, 집 PC/서버용)
 
 지금까지의 `/`, `/vf`, `/strategy`, `/lab`, `/trading` 화면은 전부 차트를

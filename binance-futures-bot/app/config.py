@@ -131,6 +131,19 @@ class Settings:
     # 이 전략이 검증된 시간대만 - 대시보드/켈트너용 timeframes(15m,1h,4h,1d)와는 별개.
     wick_timeframes: list[str] = field(default_factory=lambda: _csv("WICK_TIMEFRAMES", "15m,5m"))
 
+    # 조합(심볼:시간대)별 신뢰도 기반 리스크 가중치 (선택, 기본 꺼짐) -
+    # 매월 1일 app/combo_weights.py가 화이트리스트의 각 조합을 과거
+    # COMBO_WEIGHTS_LOOKBACK_DAYS일 데이터로 재평가해서(거래당 평균수익률/
+    # 표준편차가 높을수록 신뢰도 높음), 신규 진입 리스크 금액에 곱할
+    # 가중치를 data/combo_weights.json에 저장한다. 꺼져 있으면(기본값)
+    # 지금까지처럼 모든 조합이 RISK_PER_TRADE_USDT를 동일하게 쓴다.
+    wick_reliability_weighting_enabled: bool = field(
+        default_factory=lambda: _bool("WICK_RELIABILITY_WEIGHTING_ENABLED", "false")
+    )
+    combo_weights_lookback_days: int = field(
+        default_factory=lambda: int(os.getenv("COMBO_WEIGHTS_LOOKBACK_DAYS", "210"))
+    )
+
     # --- 알림 ---
     telegram_bot_token: str = field(default_factory=lambda: os.getenv("TELEGRAM_BOT_TOKEN", ""))
     telegram_chat_id: str = field(default_factory=lambda: os.getenv("TELEGRAM_CHAT_ID", ""))

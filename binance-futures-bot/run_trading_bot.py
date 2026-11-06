@@ -37,9 +37,12 @@ from __future__ import annotations
 import logging
 import signal
 import sys
+import threading
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
+from app.combo_weights import COMBO_WEIGHTS_FILE
+from app.combo_weights import recompute_and_save as recompute_combo_weights
 from app.config import settings
 from app.db import init_db
 from app.paper_trading import run_once as run_paper_trading_once
@@ -84,6 +87,10 @@ def _log_startup_banner() -> None:
         f" ({settings.risk_percent_of_balance}% of balance)" if settings.risk_mode == "percent_balance" else f" ({settings.risk_per_trade_usdt} USDT 고정)",
     )
     logger.info("일일 손실 한도(킬스위치): %s USDT", settings.daily_loss_limit_usdt)
+    logger.info(
+        "조합별 신뢰도 가중치(매월 1일 재평가): %s",
+        "ON" if settings.wick_reliability_weighting_enabled else "off",
+    )
     logger.info("=" * 72)
     if not settings.binance_testnet and (settings.auto_trade_enabled or settings.wick_auto_trade_enabled):
         logger.warning("⚠️⚠️⚠️ 실계좌 모드로 자동매매가 켜진 채로 시작합니다 - 진짜 주문이 나갑니다 ⚠️⚠️⚠️")
@@ -107,6 +114,11 @@ def main() -> None:
     init_db()
     _log_startup_banner()
     _run_initial_scan()
+    if settings.wick_reliability_weighting_enabled and not COMBO_WEIGHTS_FILE.exists():
+        # 기능이 켜져 있는데 아직 한 번도 계산 안 됐으면(최초 설치 등) 매월 1일
+        # 정기 재계산을 기다리지 않고 바로 한 번 만든다(몇 분 걸릴 수 있어
+        # 별도 스레드 - 스케줄러/매매 루프 시작을 막지 않는다).
+        threading.Thread(target=recompute_combo_weights, daemon=True).start()
 
     scheduler = BlockingScheduler(timezone="UTC")
     scheduler.add_job(
@@ -125,6 +137,11 @@ def main() -> None:
         run_paper_trading_once, trigger="interval", seconds=settings.scan_interval_seconds,
         id="paper_trading_scan", max_instances=1, coalesce=True,
     )
+    if settings.wick_reliability_weighting_enabled:
+        scheduler.add_job(
+            recompute_combo_weights, trigger="cron", day=1, hour=0, minute=5,
+            id="combo_weights_monthly", max_instances=1, coalesce=True,
+        )
     logger.info(
         "스케줄러 시작: 시그널 스캔 %d초(켈트너+wick+모의투자), 포지션 점검 %d초 간격 - Ctrl+C로 종료",
         settings.scan_interval_seconds, settings.position_watch_interval_seconds,
