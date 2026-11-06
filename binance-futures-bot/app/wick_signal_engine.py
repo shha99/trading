@@ -6,6 +6,12 @@
 나간다 — 검증된 전략이라도 자동매매 엔진에 조용히 얹지 않는다는 이 프로젝트
 전체의 원칙 그대로다.
 
+**기본 진입 전략은 2026-11부터 `BollingerWickVolumeStochRsiConfirmStrategy`다**
+(기존 `BollingerWickBreakevenTrailStrategy`의 밴드터치+RSI 조건에, 터치 캔들
+거래량 확인 + StochRSI(15/85) 이중확인을 추가한 검증된 상위 버전 - 상세 근거는
+그 클래스 docstring, 백테스트 비교는 README "실계좌 자동매매" 섹션 참고).
+청산(손절 → 본전 이동 → ATR 트레일링)은 그대로 상속해서 완전히 동일하다.
+
 이 전략은 롱/숏 양방향이고 고정 익절이 없는 "본전 이동 트레일링" 청산이라
 (app/lab_backtest.py의 로직과 완전히 같음), 진입 시 손절 주문 하나만 걸고
 이후 app/wick_position_manager.py가 주기적으로 그 손절 주문을 취소·재등록
@@ -21,7 +27,7 @@ from .combo_weights import get_combo_weight
 from .config import settings
 from .db import SessionLocal, TradeRecord
 from .history import fetch_klines, is_candle_closed
-from .lab_strategies import BollingerWickBreakevenTrailStrategy
+from .lab_strategies import BollingerWickBreakevenTrailStrategy, BollingerWickVolumeStochRsiConfirmStrategy
 from .notify import notify_wick_entry
 from .position_manager import count_open_positions
 from .remote_control import is_remotely_enabled
@@ -32,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 class WickSignalEngine:
     def __init__(self, strategy: BollingerWickBreakevenTrailStrategy | None = None, broker: BinanceFuturesBroker | None = None):
-        self.strategy = strategy or BollingerWickBreakevenTrailStrategy()
+        self.strategy = strategy or BollingerWickVolumeStochRsiConfirmStrategy()
         self.broker = broker  # 지연 생성 (테스트에서는 fake broker 주입)
 
     def run_once(self) -> int:

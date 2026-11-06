@@ -12,8 +12,21 @@ import pytest
 from app.broker import EntryResult
 from app.config import settings
 from app.db import SessionLocal, TradeRecord
+from app.lab_strategies import BollingerWickVolumeStochRsiConfirmStrategy
 import app.wick_signal_engine as wick_engine_module
 from app.wick_signal_engine import WICK_STRATEGY_KEY, WickSignalEngine
+
+
+def test_default_strategy_is_tuned_volume_stochrsi_confirm():
+    """2026-11 파라미터 스윕 검증 후 실계좌 기본 전략으로 채택된
+    거래량+StochRSI(15/85) 동시확인 버전이 기본값이어야 한다 - 아무것도
+    안 넘기고 WickSignalEngine()만 만들었을 때도 이게 쓰여야 실제 매매에
+    반영된다."""
+    engine = WickSignalEngine()
+    assert isinstance(engine.strategy, BollingerWickVolumeStochRsiConfirmStrategy)
+    assert engine.strategy.volume_mult == 1.2
+    assert engine.strategy.stochrsi_oversold == 15.0
+    assert engine.strategy.stochrsi_overbought == 85.0
 
 
 def make_df(n=30):

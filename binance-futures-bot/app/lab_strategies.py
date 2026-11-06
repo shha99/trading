@@ -949,28 +949,40 @@ class BollingerWickVolumeStochRsiConfirmStrategy(BollingerWickBreakevenTrailStra
     합친 조합 — 둘 다(터치 캔들 거래량 확인 **그리고** StochRSI 이중확인)를
     동시에 만족해야 진입한다.
 
-    두 필터를 각각 따로 비교 백테스트했을 때(2026-03~2026-11, 4조합) 둘 다
-    단독으로 baseline보다 거래당 평균·총수익이 개선됐고(거래량확인: 검증구간
-    +0.0233%→+0.0371%, StochRSI확인: +0.0233%→+0.0290%), 서로 상관관계가
-    0.90으로 겹치는 부분이 크긴 하지만 완전히 같은 신호는 아니라서(상관계수
-    1.0이 아님) 같이 적용하면 "둘 다 동의하는 더 엄선된 신호"로 추가 개선
-    여지가 있는지 확인하기 위한 조합이다.
+    **2026-11, 파라미터 스윕 포함 검증 완료 → 실계좌 wick 엔진 기본 전략으로
+    채택됨** (`app/wick_signal_engine.py`). 검증 과정(2026-03~2026-11, 4조합
+    BTC/ETH×15m/5m, 학습 3~8월/검증 9~11월 분리):
 
-    ⚠️ 백테스트로 비교 검증하기 전까지는 실계좌 자동매매에 연결하면 안 됨."""
+    - 두 필터를 각각 따로 비교했을 때 둘 다 baseline보다 개선(검증구간 거래당
+      평균: baseline +0.0233% → 거래량확인 단독 +0.0371%, StochRSI확인 단독
+      +0.0290%), 상관관계는 0.90으로 겹치지만 완전히 같은 신호는 아님
+    - 합쳤을 때(거래량 1.2배+StochRSI 20/80) 단독보다도 더 개선: 검증구간
+      +0.0437%, 승률 64.0%(1,681건) - 같은 방식(4조합 신뢰도 비례 배분,
+      조합당 배분액 전액 베팅)으로 9/1~현재 복기 시 baseline +18.18% →
+      **+24.62%**
+    - 파라미터 스윕(거래량배수 1.0~2.0×, StochRSI 문턱 15/85~30/70) 결과
+      **StochRSI 문턱은 좁힐수록(15/85) 꾸준히 개선**되는 반면, 거래량배수는
+      **1.3배를 넘기면 학습구간은 계속 좋아지는데 검증구간은 오히려
+      나빠지는 과최적화 신호**가 나타나 1.2배 근처를 유지 - 최종
+      거래량 1.2배 + StochRSI 15/85로 검증구간 +0.0449%, 같은 방식 복기 시
+      **+24.96%**(주당 환산 약 +2.39%)
+
+    ⚠️ 그래도 과거 데이터 기준 추정치라는 한계, 펀딩비/슬리피지 미반영 등은
+    baseline과 동일하게 적용된다 - README "실계좌 자동매매" 섹션 참고."""
 
     key = "bollinger_wick_volume_stochrsi_confirm"
-    label = "볼린저 꼬리터치 (거래량+StochRSI 동시확인) - 실험용"
+    label = "볼린저 꼬리터치 (거래량+StochRSI 동시확인) - 실계좌 기본 전략"
     category = "데이트레이딩 (평균회귀 + 본전 이동 트레일링, 변형)"
     description = (
-        "검증된 bollinger_wick_breakeven_trail과 완전히 동일 + 터치 캔들 거래량 확인과 "
-        "StochRSI 이중확인을 동시에 만족할 때만 진입 - 아직 미검증"
+        "검증된 bollinger_wick_breakeven_trail과 진입조건 동일 + 터치 캔들 거래량 확인과 "
+        "StochRSI 이중확인(15/85)을 동시에 만족할 때만 진입 - 2026-11 검증 완료, 실계좌 기본값"
     )
 
     def __init__(
         self, *args,
         volume_avg_period: int = 20, volume_mult: float = 1.2,
         stochrsi_period: int = 14, stochrsi_fastk: int = 5, stochrsi_fastd: int = 3,
-        stochrsi_oversold: float = 20.0, stochrsi_overbought: float = 80.0,
+        stochrsi_oversold: float = 15.0, stochrsi_overbought: float = 85.0,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
