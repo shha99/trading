@@ -944,6 +944,74 @@ class BollingerWickStochRsiConfirmStrategy(BollingerWickBreakevenTrailStrategy):
         return e
 
 
+class BollingerWickVolumeStochRsiConfirmStrategy(BollingerWickBreakevenTrailStrategy):
+    """`BollingerWickVolumeConfirmStrategy` + `BollingerWickStochRsiConfirmStrategy`를
+    합친 조합 — 둘 다(터치 캔들 거래량 확인 **그리고** StochRSI 이중확인)를
+    동시에 만족해야 진입한다.
+
+    두 필터를 각각 따로 비교 백테스트했을 때(2026-03~2026-11, 4조합) 둘 다
+    단독으로 baseline보다 거래당 평균·총수익이 개선됐고(거래량확인: 검증구간
+    +0.0233%→+0.0371%, StochRSI확인: +0.0233%→+0.0290%), 서로 상관관계가
+    0.90으로 겹치는 부분이 크긴 하지만 완전히 같은 신호는 아니라서(상관계수
+    1.0이 아님) 같이 적용하면 "둘 다 동의하는 더 엄선된 신호"로 추가 개선
+    여지가 있는지 확인하기 위한 조합이다.
+
+    ⚠️ 백테스트로 비교 검증하기 전까지는 실계좌 자동매매에 연결하면 안 됨."""
+
+    key = "bollinger_wick_volume_stochrsi_confirm"
+    label = "볼린저 꼬리터치 (거래량+StochRSI 동시확인) - 실험용"
+    category = "데이트레이딩 (평균회귀 + 본전 이동 트레일링, 변형)"
+    description = (
+        "검증된 bollinger_wick_breakeven_trail과 완전히 동일 + 터치 캔들 거래량 확인과 "
+        "StochRSI 이중확인을 동시에 만족할 때만 진입 - 아직 미검증"
+    )
+
+    def __init__(
+        self, *args,
+        volume_avg_period: int = 20, volume_mult: float = 1.2,
+        stochrsi_period: int = 14, stochrsi_fastk: int = 5, stochrsi_fastd: int = 3,
+        stochrsi_oversold: float = 20.0, stochrsi_overbought: float = 80.0,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.volume_avg_period = volume_avg_period
+        self.volume_mult = volume_mult
+        self.stochrsi_period = stochrsi_period
+        self.stochrsi_fastk = stochrsi_fastk
+        self.stochrsi_fastd = stochrsi_fastd
+        self.stochrsi_oversold = stochrsi_oversold
+        self.stochrsi_overbought = stochrsi_overbought
+        self.min_bars = max(self.min_bars, volume_avg_period + 5)
+
+    def precompute(self, df: pd.DataFrame) -> dict:
+        ctx = super().precompute(df)
+        ctx["volume"] = df["Volume"].to_numpy()
+        ctx["avg_volume"] = df["Volume"].rolling(self.volume_avg_period).mean().to_numpy()
+        close = df["Close"].to_numpy(dtype=float)
+        fastk, _ = talib.STOCHRSI(
+            close, timeperiod=self.stochrsi_period,
+            fastk_period=self.stochrsi_fastk, fastd_period=self.stochrsi_fastd,
+        )
+        ctx["stochrsi_k"] = fastk
+        return ctx
+
+    def check_entry(self, k: int, ctx: dict) -> dict | None:
+        e = super().check_entry(k, ctx)
+        if e is None:
+            return None
+        avg_vol = ctx["avg_volume"][k]
+        if np.isnan(avg_vol) or avg_vol <= 0 or ctx["volume"][k] < avg_vol * self.volume_mult:
+            return None
+        k_val = ctx["stochrsi_k"][k]
+        if np.isnan(k_val):
+            return None
+        if e["direction"] == "LONG" and k_val > self.stochrsi_oversold:
+            return None
+        if e["direction"] == "SHORT" and k_val < self.stochrsi_overbought:
+            return None
+        return e
+
+
 class BollingerWickOverextensionStrategy(BollingerWickBreakevenTrailStrategy):
     """`BollingerWickBreakevenTrailStrategy` + "밴드 중심선(SMA)에서부터 ATR
     기준으로 충분히 멀리 떨어진 터치만" 통과시키는 필터. 밴드가 좁아져 있을
