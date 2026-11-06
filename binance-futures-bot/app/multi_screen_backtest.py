@@ -39,7 +39,7 @@ import pandas as pd
 from .config import DATA_DIR, settings
 from .history import fetch_extended_history
 from .lab_backtest import simulate_lab
-from .lab_strategies import BollingerWickBreakevenTrailStrategy
+from .lab_strategies import BollingerWickVolumeStochRsiConfirmStrategy
 from .validated_lab_stats_builder import bars_needed_for_span
 
 logger = logging.getLogger(__name__)
@@ -57,7 +57,7 @@ def build_merged_trades() -> dict:
     """4개 조합을 각각 통째로 백테스트해서 combo 태그를 붙여 진입시각순으로
     합친 원장을 `MULTI_SCREEN_TRADES_FILE`에 저장한다. 실행에 몇 분 걸릴 수
     있다(4개 조합 각각 3년 이상 데이터를 페이지네이션으로 받아옴)."""
-    strategy = BollingerWickBreakevenTrailStrategy()
+    strategy = BollingerWickVolumeStochRsiConfirmStrategy()
     fee_pct = settings.taker_fee_pct_roundtrip
     all_trades: list[dict] = []
     per_combo_meta: dict[str, dict] = {}

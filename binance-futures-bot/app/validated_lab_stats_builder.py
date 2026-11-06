@@ -27,7 +27,7 @@ import pandas as pd
 from app.config import DATA_DIR, settings
 from app.history import fetch_extended_history, interval_to_timedelta
 from app.lab_backtest import simulate_lab, summarize_lab
-from app.lab_strategies import BigCandleBollingerConfluenceStrategy, BollingerWickBreakevenTrailStrategy, LabStrategy
+from app.lab_strategies import BigCandleBollingerConfluenceStrategy, BollingerWickVolumeStochRsiConfirmStrategy, LabStrategy
 from app.stats_builder import train_end_ts, validation_end_ts
 
 logger = logging.getLogger(__name__)
@@ -99,7 +99,7 @@ def _default_specs() -> list[dict]:
             "fee_pct": fee_pct,
         },
         {
-            "strategy": BollingerWickBreakevenTrailStrategy(),
+            "strategy": BollingerWickVolumeStochRsiConfirmStrategy(),
             "symbols": ["BTCUSDT", "ETHUSDT"],
             "timeframes": ["15m", "5m"],
             "fee_pct": fee_pct,

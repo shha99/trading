@@ -37,10 +37,14 @@ from .config import settings
 from .db import PaperAccount, PaperTrade, SessionLocal, init_db
 from .history import fetch_klines, is_candle_closed
 from .lab_backtest import simulate_lab
-from .lab_strategies import BollingerWickBreakevenTrailStrategy
+from .lab_strategies import BollingerWickBreakevenTrailStrategy, BollingerWickVolumeStochRsiConfirmStrategy
 
 logger = logging.getLogger(__name__)
 
+# 모의투자 기록의 DB 라벨은 그대로 둔다(청산 로직이 완전히 동일한 base
+# 클래스에서 상속되므로, 아래 신호 생성용 전략이 bollinger_wick_breakeven_trail
+# 이든 그 강화판이든 기존 기록/조회 코드에 영향 없음 - wick_signal_engine.py의
+# WICK_STRATEGY_KEY와 같은 이유).
 PAPER_STRATEGY_KEY = BollingerWickBreakevenTrailStrategy.key
 PAPER_SYMBOL = "BTCUSDT"
 PAPER_TIMEFRAME = "15m"
@@ -131,7 +135,7 @@ def run_once() -> None:
     if not is_candle_closed(df, PAPER_TIMEFRAME):
         df = df.iloc[:-1]  # 진행 중인 마지막 봉은 버리고 완결봉만 사용
 
-    strategy = BollingerWickBreakevenTrailStrategy()
+    strategy = BollingerWickVolumeStochRsiConfirmStrategy()
     if len(df) < strategy.min_bars:
         return
 

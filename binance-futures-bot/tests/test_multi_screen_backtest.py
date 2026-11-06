@@ -130,7 +130,7 @@ def test_build_merged_trades_tags_combo_and_sorts_chronologically(monkeypatch, t
     assert all(t["combo"] in {"BTCUSDT 15m", "BTCUSDT 5m", "ETHUSDT 15m", "ETHUSDT 5m"} for t in trades)
     entry_times = [pd.Timestamp(t["entry_time"]) for t in trades]
     assert entry_times == sorted(entry_times)
-    assert result["_meta"]["strategy"] == "bollinger_wick_breakeven_trail"
+    assert result["_meta"]["strategy"] == "bollinger_wick_volume_stochrsi_confirm"
 
 
 def test_build_merged_trades_handles_missing_combo_data(monkeypatch, tmp_path):

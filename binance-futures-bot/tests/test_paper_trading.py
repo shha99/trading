@@ -130,9 +130,9 @@ def test_open_position_not_recorded_as_trade_until_closed(patch_closed_candles):
     full_df = random_walk_df(n=3000, seed=9)
 
     from app.lab_backtest import simulate_lab
-    from app.lab_strategies import BollingerWickBreakevenTrailStrategy
+    from app.lab_strategies import BollingerWickVolumeStochRsiConfirmStrategy
 
-    all_trades = simulate_lab(full_df, BollingerWickBreakevenTrailStrategy())
+    all_trades = simulate_lab(full_df, BollingerWickVolumeStochRsiConfirmStrategy())
     assert len(all_trades) > 1
     # 마지막 거래의 진입 시점보다 살짝 뒤에서 데이터를 끊어, 그 마지막 거래가
     # 아직 청산되지 않은 채로 데이터가 끝나도록 만든다.

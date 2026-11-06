@@ -116,7 +116,7 @@ def test_default_specs_cover_both_promoted_strategies():
     from app.validated_lab_stats_builder import _default_specs
 
     keys = {spec["strategy"].key for spec in _default_specs()}
-    assert keys == {"big_candle_bollinger_confluence", "bollinger_wick_breakeven_trail"}
+    assert keys == {"big_candle_bollinger_confluence", "bollinger_wick_volume_stochrsi_confirm"}
 
 
 def test_default_specs_apply_real_taker_fee(monkeypatch):

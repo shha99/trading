@@ -34,7 +34,7 @@ import pandas as pd
 from .config import DATA_DIR, settings
 from .history import fetch_extended_history, interval_to_timedelta
 from .lab_backtest import simulate_lab
-from .lab_strategies import BollingerWickBreakevenTrailStrategy
+from .lab_strategies import BollingerWickVolumeStochRsiConfirmStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ def _bars_needed(timeframe: str, days: int) -> int:
     return int(span / bar_span) + 50  # 지표 워밍업 여유
 
 
-def _score_combo(symbol: str, timeframe: str, strategy: BollingerWickBreakevenTrailStrategy, fee_pct: float) -> float | None:
+def _score_combo(symbol: str, timeframe: str, strategy: BollingerWickVolumeStochRsiConfirmStrategy, fee_pct: float) -> float | None:
     bars = _bars_needed(timeframe, settings.combo_weights_lookback_days)
     df = fetch_extended_history(symbol, timeframe, bars)
     if df is None or df.empty:
@@ -119,7 +119,7 @@ def compute_reliability_weights(combos: list[tuple[str, str]] | None = None) -> 
         # 조합이 1개 이하면 가중치 개념 자체가 의미 없음(항상 100%)
         return {_combo_key(s, tf): 1.0 for s, tf in combos}
 
-    strategy = BollingerWickBreakevenTrailStrategy()
+    strategy = BollingerWickVolumeStochRsiConfirmStrategy()
     fee_pct = settings.taker_fee_pct_roundtrip
     scores: dict[str, float] = {}
     for symbol, timeframe in combos:
