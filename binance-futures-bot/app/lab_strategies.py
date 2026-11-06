@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import talib
 
 from .custom_indicators import ichimoku
 from .indicators import atr, bollinger_bands, donchian, ema, rsi
@@ -800,6 +801,432 @@ class BollingerWickExtremeMoveRelaxedStrategy(BollingerWickBreakevenTrailStrateg
             "trail_mult": self.trail_mult,
             "breakeven_trail": True,
         }
+
+
+class BollingerWickVolumeConfirmStrategy(BollingerWickBreakevenTrailStrategy):
+    """`BollingerWickBreakevenTrailStrategy` + "터치 캔들의 거래량이 평소보다
+    확실히 많을 때만 진입" 필터. 아이디어: 거래량이 평소 수준인 꼬리 터치는
+    그냥 노이즈성 되돌림일 가능성이 높고, 거래량이 터진 터치는 실제
+    투매/패닉성 매수세가 몰린 "진짜" 과매도/과매수일 가능성이 높다.
+
+    ⚠️ 백테스트로 비교 검증하기 전까지는 실계좌 자동매매에 연결하면 안 됨."""
+
+    key = "bollinger_wick_volume_confirm"
+    label = "볼린저 꼬리터치 (거래량 확인) - 실험용"
+    category = "데이트레이딩 (평균회귀 + 본전 이동 트레일링, 변형)"
+    description = (
+        "검증된 bollinger_wick_breakeven_trail과 완전히 동일 + 터치 캔들 거래량이 "
+        "최근 평균의 N배 이상일 때만 진입 - 아직 미검증"
+    )
+
+    def __init__(self, *args, volume_avg_period: int = 20, volume_mult: float = 1.2, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.volume_avg_period = volume_avg_period
+        self.volume_mult = volume_mult
+        self.min_bars = max(self.min_bars, volume_avg_period + 5)
+
+    def precompute(self, df: pd.DataFrame) -> dict:
+        ctx = super().precompute(df)
+        ctx["volume"] = df["Volume"].to_numpy()
+        ctx["avg_volume"] = df["Volume"].rolling(self.volume_avg_period).mean().to_numpy()
+        return ctx
+
+    def check_entry(self, k: int, ctx: dict) -> dict | None:
+        e = super().check_entry(k, ctx)
+        if e is None:
+            return None
+        avg_vol = ctx["avg_volume"][k]
+        if np.isnan(avg_vol) or avg_vol <= 0:
+            return None
+        if ctx["volume"][k] < avg_vol * self.volume_mult:
+            return None
+        return e
+
+
+class BollingerWickCandlePatternStrategy(BollingerWickBreakevenTrailStrategy):
+    """`BollingerWickBreakevenTrailStrategy` + "터치 캔들 자체가 실제 반전형
+    캔들패턴일 때만 진입" 필터(TA-Lib 패턴 인식 사용). 롱은 망치형/역망치형/
+    상승장악형/샛별형 중 하나, 숏은 유성형/교수형/하락장악형/저녁별형 중
+    하나가 그 봉에서 떠야 통과 — 단순히 "꼬리가 밴드에 닿았다"보다 캔들
+    자체의 반전 신호 품질까지 확인한다는 아이디어.
+
+    ⚠️ 백테스트로 비교 검증하기 전까지는 실계좌 자동매매에 연결하면 안 됨."""
+
+    key = "bollinger_wick_candle_pattern"
+    label = "볼린저 꼬리터치 (반전 캔들패턴 확인) - 실험용"
+    category = "데이트레이딩 (평균회귀 + 본전 이동 트레일링, 변형)"
+    description = (
+        "검증된 bollinger_wick_breakeven_trail과 완전히 동일 + 터치 캔들이 "
+        "실제 반전형 캔들패턴(망치/장악형/별형 등)일 때만 진입 - 아직 미검증"
+    )
+
+    def precompute(self, df: pd.DataFrame) -> dict:
+        ctx = super().precompute(df)
+        o = df["Open"].to_numpy(dtype=float)
+        h = df["High"].to_numpy(dtype=float)
+        lo = df["Low"].to_numpy(dtype=float)
+        c = df["Close"].to_numpy(dtype=float)
+        bullish = (
+            (talib.CDLHAMMER(o, h, lo, c) > 0)
+            | (talib.CDLINVERTEDHAMMER(o, h, lo, c) > 0)
+            | (talib.CDLENGULFING(o, h, lo, c) > 0)
+            | (talib.CDLMORNINGSTAR(o, h, lo, c) > 0)
+        )
+        bearish = (
+            (talib.CDLSHOOTINGSTAR(o, h, lo, c) < 0)
+            | (talib.CDLHANGINGMAN(o, h, lo, c) < 0)
+            | (talib.CDLENGULFING(o, h, lo, c) < 0)
+            | (talib.CDLEVENINGSTAR(o, h, lo, c) < 0)
+        )
+        ctx["bullish_pattern"] = bullish
+        ctx["bearish_pattern"] = bearish
+        return ctx
+
+    def check_entry(self, k: int, ctx: dict) -> dict | None:
+        e = super().check_entry(k, ctx)
+        if e is None:
+            return None
+        if e["direction"] == "LONG" and not ctx["bullish_pattern"][k]:
+            return None
+        if e["direction"] == "SHORT" and not ctx["bearish_pattern"][k]:
+            return None
+        return e
+
+
+class BollingerWickStochRsiConfirmStrategy(BollingerWickBreakevenTrailStrategy):
+    """`BollingerWickBreakevenTrailStrategy` + "StochRSI까지 같은 방향 극단일
+    때만 진입" 이중 확인 필터. RSI(14)보다 StochRSI가 더 민감하게 움직이는
+    지표라, 둘 다 극단이어야 통과시키면 RSI 단독보다 더 좁고 확실한 구간만
+    남을 것이라는 아이디어.
+
+    ⚠️ 백테스트로 비교 검증하기 전까지는 실계좌 자동매매에 연결하면 안 됨."""
+
+    key = "bollinger_wick_stochrsi_confirm"
+    label = "볼린저 꼬리터치 (StochRSI 이중확인) - 실험용"
+    category = "데이트레이딩 (평균회귀 + 본전 이동 트레일링, 변형)"
+    description = (
+        "검증된 bollinger_wick_breakeven_trail과 완전히 동일 + StochRSI까지 "
+        "같은 방향 과매도/과매수일 때만 진입 - 아직 미검증"
+    )
+
+    def __init__(
+        self, *args, stochrsi_period: int = 14, stochrsi_fastk: int = 5, stochrsi_fastd: int = 3,
+        stochrsi_oversold: float = 20.0, stochrsi_overbought: float = 80.0, **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.stochrsi_period = stochrsi_period
+        self.stochrsi_fastk = stochrsi_fastk
+        self.stochrsi_fastd = stochrsi_fastd
+        self.stochrsi_oversold = stochrsi_oversold
+        self.stochrsi_overbought = stochrsi_overbought
+
+    def precompute(self, df: pd.DataFrame) -> dict:
+        ctx = super().precompute(df)
+        close = df["Close"].to_numpy(dtype=float)
+        fastk, _ = talib.STOCHRSI(
+            close, timeperiod=self.stochrsi_period,
+            fastk_period=self.stochrsi_fastk, fastd_period=self.stochrsi_fastd,
+        )
+        ctx["stochrsi_k"] = fastk
+        return ctx
+
+    def check_entry(self, k: int, ctx: dict) -> dict | None:
+        e = super().check_entry(k, ctx)
+        if e is None:
+            return None
+        k_val = ctx["stochrsi_k"][k]
+        if np.isnan(k_val):
+            return None
+        if e["direction"] == "LONG" and k_val > self.stochrsi_oversold:
+            return None
+        if e["direction"] == "SHORT" and k_val < self.stochrsi_overbought:
+            return None
+        return e
+
+
+class BollingerWickOverextensionStrategy(BollingerWickBreakevenTrailStrategy):
+    """`BollingerWickBreakevenTrailStrategy` + "밴드 중심선(SMA)에서부터 ATR
+    기준으로 충분히 멀리 떨어진 터치만" 통과시키는 필터. 밴드가 좁아져 있을
+    때는 중심선 바로 근처만 벗어나도 "터치"가 되는데, 이런 얕은 터치는
+    진짜 과매도/과매수가 아닐 수 있다 — 중심선으로부터의 거리(ATR 배수)로
+    "얼마나 멀리 밀렸는지"를 직접 확인한다.
+
+    ⚠️ 백테스트로 비교 검증하기 전까지는 실계좌 자동매매에 연결하면 안 됨."""
+
+    key = "bollinger_wick_overextension"
+    label = "볼린저 꼬리터치 (중심선 이격도 확인) - 실험용"
+    category = "데이트레이딩 (평균회귀 + 본전 이동 트레일링, 변형)"
+    description = (
+        "검증된 bollinger_wick_breakeven_trail과 완전히 동일 + 진입가가 밴드 "
+        "중심선(SMA)에서 ATR 기준 N배 이상 떨어져 있을 때만 진입 - 아직 미검증"
+    )
+
+    def __init__(self, *args, min_atr_distance: float = 1.5, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.min_atr_distance = min_atr_distance
+
+    def precompute(self, df: pd.DataFrame) -> dict:
+        ctx = super().precompute(df)
+        bb = bollinger_bands(df, self._touch.bb_period, self._touch.bb_std)
+        ctx["bb_middle"] = bb["middle"].to_numpy()
+        return ctx
+
+    def check_entry(self, k: int, ctx: dict) -> dict | None:
+        e = super().check_entry(k, ctx)
+        if e is None:
+            return None
+        mid = ctx["bb_middle"][k]
+        atr_now = ctx["atr"][k]
+        if np.isnan(mid) or np.isnan(atr_now) or atr_now <= 0:
+            return None
+        if abs(e["entry_price"] - mid) / atr_now < self.min_atr_distance:
+            return None
+        return e
+
+
+def _higher_timeframe_rsi(df: pd.DataFrame, group_size: int, rsi_period: int) -> np.ndarray:
+    """`group_size`개 봉씩 묶어 상위 시간대 "proxy" 봉을 만들고 그 종가로
+    RSI를 계산해 원래 df 인덱스 길이로 매핑한다.
+
+    미래 데이터 유출 방지: 상위 봉 그룹 G가 "완결"되기 전까지는 그 그룹에
+    속한 어떤 하위 봉도 그룹 G의 RSI를 알 수 없으므로, 각 하위 봉에는 항상
+    "하나 이전(G-1)에 완결된" 상위 봉의 RSI만 매핑한다(`shift(1)`)."""
+    n = len(df)
+    group_id = np.arange(n) // group_size
+    higher_close = df["Close"].groupby(group_id).last()
+    higher_rsi = rsi(higher_close, rsi_period).shift(1)
+    return higher_rsi.reindex(group_id).to_numpy()
+
+
+class BollingerWickHigherTimeframeRsiStrategy(BollingerWickBreakevenTrailStrategy):
+    """`BollingerWickBreakevenTrailStrategy` + "상위 시간대(proxy) RSI도 같은
+    방향으로 과매도/과매수일 때만 진입" 필터. 200EMA 추세 필터(이미 시도해봤고
+    효과 없었음 - 역추세 되돌림 자체를 걸러내 버림)와는 다르게, 추세 방향은
+    전혀 보지 않고 "더 큰 그림에서도 지금이 극단 구간인지"만 확인한다 - 예를
+    들어 15분봉이 과매도인데 상위 시간대는 전혀 과열 안 된 상태면 그냥 그
+    15분봉만의 잡음일 수 있다는 아이디어.
+
+    `group_size`개 봉을 묶어 상위 시간대를 흉내낸다(15분봉 전략이면 기본값
+    4 = 1시간봉에 해당, 5분봉 전략이면 4 = 20분 단위 - 정확히 표준
+    시간대 이름에 맞아떨어지진 않지만 "몇 배 더 큰 그림"이라는 목적은 같다).
+
+    ⚠️ 백테스트로 비교 검증하기 전까지는 실계좌 자동매매에 연결하면 안 됨."""
+
+    key = "bollinger_wick_higher_tf_rsi"
+    label = "볼린저 꼬리터치 (상위시간대 RSI 확인) - 실험용"
+    category = "데이트레이딩 (평균회귀 + 본전 이동 트레일링, 변형)"
+    description = (
+        "검증된 bollinger_wick_breakeven_trail과 완전히 동일 + 상위 시간대(proxy) "
+        "RSI도 같은 방향 과매도/과매수일 때만 진입 - 아직 미검증"
+    )
+
+    def __init__(
+        self, *args, higher_tf_group_size: int = 4,
+        higher_tf_oversold: float = 40.0, higher_tf_overbought: float = 60.0, **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.higher_tf_group_size = higher_tf_group_size
+        self.higher_tf_oversold = higher_tf_oversold
+        self.higher_tf_overbought = higher_tf_overbought
+        self.min_bars = max(self.min_bars, self.higher_tf_group_size * (self.rsi_period + 2))
+
+    def precompute(self, df: pd.DataFrame) -> dict:
+        ctx = super().precompute(df)
+        ctx["higher_tf_rsi"] = _higher_timeframe_rsi(df, self.higher_tf_group_size, self.rsi_period)
+        return ctx
+
+    def check_entry(self, k: int, ctx: dict) -> dict | None:
+        e = super().check_entry(k, ctx)
+        if e is None:
+            return None
+        higher_rsi = ctx["higher_tf_rsi"][k]
+        if np.isnan(higher_rsi):
+            return None
+        if e["direction"] == "LONG" and higher_rsi > self.higher_tf_oversold:
+            return None
+        if e["direction"] == "SHORT" and higher_rsi < self.higher_tf_overbought:
+            return None
+        return e
+
+
+class BollingerWickLowAdxFilterStrategy(BollingerWickBreakevenTrailStrategy):
+    """`BollingerWickBreakevenTrailStrategy` + "ADX(추세 강도)가 너무 높지
+    않을 때만 진입" 필터. 평균회귀 전략은 박스권/횡보 구간에 잘 맞고, 강한
+    추세 구간에서는 역추세 진입이 추세에 그대로 밀릴 위험이 커진다 - ADX가
+    낮은(약한 추세/횡보) 구간으로만 진입을 제한한다는 아이디어.
+
+    ⚠️ 백테스트로 비교 검증하기 전까지는 실계좌 자동매매에 연결하면 안 됨."""
+
+    key = "bollinger_wick_low_adx_filter"
+    label = "볼린저 꼬리터치 (낮은 ADX 확인) - 실험용"
+    category = "데이트레이딩 (평균회귀 + 본전 이동 트레일링, 변형)"
+    description = (
+        "검증된 bollinger_wick_breakeven_trail과 완전히 동일 + ADX가 N 이하(약한 "
+        "추세/횡보)일 때만 진입 - 아직 미검증"
+    )
+
+    def __init__(self, *args, adx_period: int = 14, max_adx: float = 25.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.adx_period = adx_period
+        self.max_adx = max_adx
+        self.min_bars = max(self.min_bars, adx_period * 2 + 5)
+
+    def precompute(self, df: pd.DataFrame) -> dict:
+        ctx = super().precompute(df)
+        h = df["High"].to_numpy(dtype=float)
+        lo = df["Low"].to_numpy(dtype=float)
+        c = df["Close"].to_numpy(dtype=float)
+        ctx["adx"] = talib.ADX(h, lo, c, timeperiod=self.adx_period)
+        return ctx
+
+    def check_entry(self, k: int, ctx: dict) -> dict | None:
+        e = super().check_entry(k, ctx)
+        if e is None:
+            return None
+        adx_now = ctx["adx"][k]
+        if np.isnan(adx_now) or adx_now > self.max_adx:
+            return None
+        return e
+
+
+class BollingerWickPartialScaleOutStrategy(BollingerWickBreakevenTrailStrategy):
+    """`BollingerWickBreakevenTrailStrategy`와 진입 조건은 완전히 동일하고,
+    청산만 다르다: 본전 이동 트리거(+`breakeven_at_mult`×ATR)에 처음 닿는
+    순간 포지션의 `scale_out_fraction`(기본 절반)을 그 가격에 바로 확정
+    청산하고, 나머지는 원래처럼 트레일링을 계속 이어간다.
+
+    아이디어: 지금 방식은 본전 이동 후 가격이 바로 반전해 트레일 스탑이
+    거의 본전 근처에서 체결되면("왕복 손실") 그 거래가 사실상 수익 0에
+    가깝게 끝난다. 절반을 트리거 가격에 먼저 챙겨두면, 나머지 절반이
+    본전 근처에서 끝나더라도 전체 거래는 최소 "챙긴 절반만큼"은 플러스로
+    남는다 - 반대로 가격이 계속 유리하게 가면 챙기지 않은 절반이 평소처럼
+    더 크게 먹어준다.
+
+    이 변형은 체결 로직 자체가 다르므로(분할 체결), `app.lab_backtest.simulate_lab`이
+    아니라 전용 백테스트 함수 `simulate_partial_scaleout()`(이 파일 하단)으로
+    돌려야 한다 - 공용 백테스트 엔진은 건드리지 않았다(다른 모든 전략에
+    영향 없음을 보장하기 위함).
+
+    ⚠️ 백테스트로 비교 검증하기 전까지는 실계좌 자동매매에 연결하면 안 됨."""
+
+    key = "bollinger_wick_partial_scaleout"
+    label = "볼린저 꼬리터치 (본전이동 시 절반 익절) - 실험용"
+    category = "데이트레이딩 (평균회귀 + 본전 이동 트레일링, 변형)"
+    description = (
+        "검증된 bollinger_wick_breakeven_trail과 진입 조건은 동일 + 본전 이동 "
+        "트리거에 닿으면 포지션 절반을 그 자리에서 확정 청산 - 아직 미검증. "
+        "simulate_lab()이 아니라 simulate_partial_scaleout()으로 백테스트할 것"
+    )
+
+    def __init__(self, *args, scale_out_fraction: float = 0.5, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.scale_out_fraction = scale_out_fraction
+
+
+def _walk_forward_partial_scaleout(
+    ctx: dict, entry_idx: int, entry: dict, n: int,
+) -> tuple[str, float, int, bool, float | None]:
+    """`app.lab_backtest._walk_forward_breakeven_trail()`과 완전히 같은 본전
+    이동+트레일링 로직이되, 본전 이동 트리거에 처음 닿는 순간을 별도로
+    기록해서 "그 가격에 절반을 먼저 확정 청산했다"고 취급할 수 있게 한다.
+
+    반환: (exit_reason, final_exit_price, exit_idx, scaled_out_여부, 트리거체결가)
+    공용 엔진(app/lab_backtest.py)은 전혀 건드리지 않고 이 실험 하나만을
+    위해 별도로 복제해둔 함수다."""
+    high, low, close, atr_values = ctx["high"], ctx["low"], ctx["close"], ctx["atr"]
+    direction = entry["direction"]
+    entry_price = entry["entry_price"]
+    stop_price = entry["stop_price"]
+    trigger_price = entry["breakeven_trigger_price"]
+    trail_mult = entry["trail_mult"]
+    moved_to_breakeven = False
+    scaled_out = False
+    scale_out_price: float | None = None
+    extreme = high[entry_idx] if direction == "LONG" else low[entry_idx]
+
+    for j in range(entry_idx + 1, n):
+        if direction == "LONG":
+            extreme = max(extreme, high[j])
+            if not moved_to_breakeven and high[j] >= trigger_price:
+                moved_to_breakeven = True
+                scaled_out = True
+                scale_out_price = trigger_price
+                stop_price = entry_price
+            if moved_to_breakeven:
+                stop_price = max(stop_price, extreme - trail_mult * atr_values[j])
+            if low[j] <= stop_price:
+                return ("TRAIL" if moved_to_breakeven else "SL"), stop_price, j, scaled_out, scale_out_price
+        else:
+            extreme = min(extreme, low[j])
+            if not moved_to_breakeven and low[j] <= trigger_price:
+                moved_to_breakeven = True
+                scaled_out = True
+                scale_out_price = trigger_price
+                stop_price = entry_price
+            if moved_to_breakeven:
+                stop_price = min(stop_price, extreme + trail_mult * atr_values[j])
+            if high[j] >= stop_price:
+                return ("TRAIL" if moved_to_breakeven else "SL"), stop_price, j, scaled_out, scale_out_price
+
+    return "TIME", float(close[-1]), n - 1, scaled_out, scale_out_price
+
+
+def simulate_partial_scaleout(
+    df: pd.DataFrame, strategy: BollingerWickPartialScaleOutStrategy, fee_pct: float = 0.0,
+) -> list[dict]:
+    """`BollingerWickPartialScaleOutStrategy` 전용 백테스트 - `app.lab_backtest.simulate_lab()`과
+    같은 진입 탐색 루프를 쓰되, 청산만 위 분할체결 로직으로 대체한다."""
+    n = len(df)
+    if n < strategy.min_bars:
+        return []
+
+    pre = strategy.precompute(df)
+    ctx = {
+        **pre,
+        "close": df["Close"].to_numpy(), "high": df["High"].to_numpy(),
+        "low": df["Low"].to_numpy(), "open_": df["Open"].to_numpy(),
+    }
+    index = df.index
+    fraction = strategy.scale_out_fraction
+
+    trades: list[dict] = []
+    k = strategy.min_bars - 1
+    while k < n:
+        entry = strategy.check_entry(k, ctx)
+        if entry is None:
+            k += 1
+            continue
+
+        exit_reason, exit_price, exit_idx, scaled_out, scale_out_price = _walk_forward_partial_scaleout(
+            ctx, k, entry, n
+        )
+        entry_price = entry["entry_price"]
+        direction = entry["direction"]
+
+        def _pct(price: float) -> float:
+            if direction == "LONG":
+                return (price - entry_price) / entry_price * 100
+            return (entry_price - price) / entry_price * 100
+
+        if scaled_out and scale_out_price is not None:
+            pct = fraction * _pct(scale_out_price) + (1 - fraction) * _pct(exit_price)
+        else:
+            pct = _pct(exit_price)
+
+        trades.append({
+            "entry_time": str(index[k]),
+            "exit_time": str(index[exit_idx]),
+            "direction": direction,
+            "entry_price": round(float(entry_price), 6),
+            "exit_price": round(float(exit_price), 6),
+            "exit_reason": exit_reason,
+            "scaled_out": scaled_out,
+            "pct_return": round(pct - fee_pct, 4),
+            "gross_pct_return": round(pct, 4),
+        })
+        k = max(exit_idx + 1, k + 1)
+
+    return trades
 
 
 def lab_strategies() -> list[LabStrategy]:
