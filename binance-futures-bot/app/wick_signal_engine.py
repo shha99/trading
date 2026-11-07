@@ -85,12 +85,13 @@ class WickSignalEngine:
         return self._maybe_execute(symbol, timeframe, entry, df.index[k].to_pydatetime())
 
     def _maybe_execute(self, symbol: str, timeframe: str, entry: dict, entry_time) -> bool:
+        broker = self.broker or BinanceFuturesBroker()
         if not settings.is_wick_whitelisted(symbol, timeframe):
             return False
         if not is_remotely_enabled("wick"):
             logger.info("원격 제어로 꺼짐 - wick 신규 진입 스킵: %s %s", symbol, timeframe)
             return False
-        if risk.is_kill_switch_active():
+        if risk.is_kill_switch_active(broker):
             logger.warning("일일 손실 한도 도달 - wick 신규 진입 스킵: %s %s", symbol, timeframe)
             return False
         if count_open_positions() >= settings.max_open_positions:
@@ -102,7 +103,6 @@ class WickSignalEngine:
 
         direction = entry["direction"]
         side = "BUY" if direction == "LONG" else "SELL"
-        broker = self.broker or BinanceFuturesBroker()
         session = SessionLocal()
         try:
             if settings.risk_mode == "combo_weighted":

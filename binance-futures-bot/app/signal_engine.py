@@ -72,13 +72,14 @@ class SignalEngine:
 
     def _maybe_execute(self, signal: Signal) -> bool:
         symbol, timeframe = signal.symbol, signal.timeframe
+        broker = self.broker or BinanceFuturesBroker()
 
         if not settings.is_whitelisted(symbol, timeframe):
             return False
         if not is_remotely_enabled("keltner"):
             logger.info("원격 제어로 꺼짐 - 신규 진입 스킵: %s %s", symbol, timeframe)
             return False
-        if risk.is_kill_switch_active():
+        if risk.is_kill_switch_active(broker):
             logger.warning("일일 손실 한도 도달 - 신규 진입 스킵: %s %s", symbol, timeframe)
             return False
         if count_open_positions() >= settings.max_open_positions:
@@ -88,7 +89,6 @@ class SignalEngine:
             logger.info("이미 열린 포지션 존재 - 중복 진입 스킵: %s %s", symbol, timeframe)
             return False
 
-        broker = self.broker or BinanceFuturesBroker()
         session = SessionLocal()
         try:
             try:

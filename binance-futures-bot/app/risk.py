@@ -1,9 +1,13 @@
 """일일 손실 한도 킬스위치 + 거래당 리스크 금액(USDT) 계산.
 
-킬스위치: 당일(UTC) 청산된 거래의 실현손익 합계가 DAILY_LOSS_LIMIT_USDT를
-넘는 손실이면, 신규 진입만 차단한다 (이미 걸려있는 SL/TP 주문은 거래소에
+킬스위치: 당일(UTC) 청산된 거래의 실현손익 합계가 일일 한도를 넘는
+손실이면, 신규 진입만 차단한다 (이미 걸려있는 SL/TP 주문은 거래소에
 그대로 남아 계속 보호 역할을 하므로 건드리지 않는다). 다음날(UTC 자정)이
 되면 자동으로 다시 풀린다.
+
+한도는 두 방식 중 하나다: `DAILY_LOSS_LIMIT_USDT`(기본, 고정 금액) 또는
+`DAILY_LOSS_LIMIT_PCT`(정률제, 0보다 크면 우선 적용 - 신규 진입 시도마다
+가용잔고를 다시 조회해 "잔고의 N%"를 그 순간의 한도로 쓴다).
 """
 from __future__ import annotations
 
@@ -37,11 +41,40 @@ def todays_realized_pnl_usdt() -> float:
         session.close()
 
 
-def is_kill_switch_active() -> bool:
-    """오늘 실현손실이 한도를 넘었으면 True (신규 진입 차단 신호)."""
-    if settings.daily_loss_limit_usdt <= 0:
+def _resolve_daily_loss_limit_usdt(broker) -> float:
+    """정률제(`DAILY_LOSS_LIMIT_PCT`>0)면 "지금 가용잔고의 N%"를 매번
+    새로 계산해서 돌려주고, 아니면 고정값(`DAILY_LOSS_LIMIT_USDT`)을
+    그대로 돌려준다. 정률제인데 broker가 없거나 잔고 조회가 실패/0 이하면
+    안전하게 고정값으로 폴백한다(RISK_MODE=percent_balance와 동일한 철학)."""
+    if settings.daily_loss_limit_pct <= 0:
+        return settings.daily_loss_limit_usdt
+
+    if broker is None:
+        logger.warning("정률제 일일 손실 한도인데 broker가 없음 - 고정 한도(DAILY_LOSS_LIMIT_USDT)로 폴백")
+        return settings.daily_loss_limit_usdt
+
+    try:
+        balance = broker.get_available_balance_usdt()
+    except Exception:
+        logger.exception("계좌 잔고 조회 실패 - 고정 일일 손실 한도로 폴백")
+        return settings.daily_loss_limit_usdt
+
+    if not balance or balance <= 0:
+        logger.warning("계좌 가용 잔고가 0 이하(%s) - 고정 일일 손실 한도로 폴백", balance)
+        return settings.daily_loss_limit_usdt
+
+    return balance * settings.daily_loss_limit_pct / 100.0
+
+
+def is_kill_switch_active(broker=None) -> bool:
+    """오늘 실현손실이 한도를 넘었으면 True (신규 진입 차단 신호).
+
+    `broker`는 정률제(`DAILY_LOSS_LIMIT_PCT`) 한도를 계산할 때만 쓰인다 -
+    고정 금액제(기본값)에서는 안 넘겨도 된다."""
+    limit = _resolve_daily_loss_limit_usdt(broker)
+    if limit <= 0:
         return False  # 0 이하로 설정하면 킬스위치 비활성 취급
-    return todays_realized_pnl_usdt() <= -abs(settings.daily_loss_limit_usdt)
+    return todays_realized_pnl_usdt() <= -abs(limit)
 
 
 def compute_risk_usdt(broker) -> float:

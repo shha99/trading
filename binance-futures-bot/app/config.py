@@ -104,6 +104,14 @@ class Settings:
     leverage: int = field(default_factory=lambda: int(os.getenv("LEVERAGE", "1")))
     max_open_positions: int = field(default_factory=lambda: int(os.getenv("MAX_OPEN_POSITIONS", "3")))
     daily_loss_limit_usdt: float = field(default_factory=lambda: float(os.getenv("DAILY_LOSS_LIMIT_USDT", "50")))
+    # 일일 손실 한도를 고정 금액이 아니라 "현재 가용잔고의 N%"로 쓰고 싶으면
+    # 설정(정률제, 0보다 크면 DAILY_LOSS_LIMIT_USDT보다 우선한다) - 매번 신규
+    # 진입 시도 직전마다 잔고를 다시 조회해서 한도를 계산한다(RISK_MODE=
+    # percent_balance와 같은 방식). 잔고 조회 실패/0 이하면 DAILY_LOSS_LIMIT_USDT
+    # 고정값으로 안전하게 폴백한다 (app/risk.py:is_kill_switch_active).
+    daily_loss_limit_pct: float = field(
+        default_factory=lambda: float(os.getenv("DAILY_LOSS_LIMIT_PCT", "0"))
+    )
 
     # --- 원격 킬스위치 (선택, 기본 꺼짐) ---
     # 실제 매매가 도는 서버(예: Oracle VM)에서, 대시보드가 떠 있는 주소를

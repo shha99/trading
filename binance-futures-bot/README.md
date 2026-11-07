@@ -448,6 +448,12 @@ RISK_PERCENT_MAX_USDT=100                 # 다른 모드와 공유하는 안전
 감당 가능한 수준인지 확인한 뒤에만 전환할 것** — 처음부터 이 모드로
 시작하지 말 것.
 
+변동폭이 큰 모드일수록 일일 손실 한도도 고정 금액보다 **정률제
+(`DAILY_LOSS_LIMIT_PCT`)**로 맞춰두는 걸 권장한다 — 잔고가 커지거나
+작아져도 "하루 최대 손실 = 그날 잔고의 N%"로 항상 같은 비율로 방어된다
+(`DAILY_LOSS_LIMIT_USDT`는 0보다 큰 `DAILY_LOSS_LIMIT_PCT`가 있으면 폴백
+전용 값으로만 남는다 - 안전 기본값 표 참고).
+
 ### ⚠️ 반드시 지킬 순서
 
 1. **테스트넷으로 먼저 돌려라** (`BINANCE_TESTNET=true` + 테스트넷 API 키) —
@@ -813,6 +819,7 @@ uvicorn server:app --reload --port 8300
 | `WICK_AUTO_TRADE_ENABLED` | `false` | 볼린저 꼬리터치+RSI 엔진 - 켈트너와 별개 스위치 |
 | `WICK_AUTO_TRADE_WHITELIST` | (비어있음) | `BTCUSDT:15m`처럼 명시한 조합만 wick 자동매매 대상 |
 | `DAILY_LOSS_LIMIT_USDT` | `50` | 당일 실현손실이 이 값을 넘으면 신규 진입 차단(킬스위치) - 두 엔진 공유 |
+| `DAILY_LOSS_LIMIT_PCT` | `0` | 정률제 킬스위치. 0보다 크면 "현재 가용잔고의 N%"를 신규 진입마다 다시 계산해서 `DAILY_LOSS_LIMIT_USDT`보다 우선 적용(잔고 조회 실패/0 이하 시 안전하게 고정값으로 폴백) |
 
 켈트너 전략은 진입 즉시 거래소에 `STOP_MARKET`/`TAKE_PROFIT_MARKET`
 (reduceOnly)을 실제로 걸어두므로, 봇 프로세스가 꺼져 있어도 거래소가
