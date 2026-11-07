@@ -233,3 +233,58 @@ def get_combo_weight(symbol: str, timeframe: str) -> float:
     if baseline <= 0:
         return 1.0
     return weight / baseline
+
+
+def compute_combo_weighted_risk_usdt(
+    broker, symbol: str, timeframe: str, entry_price: float, stop_price: float,
+) -> float:
+    """`RISK_MODE=combo_weighted` 전용 사이징 - 계좌를 조합별 신뢰도 비중대로
+    나눠 담고(`load_weights()`), 이번 거래는 그 조합에 배분된 몫 전액을
+    포지션 규모(증거금이 아니라 **진입가 기준 명목가치**)로 쓴다. 9월~11월
+    백테스트 리포트에서 쓴 "조합당 배분액 전액 베팅, 조합별 독립 복리"
+    모델을 그대로 실계좌에 옮긴 것이다 - README "실계좌 자동매매" 섹션의
+    백테스트 수치가 바로 이 방식 기준이다.
+
+    ⚠️ **`RISK_MODE=fixed`/`percent_balance`보다 훨씬 공격적이다.** 그
+    둘은 "거래당 손실액"을 직접 고정하는데(손절폭과 무관하게 항상 같은
+    금액만 잃음), 이 모드는 포지션 **명목가치**를 고정하고 손실액은
+    "그 거래의 손절폭(%)"에 따라 매번 달라진다 - 손절폭이 넓은 거래일수록
+    같은 명목가치라도 손실액이 커진다. `RISK_PERCENT_MAX_USDT`(>0)를
+    설정해뒀으면 그 금액을 최종 상한으로 한 번 더 자른다(다른 모드와
+    동일한 안전장치를 그대로 공유).
+
+    계산: 명목가치 = 가용잔고 × 그 조합의 가중치(비중, 합계 1.0) → 그
+    명목가치가 실제로 나가려면(quantity = risk_usdt / 손절폭) 필요한
+    `risk_usdt`를 역산해서 돌려준다 - `broker.enter_position()`의 기존
+    리스크기반 주문 로직을 그대로 재사용하기 위함(주문 실행 코드는 전혀
+    안 건드림, 숫자만 다르게 넘겨줌).
+
+    잔고 조회 실패/가중치 정보 없음/계산 불가 등 어떤 이유로든 안전하게
+    산출 못 하면, 다른 두 모드와 똑같이 `RISK_PER_TRADE_USDT` 고정값으로
+    폴백한다."""
+    try:
+        balance = broker.get_available_balance_usdt()
+    except Exception:
+        logger.exception("계좌 잔고 조회 실패 - 고정 리스크(RISK_PER_TRADE_USDT)로 폴백")
+        return settings.risk_per_trade_usdt
+
+    if not balance or balance <= 0:
+        logger.warning("계좌 가용 잔고가 0 이하(%s) - 고정 리스크로 폴백", balance)
+        return settings.risk_per_trade_usdt
+
+    weights = load_weights()
+    weight = weights.get(_combo_key(symbol, timeframe))
+    if weight is None:
+        logger.warning("%s %s 조합의 가중치를 못 구함 - 고정 리스크로 폴백", symbol, timeframe)
+        return settings.risk_per_trade_usdt
+
+    stop_distance = abs(entry_price - stop_price)
+    if entry_price <= 0 or stop_distance <= 0:
+        logger.warning("진입가/손절폭이 비정상(entry=%s, stop=%s) - 고정 리스크로 폴백", entry_price, stop_price)
+        return settings.risk_per_trade_usdt
+
+    notional_usdt = balance * weight
+    risk_usdt = notional_usdt * stop_distance / entry_price
+    if settings.risk_percent_max_usdt > 0:
+        risk_usdt = min(risk_usdt, settings.risk_percent_max_usdt)
+    return risk_usdt

@@ -16,6 +16,12 @@
 (app/lab_backtest.py의 로직과 완전히 같음), 진입 시 손절 주문 하나만 걸고
 이후 app/wick_position_manager.py가 주기적으로 그 손절 주문을 취소·재등록
 하며 따라간다.
+
+**리스크 사이징**: `RISK_MODE=fixed`(기본)/`percent_balance`는
+`risk.compute_risk_usdt()` × `combo_weights.get_combo_weight()` 배수로,
+`RISK_MODE=combo_weighted`는 `combo_weights.compute_combo_weighted_risk_usdt()`
+(가용잔고를 조합별 신뢰도 비중대로 나눠 그 몫 전액을 포지션 명목가치로 씀 -
+README "실계좌 자동매매" 섹션의 백테스트 수치가 이 모드 기준)로 계산한다.
 """
 from __future__ import annotations
 
@@ -23,7 +29,7 @@ import logging
 
 from . import db, risk
 from .broker import BinanceFuturesBroker, BrokerError
-from .combo_weights import get_combo_weight
+from .combo_weights import compute_combo_weighted_risk_usdt, get_combo_weight
 from .config import settings
 from .db import SessionLocal, TradeRecord
 from .history import fetch_klines, is_candle_closed
@@ -99,7 +105,12 @@ class WickSignalEngine:
         broker = self.broker or BinanceFuturesBroker()
         session = SessionLocal()
         try:
-            risk_usdt = risk.compute_risk_usdt(broker) * get_combo_weight(symbol, timeframe)
+            if settings.risk_mode == "combo_weighted":
+                risk_usdt = compute_combo_weighted_risk_usdt(
+                    broker, symbol, timeframe, entry["entry_price"], entry["stop_price"],
+                )
+            else:
+                risk_usdt = risk.compute_risk_usdt(broker) * get_combo_weight(symbol, timeframe)
             try:
                 result = broker.enter_position(
                     direction=direction, symbol=symbol,

@@ -419,6 +419,35 @@ RISK_PERCENT_MAX_USDT=100     # 상한 (0이면 상한 없음 - 권장하지 않
 고정값으로 조용히 폴백한다는 점도 감안할 것. **`RISK_MODE=fixed`로 충분히
 검증한 뒤에만 `percent_balance`로 전환하는 걸 권장한다.**
 
+### 세 번째 모드: `combo_weighted` (가장 공격적 — 9~11월 백테스트 리포트와 동일 방식)
+
+`fixed`/`percent_balance`는 **"거래당 손실액"을 고정**한다(손절폭이 넓든
+좁든 항상 같은 금액만 잃음). `RISK_MODE=combo_weighted`는 반대로
+**"포지션 명목가치"를 고정**한다 — 가용잔고를 조합별 신뢰도 가중치
+(`WICK_RELIABILITY_WEIGHTING_ENABLED`가 매월 1일 재계산하는 그 비중)대로
+나눠 담고, 신호가 뜬 조합에 배분된 몫 **전액**을 포지션 크기로 쓴다
+(`app/combo_weights.py:compute_combo_weighted_risk_usdt`). 그래서 같은
+명목가치라도 손절폭이 넓은 거래일수록 손실액이 커진다 — 9/1~11/6 백테스트
+리포트(+18.18% → 거래량+StochRSI 필터 추가 후 +24.96%, 조합당 25%~37.5%
+가중배분)가 바로 이 사이징 방식을 가정하고 계산한 숫자다.
+
+```bash
+RISK_MODE=combo_weighted
+WICK_RELIABILITY_WEIGHTING_ENABLED=true   # 꺼져있으면 전부 동일 가중치로 폴백
+RISK_PERCENT_MAX_USDT=100                 # 다른 모드와 공유하는 안전장치 - 반드시 켤 것
+```
+
+가중치 정보를 못 구하거나(파일 없음/오래됨/화이트리스트 변경 등) 잔고
+조회가 실패하면 다른 두 모드와 똑같이 `RISK_PER_TRADE_USDT` 고정값으로
+안전하게 폴백한다.
+
+⚠️ **세 모드 중 가장 공격적이다.** `percent_balance`보다도 손실 변동폭이
+크다 — 단순히 잔고의 몇 %가 아니라 "잔고의 몇 % × 그 거래의 손절폭(%)"이
+실제 손실률이 되는 구조라, 변동성이 큰 시점(손절폭이 넓게 잡히는 시점)에
+리스크가 같이 커진다. **`fixed`로 충분히 실계좌 운용해보고, `percent_balance`도
+감당 가능한 수준인지 확인한 뒤에만 전환할 것** — 처음부터 이 모드로
+시작하지 말 것.
+
 ### ⚠️ 반드시 지킬 순서
 
 1. **테스트넷으로 먼저 돌려라** (`BINANCE_TESTNET=true` + 테스트넷 API 키) —

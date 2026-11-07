@@ -85,6 +85,13 @@ class Settings:
     #   커지는 복리형 사이징(모의투자 계좌의 "잔고 전액 배팅"과 같은 원리를
     #   실계좌에 안전한 비율로 옮긴 것). 잔고 조회 실패/0 이하일 때는
     #   RISK_PER_TRADE_USDT로 자동 폴백한다 (app/risk.py:compute_risk_usdt).
+    # "combo_weighted": wick 엔진 전용(켈트너는 "fixed"처럼 취급됨) - 가용
+    #   잔고를 조합별 신뢰도 가중치(app/combo_weights.py, 매월 1일 재평가)
+    #   비율대로 나눠 담고, 이번 거래는 그 조합 몫 전액을 포지션 명목가치로
+    #   쓴다. ⚠️ fixed/percent_balance는 "거래당 손실액"을 고정하는데 이
+    #   모드는 "포지션 명목가치"를 고정하고 손실액은 그때그때 손절폭에 따라
+    #   달라진다 - 훨씬 공격적이다(RISK_PERCENT_MAX_USDT 상한은 동일하게
+    #   적용됨). 가중치 정보가 없으면 RISK_PER_TRADE_USDT로 폴백한다.
     risk_mode: str = field(default_factory=lambda: os.getenv("RISK_MODE", "fixed").strip().lower())
     risk_percent_of_balance: float = field(
         default_factory=lambda: float(os.getenv("RISK_PERCENT_OF_BALANCE", "1.0"))

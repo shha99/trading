@@ -9,6 +9,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
+import app.combo_weights as cw
 from app.broker import EntryResult
 from app.config import settings
 from app.db import SessionLocal, TradeRecord
@@ -59,8 +60,9 @@ class FakeWickStrategy:
 
 
 class FakeBroker:
-    def __init__(self):
+    def __init__(self, available_balance_usdt=1000.0):
         self.calls = []
+        self.available_balance_usdt = available_balance_usdt
 
     def enter_position(self, direction, symbol, entry_price_hint, stop_price, risk_usdt, leverage=1):
         self.calls.append((direction, symbol, entry_price_hint, stop_price, risk_usdt, leverage))
@@ -68,6 +70,9 @@ class FakeBroker:
             quantity=0.01, entry_order_id="fake-entry", entry_price=entry_price_hint,
             sl_order_id="fake-sl", tp_order_id=None,
         )
+
+    def get_available_balance_usdt(self):
+        return self.available_balance_usdt
 
 
 @pytest.fixture
@@ -275,3 +280,20 @@ def test_combo_weight_multiplies_risk_usdt(patch_data, monkeypatch):
     WickSignalEngine(strategy=FakeWickStrategy(), broker=broker).run_once()
 
     assert broker.calls[0][4] == pytest.approx(16.0)
+
+
+def test_combo_weighted_risk_mode_uses_notional_sizing(patch_data, monkeypatch, tmp_path):
+    """RISK_MODE=combo_weighted면 risk.compute_risk_usdt()/get_combo_weight() 배수
+    방식이 아니라 compute_combo_weighted_risk_usdt()(가용잔고 x 조합 비중 x
+    손절폭%)를 써야 한다. FakeWickStrategy의 LONG 진입은 entry=100, stop=95
+    (손절폭 5%) - 잔고 1000, 비중 0.5면 명목가치 500, risk_usdt = 500*0.05 = 25."""
+    settings.wick_auto_trade_enabled = True
+    settings.wick_auto_trade_whitelist = {("BTCUSDT", "15m")}
+    monkeypatch.setattr(cw, "COMBO_WEIGHTS_FILE", tmp_path / "combo_weights.json")
+    cw.save_weights({"BTCUSDT:15m": 0.5})
+    monkeypatch.setattr(settings, "risk_mode", "combo_weighted")
+    broker = FakeBroker(available_balance_usdt=1000.0)
+
+    WickSignalEngine(strategy=FakeWickStrategy(), broker=broker).run_once()
+
+    assert broker.calls[0][4] == pytest.approx(25.0)
