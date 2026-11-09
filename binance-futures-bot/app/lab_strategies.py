@@ -1309,6 +1309,198 @@ def simulate_partial_scaleout(
     return trades
 
 
+class BollingerWickVolatilityAdaptiveBreakevenStrategy(BollingerWickVolumeStochRsiConfirmStrategy):
+    """실계좌 기본 전략(`BollingerWickVolumeStochRsiConfirmStrategy`)과 진입
+    조건은 완전히 동일하고, "본전 이동 트리거를 언제 당길지"만 그 순간의
+    변동성에 맞춰 조정한다.
+
+    아이디어: 지금은 `breakeven_at_mult`(기본 0.5×ATR)가 고정값이라, 변동성이
+    낮을 때(ATR이 작을 때)는 상대적으로 "빠르게" 본전으로 묶이고 변동성이
+    높을 때도 똑같이 빠르게 묶인다. 변동성이 평소보다 높은 상황(추세가 막
+    터지는 구간일 가능성)에서는 트리거를 조금 늦춰서(본전 이동을 미뤄서)
+    트레일링을 더 오래 타게 하면, 손실 거래의 다운사이드는 그대로 작게
+    유지하면서 승리 거래의 상단만 더 열어줄 수 있다는 가설.
+
+    구현: 진입 시점 ATR을 최근 `vol_lookback`봉 평균 ATR로 나눈 비율
+    (`vol_ratio`, [`vol_adapt_min`, `vol_adapt_max`]로 클리핑)을
+    `breakeven_at_mult`에 곱해서 트리거 가격만 다시 계산한다. 평소(ATR이
+    평균 근처)면 원래 전략과 거의 동일하게 동작하고, ATR이 평균보다 2배
+    높으면(vol_adapt_max=2.0 기준) 트리거까지의 거리도 2배로 늘어난다.
+    손절선(`stop_price`)·트레일 배수(`trail_mult`)는 그대로 둬서 "손실은
+    짧게, 이익 거래의 본전 이동만 변동성에 맞춰 늦춘다"는 범위로 한정했다.
+    청산 로직 자체(본전 이동 후 ATR 트레일링)는 바뀌지 않으므로 기존
+    `app.lab_backtest.simulate_lab()`을 그대로 쓸 수 있다.
+
+    ⚠️ 백테스트로 비교 검증하기 전까지는 실계좌 자동매매에 연결하면 안 됨."""
+
+    key = "bollinger_wick_volatility_adaptive_breakeven"
+    label = "볼린저 꼬리터치 (변동성 적응형 본전이동) - 실험용"
+    category = "데이트레이딩 (평균회귀 + 본전 이동 트레일링, 변형)"
+    description = (
+        "실계좌 기본 전략과 진입 조건 동일 + 본전 이동 트리거 거리를 "
+        "진입 시점 ATR이 최근 평균보다 높을수록 늘려서(변동성 적응) 유리한 거래를 더 오래 타게 함 - 아직 미검증"
+    )
+
+    def __init__(self, *args, vol_lookback: int = 50, vol_adapt_min: float = 0.5, vol_adapt_max: float = 2.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.vol_lookback = vol_lookback
+        self.vol_adapt_min = vol_adapt_min
+        self.vol_adapt_max = vol_adapt_max
+        self.min_bars = max(self.min_bars, vol_lookback + 5)
+
+    def precompute(self, df: pd.DataFrame) -> dict:
+        ctx = super().precompute(df)
+        ctx["atr_rolling_mean"] = pd.Series(ctx["atr"]).rolling(self.vol_lookback).mean().to_numpy()
+        return ctx
+
+    def check_entry(self, k: int, ctx: dict) -> dict | None:
+        e = super().check_entry(k, ctx)
+        if e is None:
+            return None
+        atr_now = ctx["atr"][k]
+        atr_avg = ctx["atr_rolling_mean"][k]
+        if np.isnan(atr_avg) or atr_avg <= 0:
+            return e  # 평균 ATR을 아직 못 구하면(워밍업 구간) 원래 전략 그대로
+        vol_ratio = np.clip(atr_now / atr_avg, self.vol_adapt_min, self.vol_adapt_max)
+        adjusted_mult = self.breakeven_at_mult * vol_ratio
+        entry_price = e["entry_price"]
+        if e["direction"] == "LONG":
+            e["breakeven_trigger_price"] = entry_price + adjusted_mult * atr_now
+        else:
+            e["breakeven_trigger_price"] = entry_price - adjusted_mult * atr_now
+        return e
+
+
+class BollingerWickSignalExitStrategy(BollingerWickVolumeStochRsiConfirmStrategy):
+    """실계좌 기본 전략과 진입 조건은 완전히 동일하고, 본전 이동 이후의
+    청산 방식만 다르다: ATR 거리 기준 트레일링 대신, StochRSI가 반대쪽
+    과열 지점까지 되돌아올 때까지는 끊지 않고 계속 들고 있는다.
+
+    아이디어: ATR 트레일은 "가격이 얼마나 밀렸는지"만 보고 기계적으로
+    끊는데, 추세가 계속 유리한 방향으로 가는 중이어도 일시적으로 ATR
+    트레일 거리만큼 되돌리면 끊겨버린다. 진입 조건으로도 쓰는 StochRSI가
+    반대쪽 극단(예: 롱인데 과매수 90 이상)에 도달해야만 "추세가 꺾였다"고
+    보고 끊으면, 추세가 더 이어지는 동안은 안 털리고 계속 탈 수 있다는
+    가설.
+
+    구체적인 상태 전이:
+    ① 진입 직후엔 원래와 같은 고정 손절선(`stop_price`)만 있음 - 손실은
+       여전히 짧게 자른다.
+    ② 본전 이동 트리거(`breakeven_trigger_price`)에 처음 닿으면 손절선을
+       본전(진입가)으로 올린다 - 여기부터는 최악이어도 손실이 0에 가깝다.
+    ③ 본전 이동 이후로는 ATR 트레일 없이 그대로 들고 있다가, StochRSI가
+       반대쪽 과열 문턱(`exit_stochrsi_overbought`/`exit_stochrsi_oversold`,
+       기본 90/10)에 도달하는 그 봉의 종가로 청산한다. 그 전에 가격이 다시
+       본전까지 내려오면 본전(무승부 근처)으로 청산된다.
+
+    ⚠️ 트레일링이 없어서, 큰 수익을 내다가 반전신호가 늦게 뜨면 ATR
+    트레일 방식보다 더 많이 반납할 수 있다는 리스크가 있다 - 이게 바로
+    검증해야 할 트레이드오프다. 체결 로직이 다르므로(ATR 트레일 대신
+    StochRSI 신호 대기) `app.lab_backtest.simulate_lab`이 아니라 전용
+    백테스트 함수 `simulate_signal_exit()`(이 파일 하단)으로 돌려야 한다 -
+    공용 백테스트 엔진은 건드리지 않았다.
+
+    ⚠️ 백테스트로 비교 검증하기 전까지는 실계좌 자동매매에 연결하면 안 됨."""
+
+    key = "bollinger_wick_signal_exit"
+    label = "볼린저 꼬리터치 (StochRSI 반대신호 대기 청산) - 실험용"
+    category = "데이트레이딩 (평균회귀 + 본전 이동 트레일링, 변형)"
+    description = (
+        "실계좌 기본 전략과 진입 조건 동일 + 본전 이동 후 ATR 트레일 대신 StochRSI가 "
+        "반대쪽 과열 문턱에 도달할 때까지 계속 들고 있음 - 아직 미검증. "
+        "simulate_lab()이 아니라 simulate_signal_exit()으로 백테스트할 것"
+    )
+
+    def __init__(self, *args, exit_stochrsi_overbought: float = 90.0, exit_stochrsi_oversold: float = 10.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.exit_stochrsi_overbought = exit_stochrsi_overbought
+        self.exit_stochrsi_oversold = exit_stochrsi_oversold
+
+
+def _walk_forward_signal_exit(ctx: dict, entry_idx: int, entry: dict, strategy: BollingerWickSignalExitStrategy, n: int) -> tuple[str, float, int]:
+    """`app.lab_backtest._walk_forward_breakeven_trail()`과 ①②는 같고(고정
+    손절 -> 본전 이동), ③만 다르다: ATR 트레일 대신 StochRSI 반대쪽 과열
+    문턱을 기다린다. 공용 엔진은 건드리지 않고 이 실험 전용으로 복제함."""
+    high, low, close, stochrsi_k = ctx["high"], ctx["low"], ctx["close"], ctx["stochrsi_k"]
+    direction = entry["direction"]
+    entry_price = entry["entry_price"]
+    stop_price = entry["stop_price"]
+    trigger_price = entry["breakeven_trigger_price"]
+    moved_to_breakeven = False
+
+    for j in range(entry_idx + 1, n):
+        if direction == "LONG":
+            if not moved_to_breakeven and high[j] >= trigger_price:
+                moved_to_breakeven = True
+                stop_price = entry_price
+            if low[j] <= stop_price:
+                return ("BE" if moved_to_breakeven else "SL"), stop_price, j
+            if moved_to_breakeven:
+                k_val = stochrsi_k[j]
+                if not np.isnan(k_val) and k_val >= strategy.exit_stochrsi_overbought:
+                    return "SIGNAL", float(close[j]), j
+        else:
+            if not moved_to_breakeven and low[j] <= trigger_price:
+                moved_to_breakeven = True
+                stop_price = entry_price
+            if high[j] >= stop_price:
+                return ("BE" if moved_to_breakeven else "SL"), stop_price, j
+            if moved_to_breakeven:
+                k_val = stochrsi_k[j]
+                if not np.isnan(k_val) and k_val <= strategy.exit_stochrsi_oversold:
+                    return "SIGNAL", float(close[j]), j
+
+    return "TIME", float(close[-1]), n - 1
+
+
+def simulate_signal_exit(
+    df: pd.DataFrame, strategy: BollingerWickSignalExitStrategy, fee_pct: float = 0.0,
+) -> list[dict]:
+    """`BollingerWickSignalExitStrategy` 전용 백테스트 - `app.lab_backtest.simulate_lab()`과
+    같은 진입 탐색 루프를 쓰되, 청산만 위 StochRSI 반대신호 대기 로직으로 대체한다."""
+    n = len(df)
+    if n < strategy.min_bars:
+        return []
+
+    pre = strategy.precompute(df)
+    ctx = {
+        **pre,
+        "close": df["Close"].to_numpy(), "high": df["High"].to_numpy(),
+        "low": df["Low"].to_numpy(), "open_": df["Open"].to_numpy(),
+    }
+    index = df.index
+
+    trades: list[dict] = []
+    k = strategy.min_bars - 1
+    while k < n:
+        entry = strategy.check_entry(k, ctx)
+        if entry is None:
+            k += 1
+            continue
+
+        exit_reason, exit_price, exit_idx = _walk_forward_signal_exit(ctx, k, entry, strategy, n)
+        entry_price = entry["entry_price"]
+        direction = entry["direction"]
+        if direction == "LONG":
+            pct = (exit_price - entry_price) / entry_price * 100
+        else:
+            pct = (entry_price - exit_price) / entry_price * 100
+
+        trades.append({
+            "entry_time": str(index[k]),
+            "exit_time": str(index[exit_idx]),
+            "direction": direction,
+            "entry_price": round(float(entry_price), 6),
+            "exit_price": round(float(exit_price), 6),
+            "exit_reason": exit_reason,
+            "pct_return": round(pct - fee_pct, 4),
+            "gross_pct_return": round(pct, 4),
+        })
+        k = max(exit_idx + 1, k + 1)
+
+    return trades
+
+
 def lab_strategies() -> list[LabStrategy]:
     """실험실에 올라가는 후보 11종 (검증된 켈트너 전략은 별도로 다룸)."""
     return [
