@@ -1501,6 +1501,329 @@ def simulate_signal_exit(
     return trades
 
 
+class BollingerWickBandwidthAdaptiveTrailStrategy(BollingerWickVolumeStochRsiConfirmStrategy):
+    """실계좌 기본 전략과 진입 조건은 완전히 동일하고, 트레일 배수
+    (`trail_mult`)만 "그 순간 밴드폭이 평소보다 좁은지/넓은지"에 맞춰
+    조정한다. `BollingerWickVolatilityAdaptiveBreakevenStrategy`(ATR 기준,
+    본전 이동 트리거 조정)와는 다른 신호(밴드폭 변화율)로 다른 파라미터
+    (트레일 배수)를 조정하는 별개의 변형이다.
+
+    아이디어: 밴드가 수축 중(스퀴즈)이면 진짜 평균회귀 구간일 가능성이
+    높으니 트레일을 타이트하게 유지해 빨리 챙기고, 밴드가 평소보다
+    넓게 벌어져 있으면(변동성 폭발 이후) 추세가 더 이어질 수 있으니
+    트레일을 느슨하게 줘서 더 태운다는 가설.
+
+    구현: 진입 시점 밴드폭(상단-하단)을 최근 `bw_lookback`봉 평균 밴드폭으로
+    나눈 비율(`bw_ratio`, [`bw_adapt_min`, `bw_adapt_max`]로 클리핑)을
+    `trail_mult`에 곱한다. 본전 이동 트리거(`breakeven_at_mult`)는 그대로
+    둬서 "손실은 그대로 짧게, 트레일 폭만 밴드 상태에 맞춰 조정"으로
+    한정했다. 청산 로직 자체(본전 이동 후 ATR 트레일링)는 바뀌지 않으므로
+    기존 `app.lab_backtest.simulate_lab()`을 그대로 쓸 수 있다.
+
+    ⚠️ 백테스트로 비교 검증하기 전까지는 실계좌 자동매매에 연결하면 안 됨."""
+
+    key = "bollinger_wick_bandwidth_adaptive_trail"
+    label = "볼린저 꼬리터치 (밴드폭 적응형 트레일) - 실험용"
+    category = "데이트레이딩 (평균회귀 + 본전 이동 트레일링, 변형)"
+    description = (
+        "실계좌 기본 전략과 진입 조건 동일 + 트레일 배수를 진입 시점 밴드폭이 "
+        "최근 평균보다 좁은지/넓은지에 맞춰 조정(스퀴즈면 타이트, 확장이면 느슨) - 아직 미검증"
+    )
+
+    def __init__(self, *args, bw_lookback: int = 50, bw_adapt_min: float = 0.5, bw_adapt_max: float = 2.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.bw_lookback = bw_lookback
+        self.bw_adapt_min = bw_adapt_min
+        self.bw_adapt_max = bw_adapt_max
+        self.min_bars = max(self.min_bars, bw_lookback + 5)
+
+    def precompute(self, df: pd.DataFrame) -> dict:
+        ctx = super().precompute(df)
+        bb_width = ctx["touch_ctx"]["bb_upper"] - ctx["touch_ctx"]["bb_lower"]
+        ctx["bb_width"] = bb_width
+        ctx["bb_width_avg"] = pd.Series(bb_width).rolling(self.bw_lookback).mean().to_numpy()
+        return ctx
+
+    def check_entry(self, k: int, ctx: dict) -> dict | None:
+        e = super().check_entry(k, ctx)
+        if e is None:
+            return None
+        width_now = ctx["bb_width"][k]
+        width_avg = ctx["bb_width_avg"][k]
+        if np.isnan(width_avg) or width_avg <= 0:
+            return e  # 평균 밴드폭을 아직 못 구하면(워밍업 구간) 원래 전략 그대로
+        bw_ratio = np.clip(width_now / width_avg, self.bw_adapt_min, self.bw_adapt_max)
+        e["trail_mult"] = self.trail_mult * bw_ratio
+        return e
+
+
+class BollingerWickPyramidStrategy(BollingerWickVolumeStochRsiConfirmStrategy):
+    """실계좌 기본 전략과 진입 조건·청산 조건(본전 이동 후 ATR 트레일링)은
+    완전히 동일하고, 포지션이 열려있는 동안 **같은 방향으로 또 진입 신호가
+    뜨면 추가 진입(피라미딩)**한다는 점만 다르다.
+
+    아이디어: 지금까지 테스트한 변형들은 전부 "하나 들어가서 얼마나 오래/
+    어떻게 들고 있을지"만 건드렸는데, 이건 "추세가 계속 확인되는 동안
+    사이즈를 더 키운다"는 다른 종류의 접근이다 - 승리 거래의 상한을
+    실제로 더 키우려는 시도.
+
+    구현: 최초 진입(1호 레그) 이후 포지션이 열려있는 동안, 매 봉마다 같은
+    전략으로 진입 조건을 다시 확인해서 같은 방향이면 추가 레그를 연다
+    (`max_adds`까지). 손절/본전 이동 트리거/트레일은 전부 **1호 레그
+    기준으로 통일**해서 전체 스택을 하나의 포지션처럼 관리한다(레그별로
+    따로 손절을 두면 관리가 과도하게 복잡해지고, 실제로도 포지션 전체를
+    한 손절선으로 관리하는 게 더 현실적이다). 청산되면 각 레그의 개별
+    진입가 → 공통 청산가 수익률을 레그 수만큼 동일 비중으로 평균낸다.
+
+    ⚠️ 이 평균은 "레그당 동일 비중"을 가정한다 - 실제로 추가 진입할 때마다
+    그 순간의 가용 잔고/리스크 예산을 다시 나눠야 하므로, 이 숫자는
+    실제 자금관리를 반영한 정확한 수익률이 아니라 "레그 단위 평균
+    수익률"로의 근사치다(baseline은 항상 레그 1개라 이 근사가 필요 없다 -
+    그래서 둘을 total_pct로 직접 비교할 때는 이 비대칭을 감안해야 함).
+
+    체결 로직이 다르므로(멀티레그) `app.lab_backtest.simulate_lab`이 아니라
+    전용 백테스트 함수 `simulate_pyramid()`(이 파일 하단)으로 돌려야 한다 -
+    공용 백테스트 엔진은 건드리지 않았다.
+
+    ⚠️ 백테스트로 비교 검증하기 전까지는 실계좌 자동매매에 연결하면 안 됨."""
+
+    key = "bollinger_wick_pyramid"
+    label = "볼린저 꼬리터치 (추세 지속 시 추가진입/피라미딩) - 실험용"
+    category = "데이트레이딩 (평균회귀 + 본전 이동 트레일링, 변형)"
+    description = (
+        "실계좌 기본 전략과 진입/청산 조건 동일 + 포지션이 열려있는 동안 같은 방향 신호가 "
+        "다시 뜨면 추가 진입(최대 max_adds회) - 아직 미검증. "
+        "simulate_lab()이 아니라 simulate_pyramid()으로 백테스트할 것"
+    )
+
+    def __init__(self, *args, max_adds: int = 1, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.max_adds = max_adds
+
+
+def simulate_pyramid(
+    df: pd.DataFrame, strategy: BollingerWickPyramidStrategy, fee_pct: float = 0.0,
+) -> list[dict]:
+    """`BollingerWickPyramidStrategy` 전용 백테스트 - 1호 레그 기준 손절/본전
+    이동/트레일은 `app.lab_backtest._walk_forward_breakeven_trail()`과
+    완전히 같고, 매 봉마다 추가 진입 기회를 같이 확인한다는 점만 다르다."""
+    n = len(df)
+    if n < strategy.min_bars:
+        return []
+
+    pre = strategy.precompute(df)
+    ctx = {
+        **pre,
+        "close": df["Close"].to_numpy(), "high": df["High"].to_numpy(),
+        "low": df["Low"].to_numpy(), "open_": df["Open"].to_numpy(),
+    }
+    high, low, close, atr_values = ctx["high"], ctx["low"], ctx["close"], ctx["atr"]
+    index = df.index
+
+    def _pct(direction: str, entry_price: float, price: float) -> float:
+        if direction == "LONG":
+            return (price - entry_price) / entry_price * 100
+        return (entry_price - price) / entry_price * 100
+
+    trades: list[dict] = []
+    k = strategy.min_bars - 1
+    while k < n:
+        entry = strategy.check_entry(k, ctx)
+        if entry is None:
+            k += 1
+            continue
+
+        direction = entry["direction"]
+        leg_entries = [entry["entry_price"]]
+        stop_price = entry["stop_price"]
+        trigger_price = entry["breakeven_trigger_price"]
+        trail_mult = entry["trail_mult"]
+        moved_to_breakeven = False
+        extreme = high[k] if direction == "LONG" else low[k]
+
+        exit_reason, exit_price, exit_idx = "TIME", float(close[-1]), n - 1
+        j = k + 1
+        while j < n:
+            if direction == "LONG":
+                extreme = max(extreme, high[j])
+                if not moved_to_breakeven and high[j] >= trigger_price:
+                    moved_to_breakeven = True
+                    stop_price = entry["entry_price"]
+                if moved_to_breakeven:
+                    stop_price = max(stop_price, extreme - trail_mult * atr_values[j])
+                if low[j] <= stop_price:
+                    exit_reason = "TRAIL" if moved_to_breakeven else "SL"
+                    exit_price, exit_idx = stop_price, j
+                    break
+            else:
+                extreme = min(extreme, low[j])
+                if not moved_to_breakeven and low[j] <= trigger_price:
+                    moved_to_breakeven = True
+                    stop_price = entry["entry_price"]
+                if moved_to_breakeven:
+                    stop_price = min(stop_price, extreme + trail_mult * atr_values[j])
+                if high[j] >= stop_price:
+                    exit_reason = "TRAIL" if moved_to_breakeven else "SL"
+                    exit_price, exit_idx = stop_price, j
+                    break
+
+            if len(leg_entries) - 1 < strategy.max_adds:
+                add = strategy.check_entry(j, ctx)
+                if add is not None and add["direction"] == direction:
+                    leg_entries.append(add["entry_price"])
+            j += 1
+
+        leg_pcts = [_pct(direction, e, exit_price) for e in leg_entries]
+        pct = sum(leg_pcts) / len(leg_pcts)
+
+        trades.append({
+            "entry_time": str(index[k]),
+            "exit_time": str(index[exit_idx]),
+            "direction": direction,
+            "entry_price": round(float(leg_entries[0]), 6),
+            "exit_price": round(float(exit_price), 6),
+            "exit_reason": exit_reason,
+            "legs": len(leg_entries),
+            "pct_return": round(pct - fee_pct, 4),
+            "gross_pct_return": round(pct, 4),
+        })
+        k = max(exit_idx + 1, k + 1)
+
+    return trades
+
+
+class BollingerWickCooldownStrategy(BollingerWickVolumeStochRsiConfirmStrategy):
+    """실계좌 기본 전략과 진입/청산 조건은 완전히 동일하고, "연속으로
+    손실 거래가 몇 번 나오면 다음 신호 몇 번은 건너뛴다"는 쿨다운 필터만
+    추가한다.
+
+    아이디어: 평균회귀 전략은 "진짜 추세로 전환되는 시점"에 되돌림 실패가
+    몰려서 나오는 경향이 있다(밴드를 또 터치해도 되돌아오지 못하고 계속
+    밀림). 같은 조합에서 손실이 연속으로 나오면 그 구간은 일단 쉬어가는
+    게 "더 먹기"는 아니지만 "나쁜 구간에서 덜 잃기"로 순수익에는 도움이
+    될 수 있다는 가설.
+
+    구현: `cooldown_after_losses`번 연속 손실(수익률<=0, 수수료 반영 후
+    기준) 직후 뜨는 신호부터 `cooldown_skip_signals`번은 진입하지 않고
+    건너뛴다(건너뛴 신호는 승패에 반영되지 않음 - 그냥 쉬는 것). 쿨다운이
+    끝나면 연속 손실 카운터를 0으로 리셋하고 평소처럼 복귀한다. 청산
+    로직 자체는 바뀌지 않지만, "신호를 건너뛸지"를 매 신호마다 상태
+    기반으로 결정해야 해서 전용 백테스트 함수 `simulate_cooldown()`(이
+    파일 하단)으로 돌려야 한다 - 공용 백테스트 엔진은 건드리지 않았다.
+
+    ⚠️ 백테스트로 비교 검증하기 전까지는 실계좌 자동매매에 연결하면 안 됨."""
+
+    key = "bollinger_wick_cooldown"
+    label = "볼린저 꼬리터치 (연속손실 쿨다운) - 실험용"
+    category = "데이트레이딩 (평균회귀 + 본전 이동 트레일링, 변형)"
+    description = (
+        "실계좌 기본 전략과 진입/청산 조건 동일 + 연속 손실 N번 직후 다음 신호 M번은 "
+        "건너뛰는 쿨다운 필터 추가 - 아직 미검증. simulate_lab()이 아니라 simulate_cooldown()으로 백테스트할 것"
+    )
+
+    def __init__(self, *args, cooldown_after_losses: int = 2, cooldown_skip_signals: int = 1, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.cooldown_after_losses = cooldown_after_losses
+        self.cooldown_skip_signals = cooldown_skip_signals
+
+
+def simulate_cooldown(
+    df: pd.DataFrame, strategy: BollingerWickCooldownStrategy, fee_pct: float = 0.0,
+) -> list[dict]:
+    """`BollingerWickCooldownStrategy` 전용 백테스트 - 청산 로직은
+    `app.lab_backtest._walk_forward_breakeven_trail()`과 완전히 같고,
+    연속 손실 이후 신호를 건너뛰는 상태만 추가로 추적한다."""
+    n = len(df)
+    if n < strategy.min_bars:
+        return []
+
+    pre = strategy.precompute(df)
+    ctx = {
+        **pre,
+        "close": df["Close"].to_numpy(), "high": df["High"].to_numpy(),
+        "low": df["Low"].to_numpy(), "open_": df["Open"].to_numpy(),
+    }
+    high, low, close, atr_values = ctx["high"], ctx["low"], ctx["close"], ctx["atr"]
+    index = df.index
+
+    trades: list[dict] = []
+    consecutive_losses = 0
+    skip_remaining = 0
+    k = strategy.min_bars - 1
+    while k < n:
+        entry = strategy.check_entry(k, ctx)
+        if entry is None:
+            k += 1
+            continue
+
+        if skip_remaining > 0:
+            skip_remaining -= 1
+            k += 1
+            continue
+
+        direction = entry["direction"]
+        entry_price = entry["entry_price"]
+        stop_price = entry["stop_price"]
+        trigger_price = entry["breakeven_trigger_price"]
+        trail_mult = entry["trail_mult"]
+        moved_to_breakeven = False
+        extreme = high[k] if direction == "LONG" else low[k]
+
+        exit_reason, exit_price, exit_idx = "TIME", float(close[-1]), n - 1
+        for j in range(k + 1, n):
+            if direction == "LONG":
+                extreme = max(extreme, high[j])
+                if not moved_to_breakeven and high[j] >= trigger_price:
+                    moved_to_breakeven = True
+                    stop_price = entry_price
+                if moved_to_breakeven:
+                    stop_price = max(stop_price, extreme - trail_mult * atr_values[j])
+                if low[j] <= stop_price:
+                    exit_reason = "TRAIL" if moved_to_breakeven else "SL"
+                    exit_price, exit_idx = stop_price, j
+                    break
+            else:
+                extreme = min(extreme, low[j])
+                if not moved_to_breakeven and low[j] <= trigger_price:
+                    moved_to_breakeven = True
+                    stop_price = entry_price
+                if moved_to_breakeven:
+                    stop_price = min(stop_price, extreme + trail_mult * atr_values[j])
+                if high[j] >= stop_price:
+                    exit_reason = "TRAIL" if moved_to_breakeven else "SL"
+                    exit_price, exit_idx = stop_price, j
+                    break
+
+        if direction == "LONG":
+            pct = (exit_price - entry_price) / entry_price * 100
+        else:
+            pct = (entry_price - exit_price) / entry_price * 100
+        pct = round(pct - fee_pct, 4)
+
+        trades.append({
+            "entry_time": str(index[k]),
+            "exit_time": str(index[exit_idx]),
+            "direction": direction,
+            "entry_price": round(float(entry_price), 6),
+            "exit_price": round(float(exit_price), 6),
+            "exit_reason": exit_reason,
+            "pct_return": pct,
+            "gross_pct_return": round(pct + fee_pct, 4),
+        })
+
+        if pct <= 0:
+            consecutive_losses += 1
+        else:
+            consecutive_losses = 0
+        if consecutive_losses >= strategy.cooldown_after_losses:
+            skip_remaining = strategy.cooldown_skip_signals
+            consecutive_losses = 0
+
+        k = max(exit_idx + 1, k + 1)
+
+    return trades
+
+
 def lab_strategies() -> list[LabStrategy]:
     """실험실에 올라가는 후보 11종 (검증된 켈트너 전략은 별도로 다룸)."""
     return [
