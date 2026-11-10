@@ -159,6 +159,20 @@ class Settings:
         default_factory=lambda: int(os.getenv("COMBO_WEIGHTS_LOOKBACK_DAYS", "210"))
     )
 
+    # 조합별 비대칭 CPPI 사이징 오버레이 (선택, 기본 꺼짐, RISK_MODE=combo_weighted
+    # 에서만 적용됨) - 각 조합을 독립된 "슬리브"로 보고 그 슬리브 자신의 상대적
+    # 드로다운(자기 고점 대비 얼마나 빠졌는지)에 따라 명목가치 배율을 조정한다:
+    # 신고점 근처(드로다운 0)면 1.0+CPPI_BOOST까지 증액, 드로다운 중이면
+    # 1.0-CPPI_SENSITIVITY×드로다운(CPPI_FLOOR 하한)까지 축소. 2026-01~11월
+    # 실데이터로 검증: 평균 성과는 개선되지만, boost가 걸린 상태(신고점 근처)에서
+    # 큰 슬리피지가 겹치면 baseline보다 더 크게 다칠 수 있다는 꼬리 리스크를
+    # 감수하기로 한 결정 - README 참고. 매월 1일 조합 가중치 재계산과 같은
+    # 시점에 전 조합의 CPPI 상태(상대적 자본/고점)를 1.0으로 리셋한다("리밸런싱" -
+    # 한 조합이 과도하게 쏠리는 걸 주기적으로 막음).
+    wick_cppi_enabled: bool = field(
+        default_factory=lambda: _bool("WICK_CPPI_ENABLED", "false")
+    )
+
     # --- 알림 ---
     telegram_bot_token: str = field(default_factory=lambda: os.getenv("TELEGRAM_BOT_TOKEN", ""))
     telegram_chat_id: str = field(default_factory=lambda: os.getenv("TELEGRAM_CHAT_ID", ""))

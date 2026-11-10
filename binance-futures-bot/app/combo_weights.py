@@ -44,6 +44,15 @@ MAX_WEIGHT = 0.40
 MIN_TRADES_FOR_SCORE = 20  # 이보다 표본이 적으면 신뢰도 점수 자체가 불안정해 제외
 STALE_AFTER_DAYS = 35
 
+# --- 조합별 비대칭 CPPI 사이징 오버레이 (WICK_CPPI_ENABLED, 기본 꺼짐) ---
+# 2026-01~11월 실데이터 검증 당시 쓴 값 그대로 - app/config.py의 wick_cppi_enabled
+# 설명 및 README 참고. 조합마다 독립적으로 "자기 자신의 상대적 고점 대비
+# 드로다운"만 보고 배율을 정한다(다른 조합 상태와 무관).
+CPPI_SENSITIVITY = 3.0
+CPPI_FLOOR = 0.2
+CPPI_BOOST = 0.2
+CPPI_STATE_FILE = DATA_DIR / "combo_cppi_state.json"
+
 
 def _combo_key(symbol: str, timeframe: str) -> str:
     return f"{symbol}:{timeframe}"
@@ -167,11 +176,79 @@ def save_weights(weights: dict[str, float]) -> None:
 
 
 def recompute_and_save() -> dict[str, float]:
-    """스케줄러(매월 1일)와 수동 재계산에서 공용으로 쓰는 진입점."""
+    """스케줄러(매월 1일)와 수동 재계산에서 공용으로 쓰는 진입점.
+
+    가중치 재계산과 같은 시점에 CPPI 상태도 함께 리셋한다("리밸런싱" - 한
+    조합이 과도하게 쏠린 채로 계속 복리로 불어나는 걸 매월 막아준다).
+    CPPI 기능이 꺼져 있어도 상태 리셋 자체는 비용이 거의 없어 그냥 같이
+    해준다(나중에 켜졌을 때 이미 깨끗한 상태로 시작하게 됨)."""
     weights = compute_reliability_weights()
     if weights:
         save_weights(weights)
+    reset_cppi_state_for_rebalance()
     return weights
+
+
+def _default_cppi_state() -> dict[str, float]:
+    return {"equity": 1.0, "peak": 1.0}
+
+
+def load_cppi_state() -> dict[str, dict[str, float]]:
+    if not CPPI_STATE_FILE.exists():
+        return {}
+    try:
+        return json.loads(CPPI_STATE_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        logger.exception("CPPI 상태 파일 로드 실패 - 빈 상태로 폴백(배율 1.0 취급됨)")
+        return {}
+
+
+def save_cppi_state(state: dict[str, dict[str, float]]) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    CPPI_STATE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
+
+
+def reset_cppi_state_for_rebalance(combos: list[tuple[str, str]] | None = None) -> None:
+    """전 조합의 CPPI 상태(상대적 자본/고점)를 1.0으로 리셋한다 - "매월
+    1일 리밸런싱"에 해당. `recompute_and_save()`가 매월 자동으로 호출한다."""
+    combos = combos or sorted(settings.wick_auto_trade_whitelist)
+    state = {_combo_key(s, tf): _default_cppi_state() for s, tf in combos}
+    save_cppi_state(state)
+    logger.info("조합별 CPPI 상태 리밸런싱 완료: %s", list(state.keys()))
+
+
+def _cppi_multiplier_from_state(equity: float, peak: float) -> float:
+    if peak <= 0:
+        return 1.0
+    drawdown = max(0.0, (peak - equity) / peak)
+    if drawdown <= 0:
+        return 1.0 + CPPI_BOOST
+    return max(CPPI_FLOOR, 1.0 - CPPI_SENSITIVITY * drawdown)
+
+
+def get_cppi_multiplier(symbol: str, timeframe: str) -> float:
+    """`compute_combo_weighted_risk_usdt()`가 명목가치에 곱할 배율.
+    기능이 꺼져있거나 상태가 없으면 1.0(기존 동작)을 돌려준다."""
+    if not settings.wick_cppi_enabled:
+        return 1.0
+    state = load_cppi_state().get(_combo_key(symbol, timeframe), _default_cppi_state())
+    return _cppi_multiplier_from_state(state.get("equity", 1.0), state.get("peak", 1.0))
+
+
+def update_cppi_state_after_trade(symbol: str, timeframe: str, pct_return: float) -> None:
+    """wick 포지션이 청산될 때마다 호출 - 그 조합의 상대적 자본/고점을
+    갱신한다. 기능이 꺼져있으면 아무 것도 안 한다(상태 파일 자체를 안
+    만듦 - 꺼진 동안은 완전히 기존 동작과 동일)."""
+    if not settings.wick_cppi_enabled:
+        return
+    key = _combo_key(symbol, timeframe)
+    state = load_cppi_state()
+    combo_state = state.get(key, _default_cppi_state())
+    equity, peak = combo_state.get("equity", 1.0), combo_state.get("peak", 1.0)
+    mult = _cppi_multiplier_from_state(equity, peak)
+    new_equity = equity * (1 + mult * pct_return / 100)
+    state[key] = {"equity": new_equity, "peak": max(peak, new_equity)}
+    save_cppi_state(state)
 
 
 def _equal_weights(combos: list[tuple[str, str]]) -> dict[str, float]:
@@ -261,7 +338,13 @@ def compute_combo_weighted_risk_usdt(
 
     잔고 조회 실패/가중치 정보 없음/계산 불가 등 어떤 이유로든 안전하게
     산출 못 하면, 다른 두 모드와 똑같이 `RISK_PER_TRADE_USDT` 고정값으로
-    폴백한다."""
+    폴백한다.
+
+    `WICK_CPPI_ENABLED=true`면 명목가치에 `get_cppi_multiplier()` 배율을
+    추가로 곱한다(그 조합 자신의 상대적 드로다운에 따라 0.2~1.2배 사이에서
+    조정, 매월 1일 리밸런싱) - 기본 꺼짐, 켜도 `RISK_MODE=combo_weighted`
+    에서만 의미가 있다(다른 두 모드는 "거래당 손실액 고정"이라 명목가치
+    배율 개념 자체가 안 맞음)."""
     try:
         balance = broker.get_available_balance_usdt()
     except Exception:
@@ -283,7 +366,7 @@ def compute_combo_weighted_risk_usdt(
         logger.warning("진입가/손절폭이 비정상(entry=%s, stop=%s) - 고정 리스크로 폴백", entry_price, stop_price)
         return settings.risk_per_trade_usdt
 
-    notional_usdt = balance * weight
+    notional_usdt = balance * weight * get_cppi_multiplier(symbol, timeframe)
     risk_usdt = notional_usdt * stop_distance / entry_price
     if settings.risk_percent_max_usdt > 0:
         risk_usdt = min(risk_usdt, settings.risk_percent_max_usdt)

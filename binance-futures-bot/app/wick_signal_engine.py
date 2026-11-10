@@ -22,6 +22,13 @@
 `RISK_MODE=combo_weighted`는 `combo_weights.compute_combo_weighted_risk_usdt()`
 (가용잔고를 조합별 신뢰도 비중대로 나눠 그 몫 전액을 포지션 명목가치로 씀 -
 README "실계좌 자동매매" 섹션의 백테스트 수치가 이 모드 기준)로 계산한다.
+`combo_weighted` 모드에서 `WICK_CPPI_ENABLED=true`면 그 명목가치에 조합별
+비대칭 CPPI 배율(`combo_weights.get_cppi_multiplier()`, 0.2~1.2배)이 추가로
+곱해진다 - 평균 성과는 개선되지만 꼬리 리스크가 커지는 트레이드오프가
+있다는 걸 반드시 README에서 확인할 것. 포지션이 청산될 때마다
+`wick_position_manager.py`가 `combo_weights.update_cppi_state_after_trade()`
+로 그 조합의 CPPI 상태를 갱신하고, 매월 1일 가중치 재계산과 같은 시점에
+전 조합 리밸런싱(상태 리셋)된다.
 """
 from __future__ import annotations
 

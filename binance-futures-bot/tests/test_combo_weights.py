@@ -18,11 +18,14 @@ from app.config import settings
 @pytest.fixture(autouse=True)
 def _isolate_file_and_settings(tmp_path, monkeypatch):
     monkeypatch.setattr(cw, "COMBO_WEIGHTS_FILE", tmp_path / "combo_weights.json")
+    monkeypatch.setattr(cw, "CPPI_STATE_FILE", tmp_path / "combo_cppi_state.json")
     original_whitelist = set(settings.wick_auto_trade_whitelist)
     original_enabled = settings.wick_reliability_weighting_enabled
+    original_cppi_enabled = settings.wick_cppi_enabled
     yield
     settings.wick_auto_trade_whitelist = original_whitelist
     settings.wick_reliability_weighting_enabled = original_enabled
+    settings.wick_cppi_enabled = original_cppi_enabled
 
 
 def test_equal_scores_give_equal_weights(monkeypatch):
@@ -231,3 +234,106 @@ def test_compute_combo_weighted_risk_usdt_respects_percent_max_cap(monkeypatch):
     # 상한 없으면 1000*1.0*0.02 = 20, 상한 5로 잘려야 함
     risk_usdt = cw.compute_combo_weighted_risk_usdt(broker, "A", "15m", entry_price=100.0, stop_price=98.0)
     assert risk_usdt == pytest.approx(5.0)
+
+
+# ---------------------------------------------------------------------------
+# 비대칭 CPPI 사이징 오버레이 (WICK_CPPI_ENABLED)
+# ---------------------------------------------------------------------------
+
+def test_get_cppi_multiplier_returns_1_when_disabled():
+    settings.wick_cppi_enabled = False
+    assert cw.get_cppi_multiplier("BTCUSDT", "15m") == 1.0
+
+
+def test_get_cppi_multiplier_returns_1_when_no_state_yet():
+    settings.wick_cppi_enabled = True
+    assert cw.get_cppi_multiplier("BTCUSDT", "15m") == pytest.approx(1.0 + cw.CPPI_BOOST)
+
+
+def test_get_cppi_multiplier_boosts_at_fresh_peak():
+    settings.wick_cppi_enabled = True
+    cw.save_cppi_state({"BTCUSDT:15m": {"equity": 1.0, "peak": 1.0}})
+    assert cw.get_cppi_multiplier("BTCUSDT", "15m") == pytest.approx(1.0 + cw.CPPI_BOOST)
+
+
+def test_get_cppi_multiplier_shrinks_during_drawdown():
+    settings.wick_cppi_enabled = True
+    cw.save_cppi_state({"BTCUSDT:15m": {"equity": 0.9, "peak": 1.0}})  # 10% 드로다운
+    expected = max(cw.CPPI_FLOOR, 1.0 - cw.CPPI_SENSITIVITY * 0.10)
+    assert cw.get_cppi_multiplier("BTCUSDT", "15m") == pytest.approx(expected)
+
+
+def test_get_cppi_multiplier_never_below_floor():
+    settings.wick_cppi_enabled = True
+    cw.save_cppi_state({"BTCUSDT:15m": {"equity": 0.01, "peak": 1.0}})  # 거의 전부 드로다운
+    assert cw.get_cppi_multiplier("BTCUSDT", "15m") == pytest.approx(cw.CPPI_FLOOR)
+
+
+def test_update_cppi_state_after_trade_win_at_peak_applies_boost():
+    settings.wick_cppi_enabled = True
+    cw.update_cppi_state_after_trade("BTCUSDT", "15m", pct_return=10.0)
+    state = cw.load_cppi_state()["BTCUSDT:15m"]
+    expected_equity = 1.0 * (1 + (1.0 + cw.CPPI_BOOST) * 10.0 / 100)
+    assert state["equity"] == pytest.approx(expected_equity)
+    assert state["peak"] == pytest.approx(expected_equity)  # 신고점 갱신
+
+
+def test_update_cppi_state_after_trade_loss_then_recovery_tracks_peak_correctly():
+    settings.wick_cppi_enabled = True
+    cw.update_cppi_state_after_trade("BTCUSDT", "15m", pct_return=-10.0)
+    after_loss = cw.load_cppi_state()["BTCUSDT:15m"]
+    assert after_loss["equity"] < 1.0
+    assert after_loss["peak"] == pytest.approx(1.0)  # 손실이어도 고점은 그대로
+
+    cw.update_cppi_state_after_trade("BTCUSDT", "15m", pct_return=1.0)
+    after_small_win = cw.load_cppi_state()["BTCUSDT:15m"]
+    assert after_small_win["equity"] > after_loss["equity"]
+    assert after_small_win["peak"] == pytest.approx(1.0)  # 아직 신고점 회복 전
+
+
+def test_update_cppi_state_after_trade_noop_when_disabled(tmp_path):
+    settings.wick_cppi_enabled = False
+    cw.update_cppi_state_after_trade("BTCUSDT", "15m", pct_return=10.0)
+    assert not cw.CPPI_STATE_FILE.exists()
+
+
+def test_reset_cppi_state_for_rebalance_resets_all_combos_to_1():
+    settings.wick_cppi_enabled = True
+    cw.update_cppi_state_after_trade("BTCUSDT", "15m", pct_return=50.0)
+    cw.update_cppi_state_after_trade("ETHUSDT", "5m", pct_return=-20.0)
+
+    cw.reset_cppi_state_for_rebalance([("BTCUSDT", "15m"), ("ETHUSDT", "5m")])
+
+    state = cw.load_cppi_state()
+    assert state == {
+        "BTCUSDT:15m": {"equity": 1.0, "peak": 1.0},
+        "ETHUSDT:5m": {"equity": 1.0, "peak": 1.0},
+    }
+
+
+def test_recompute_and_save_also_resets_cppi_state(monkeypatch):
+    settings.wick_cppi_enabled = True
+    settings.wick_auto_trade_whitelist = {("BTCUSDT", "15m")}
+    cw.update_cppi_state_after_trade("BTCUSDT", "15m", pct_return=50.0)
+    monkeypatch.setattr(cw, "_score_combo", lambda s, tf, strat, fee: None)  # 가중치 계산은 실패하게
+
+    cw.recompute_and_save()
+
+    # 가중치 재계산이 실패해도 CPPI 리밸런싱(리셋)은 별개로 수행돼야 함
+    assert cw.load_cppi_state()["BTCUSDT:15m"] == {"equity": 1.0, "peak": 1.0}
+
+
+def test_compute_combo_weighted_risk_usdt_applies_cppi_multiplier(monkeypatch):
+    settings.wick_cppi_enabled = True
+    settings.wick_auto_trade_whitelist = {("A", "15m")}
+    cw.save_weights({"A:15m": 1.0})
+    cw.save_cppi_state({"A:15m": {"equity": 0.9, "peak": 1.0}})  # 10% 드로다운 -> 배율 축소
+    monkeypatch.setattr(settings, "risk_percent_max_usdt", 0)
+    broker = FakeBrokerBalance(1000.0)
+
+    risk_usdt = cw.compute_combo_weighted_risk_usdt(broker, "A", "15m", entry_price=100.0, stop_price=98.0)
+
+    cppi_mult = max(cw.CPPI_FLOOR, 1.0 - cw.CPPI_SENSITIVITY * 0.10)
+    expected_notional = 1000.0 * 1.0 * cppi_mult
+    expected_risk = expected_notional * 2.0 / 100.0
+    assert risk_usdt == pytest.approx(expected_risk)

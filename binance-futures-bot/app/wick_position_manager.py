@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 import pandas as pd
 
 from .broker import BinanceFuturesBroker, BrokerError
+from .combo_weights import update_cppi_state_after_trade
 from .db import SessionLocal, TradeRecord
 from .history import fetch_klines, is_candle_closed
 from .indicators import atr as atr_series
@@ -135,6 +136,15 @@ def _reconcile_if_stopped_out(session, broker: BinanceFuturesBroker, trade: Trad
         "트레일링 청산" if status == "CLOSED_TRAIL" else "손절",
         trade.realized_pnl_usdt,
     )
+    if exit_price is not None and trade.entry_price:
+        # CPPI 상태(WICK_CPPI_ENABLED)는 % 수익률 기준으로 갱신한다 - $ pnl이
+        # 아니라 백테스트와 같은 단위를 써야 배율 계산이 검증된 수치와 일치함.
+        direction = 1 if trade.side == "BUY" else -1
+        pct_return = (exit_price - trade.entry_price) / trade.entry_price * 100 * direction
+        try:
+            update_cppi_state_after_trade(trade.symbol, trade.timeframe, pct_return)
+        except Exception:
+            logger.exception("CPPI 상태 갱신 실패 (다음 거래부터 다시 시도됨): %s %s", trade.symbol, trade.timeframe)
     return True
 
 

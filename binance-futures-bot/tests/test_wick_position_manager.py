@@ -7,7 +7,9 @@ from datetime import datetime
 import pandas as pd
 import pytest
 
+import app.combo_weights as combo_weights
 import app.wick_position_manager as wpm
+from app.config import settings
 from app.db import SessionLocal, TradeRecord
 from app.wick_position_manager import WICK_STRATEGY_KEY, compute_trailing_state, manage_wick_positions
 
@@ -218,3 +220,56 @@ def test_manage_wick_positions_survives_per_trade_exception(monkeypatch):
 
     updated = manage_wick_positions(broker=broker)  # 예외를 삼키고 계속 진행해야 함 (raise 안 함)
     assert updated == 0
+
+
+# ---------------------------------------------------------------------------
+# 청산 시 CPPI 상태 갱신 훅 (WICK_CPPI_ENABLED)
+# ---------------------------------------------------------------------------
+
+def test_stop_out_updates_cppi_state_when_enabled(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "wick_cppi_enabled", True)
+    monkeypatch.setattr(combo_weights, "CPPI_STATE_FILE", tmp_path / "cppi_state.json")
+    _add_open_wick_trade()  # entry_price=100.0, side=BUY(LONG)
+    broker = FakeBroker(order_status={"sl-1": {"status": "FILLED", "avgPrice": "110.0"}})  # +10% 승리
+
+    manage_wick_positions(broker=broker)
+
+    state = combo_weights.load_cppi_state()
+    combo_state = state["BTCUSDT:15m"]
+    # 신고점 상태(peak=1.0)에서 진입했으니 배율은 1.0+CPPI_BOOST, 그대로 +10% 수익에 적용돼야 함
+    expected_mult = 1.0 + combo_weights.CPPI_BOOST
+    assert combo_state["equity"] == pytest.approx(1.0 * (1 + expected_mult * 10.0 / 100))
+    assert combo_state["peak"] == pytest.approx(combo_state["equity"])
+
+
+def test_stop_out_does_not_touch_cppi_state_when_disabled(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "wick_cppi_enabled", False)
+    state_file = tmp_path / "cppi_state.json"
+    monkeypatch.setattr(combo_weights, "CPPI_STATE_FILE", state_file)
+    _add_open_wick_trade()
+    broker = FakeBroker(order_status={"sl-1": {"status": "FILLED", "avgPrice": "94.5"}})
+
+    manage_wick_positions(broker=broker)
+
+    assert not state_file.exists()
+
+
+def test_stop_out_cppi_update_failure_does_not_block_close(monkeypatch, tmp_path):
+    """CPPI 상태 갱신이 실패해도(예: 파일 쓰기 오류) 거래 청산 자체는 정상 처리돼야 한다."""
+    monkeypatch.setattr(settings, "wick_cppi_enabled", True)
+
+    def boom(*a, **k):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(wpm, "update_cppi_state_after_trade", boom)
+    _add_open_wick_trade()
+    broker = FakeBroker(order_status={"sl-1": {"status": "FILLED", "avgPrice": "94.5"}})
+
+    updated = manage_wick_positions(broker=broker)
+
+    assert updated == 1
+    session = SessionLocal()
+    try:
+        assert session.query(TradeRecord).one().status == "CLOSED_SL"
+    finally:
+        session.close()
