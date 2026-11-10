@@ -182,3 +182,16 @@ def test_remotely_disabled_skips_entry(patch_data, monkeypatch):
     engine.run_once()
 
     assert engine.broker.calls == []
+
+
+def test_emergency_halted_skips_entry(patch_data, monkeypatch):
+    """긴급 서킷브레이커(app/emergency_stop.py)가 발동 중이면 화이트리스트가
+    맞아도 신규 진입을 건너뛰어야 한다 - 원격 킬스위치와 같은 범위."""
+    settings.auto_trade_enabled = True
+    settings.auto_trade_whitelist = {("BTCUSDT", "1h")}
+    monkeypatch.setattr(signal_engine_module, "is_emergency_halted", lambda: True)
+    engine = SignalEngine(broker=FakeBroker())
+
+    engine.run_once()
+
+    assert engine.broker.calls == []

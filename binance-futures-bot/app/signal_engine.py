@@ -15,6 +15,7 @@ from . import db, risk
 from .broker import BinanceFuturesBroker, BrokerError
 from .config import settings
 from .db import SessionLocal, SignalRecord, TradeRecord
+from .emergency_stop import is_emergency_halted
 from .history import fetch_klines, is_candle_closed
 from .notify import notify_signal
 from .position_manager import count_open_positions, has_open_position
@@ -75,6 +76,9 @@ class SignalEngine:
         broker = self.broker or BinanceFuturesBroker()
 
         if not settings.is_whitelisted(symbol, timeframe):
+            return False
+        if is_emergency_halted():
+            logger.warning("긴급 서킷브레이커 발동 중 - 신규 진입 스킵: %s %s", symbol, timeframe)
             return False
         if not is_remotely_enabled("keltner"):
             logger.info("원격 제어로 꺼짐 - 신규 진입 스킵: %s %s", symbol, timeframe)

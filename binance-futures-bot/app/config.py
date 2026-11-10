@@ -113,6 +113,23 @@ class Settings:
         default_factory=lambda: float(os.getenv("DAILY_LOSS_LIMIT_PCT", "0"))
     )
 
+    # --- 긴급 서킷브레이커 (선택, 기본 꺼짐) ---
+    # 일일 손실 한도 킬스위치(위)는 "오늘 실현손익"만 보고 신규 진입만
+    # 막는다 - 이미 열려있는 포지션은 안 건드림. 이 기능은 다른 층이다:
+    # 미실현 손익까지 포함한 지금 이 순간의 실제 계좌 가치(app/binance_account.py
+    # :get_account_snapshot의 total_margin_balance)가 오늘 시작 대비
+    # EMERGENCY_STOP_PCT% 이상 빠지면 열려있는 포지션을 전부 즉시 시장가로
+    # 강제 청산하고, 사람이 직접 data/emergency_halt.json을 지우기 전까지
+    # 신규 진입을 전부 막는다(app/emergency_stop.py). 플래시크래시/갭처럼
+    # 개별 손절 주문의 슬리피지가 감당 못 할 만큼 커지는 상황에 대한 최후
+    # 방어선 - 0이면(기본값) 비활성.
+    emergency_stop_pct: float = field(
+        default_factory=lambda: float(os.getenv("EMERGENCY_STOP_PCT", "0"))
+    )
+    emergency_stop_check_interval_seconds: int = field(
+        default_factory=lambda: int(os.getenv("EMERGENCY_STOP_CHECK_INTERVAL_SECONDS", "30"))
+    )
+
     # --- 원격 킬스위치 (선택, 기본 꺼짐) ---
     # 실제 매매가 도는 서버(예: Oracle VM)에서, 대시보드가 떠 있는 주소를
     # 가리키게 설정하면 그 대시보드의 버튼으로 신규 진입만 원격으로 끄고

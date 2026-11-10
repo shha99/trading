@@ -266,6 +266,20 @@ def test_remotely_disabled_skips_entry(patch_data, monkeypatch):
     assert broker.calls == []
 
 
+def test_emergency_halted_skips_entry(patch_data, monkeypatch):
+    """긴급 서킷브레이커(app/emergency_stop.py)가 발동 중이면 화이트리스트가
+    맞아도 신규 진입을 건너뛰어야 한다."""
+    settings.wick_auto_trade_enabled = True
+    settings.wick_auto_trade_whitelist = {("BTCUSDT", "15m")}
+    monkeypatch.setattr(wick_engine_module, "is_emergency_halted", lambda: True)
+    broker = FakeBroker()
+
+    entered = WickSignalEngine(strategy=FakeWickStrategy(), broker=broker).run_once()
+
+    assert entered == 0
+    assert broker.calls == []
+
+
 def test_combo_weight_multiplies_risk_usdt(patch_data, monkeypatch):
     """조합별 신뢰도 가중치(app/combo_weights.get_combo_weight)가 기본
     리스크 금액(risk.compute_risk_usdt)에 곱해져서 실제 주문에 전달돼야

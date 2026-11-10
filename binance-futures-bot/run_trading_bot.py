@@ -45,6 +45,7 @@ from app.combo_weights import COMBO_WEIGHTS_FILE
 from app.combo_weights import recompute_and_save as recompute_combo_weights
 from app.config import settings
 from app.db import init_db
+from app.emergency_stop import check_emergency_stop
 from app.paper_trading import run_once as run_paper_trading_once
 from app.position_manager import check_time_stops, reconcile_open_positions
 from app.signal_engine import run_once as run_signal_once
@@ -90,6 +91,11 @@ def _log_startup_banner() -> None:
     logger.info(
         "조합별 신뢰도 가중치(매월 1일 재평가): %s",
         "ON" if settings.wick_reliability_weighting_enabled else "off",
+    )
+    logger.info(
+        "긴급 서킷브레이커: %s",
+        f"ON (오늘 시작 대비 {settings.emergency_stop_pct}% 손실 시 전 포지션 강제청산, {settings.emergency_stop_check_interval_seconds}초 간격 점검)"
+        if settings.emergency_stop_pct > 0 else "off",
     )
     logger.info("=" * 72)
     if not settings.binance_testnet and (settings.auto_trade_enabled or settings.wick_auto_trade_enabled):
@@ -141,6 +147,11 @@ def main() -> None:
         scheduler.add_job(
             recompute_combo_weights, trigger="cron", day=1, hour=0, minute=5,
             id="combo_weights_monthly", max_instances=1, coalesce=True,
+        )
+    if settings.emergency_stop_pct > 0:
+        scheduler.add_job(
+            check_emergency_stop, trigger="interval", seconds=settings.emergency_stop_check_interval_seconds,
+            id="emergency_stop_check", max_instances=1, coalesce=True,
         )
     logger.info(
         "스케줄러 시작: 시그널 스캔 %d초(켈트너+wick+모의투자), 포지션 점검 %d초 간격 - Ctrl+C로 종료",

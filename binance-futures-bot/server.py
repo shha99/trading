@@ -32,6 +32,7 @@ from app.db import SessionLocal, SignalRecord, TradeRecord, init_db
 from app.history import is_candle_closed
 from app.combo_weights import COMBO_WEIGHTS_FILE
 from app.combo_weights import recompute_and_save as recompute_combo_weights
+from app.emergency_stop import check_emergency_stop, is_emergency_halted
 from app.indicator_catalog import build_catalog, compute_indicator
 from app.lab_stats_builder import LAB_STATS_FILE
 from app.lab_stats_builder import build_all as build_lab_stats
@@ -241,6 +242,11 @@ def _start_scheduler() -> BackgroundScheduler:
             recompute_combo_weights, trigger="cron", day=1, hour=0, minute=5,
             id="combo_weights_monthly", max_instances=1, coalesce=True,
         )
+    if settings.emergency_stop_pct > 0:
+        _scheduler.add_job(
+            check_emergency_stop, trigger="interval", seconds=settings.emergency_stop_check_interval_seconds,
+            id="emergency_stop_check", max_instances=1, coalesce=True,
+        )
     _scheduler.start()
     logger.info(
         "스케줄러 시작: 시그널 스캔 %d초(켈트너+wick), 포지션 점검 %d초, "
@@ -370,6 +376,8 @@ def risk_status() -> dict:
         "daily_loss_limit_usdt": settings.daily_loss_limit_usdt,
         "todays_realized_pnl_usdt": todays_realized_pnl_usdt(),
         "kill_switch_active": is_kill_switch_active(),
+        "emergency_stop_pct": settings.emergency_stop_pct,
+        "emergency_halted": is_emergency_halted(),
     }
 
 

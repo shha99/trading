@@ -39,6 +39,7 @@ from .broker import BinanceFuturesBroker, BrokerError
 from .combo_weights import compute_combo_weighted_risk_usdt, get_combo_weight
 from .config import settings
 from .db import SessionLocal, TradeRecord
+from .emergency_stop import is_emergency_halted
 from .history import fetch_klines, is_candle_closed
 from .lab_strategies import BollingerWickBreakevenTrailStrategy, BollingerWickVolumeStochRsiConfirmStrategy
 from .notify import notify_wick_entry
@@ -94,6 +95,9 @@ class WickSignalEngine:
     def _maybe_execute(self, symbol: str, timeframe: str, entry: dict, entry_time) -> bool:
         broker = self.broker or BinanceFuturesBroker()
         if not settings.is_wick_whitelisted(symbol, timeframe):
+            return False
+        if is_emergency_halted():
+            logger.warning("긴급 서킷브레이커 발동 중 - wick 신규 진입 스킵: %s %s", symbol, timeframe)
             return False
         if not is_remotely_enabled("wick"):
             logger.info("원격 제어로 꺼짐 - wick 신규 진입 스킵: %s %s", symbol, timeframe)
