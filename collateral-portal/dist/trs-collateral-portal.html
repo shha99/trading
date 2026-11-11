@@ -236,6 +236,13 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
             <option value="release">말소 가능</option>
           </select>
         </label>
+        <label class="f">제공/수취
+          <select id="fdir" aria-label="제공 수취 필터">
+            <option value="">모두</option>
+            <option value="제공">제공만</option>
+            <option value="수취">수취만</option>
+          </select>
+        </label>
         <div class="row nav">
           <button type="button" class="btn" id="prev-call" aria-label="이전 건">◀ 이전</button>
           <span class="num muted" id="pos-call">–</span>
@@ -338,7 +345,7 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
       </div>
       <div class="row"><button type="button" class="btn" id="lk-apply">열 바꾼 뒤 다시 반영</button><button type="button" class="btn" id="lk-clear">저장된 연결 비우기</button><span class="fine" id="lk-msg"></span></div>
       <div class="lk-box" id="pc-box">
-        <h3>③ 상품코드 입력 <span class="muted">(하나플러스 33열 양식 — A 장외파생담보 · C 상품코드 · M 상품명 · AF 장파담보번호)</span></h3>
+        <h3>③ 상품코드 입력 <span class="muted">(하나플러스 33열 양식 — B 담보번호 · C OB+ 상품코드 · D ETF 단축코드, AF 장파담보번호가 있으면 우선)</span></h3>
         <p class="fine">이 칸에 넣은 담보번호 ↔ 상품코드·상품명은 ①②의 자동 연결보다 먼저 적용됩니다. 엑셀에서 복사해 붙여넣거나(머리글 없어도 열 위치로 읽음) 파일을 올리거나, 아래에서 한 줄씩 직접 넣으세요. 넣을수록 추가·갱신됩니다.</p>
         <p class="fine" id="pc-saved"></p>
         <textarea id="pc-paste" style="min-height:80px" placeholder="장외파생담보 · 담보종목코드 · 상품코드 · 펀드코드 · 일자 … 장파담보번호 · 구분 (33열) 을 복사해 붙여넣기"></textarea>
@@ -718,18 +725,21 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
       var cellOf = function (r, i) { return i >= 0 && r[i] != null ? String(r[i]).trim() : ""; };
       var addCode = function (map, kk, rec) {
         var arr = toArr(map[kk]), ex = arr.find(function (x) { return x.ob === rec.ob; });
-        if (ex) { if (!ex.name && rec.name) ex.name = rec.name; } else arr.push(rec);
+        if (ex) { if (!ex.name && rec.name) ex.name = rec.name; if (!ex.etf && rec.etf) ex.etf = rec.etf; } else arr.push(rec);
         map[kk] = arr;
       };
       t.sheets[t.sheet].slice(t.hdr + 1).forEach(function (r) {
         if (isSci(r[t.map.key])) sci++;
         var pr = lkKey(r[t.map.prod]);
         var k = noKey(r[t.map.key]), k2 = t.map.key2 >= 0 ? noKey(r[t.map.key2]) : "";
+        if (!/^\d{10,}$/.test(k)) k = ""; if (!/^\d{10,}$/.test(k2)) k2 = "";
+        if (!k && !k2) k = rowKey(r, [1]); // 장파담보번호가 빈 행은 B열(담보번호)·다른 열에서
         if (k) seen[k] = 1; if (k2) seen[k2] = 1;
-        // 상품코드(= OB+ 상품코드)가 있으면 바로 연결
-        var code = cellOf(r, t.map.code) || cellOf(r, t.map.code2), nm = cellOf(r, t.map.prod);
+        // 상품코드(= OB+ 상품코드)가 있으면 바로 연결. 담보 종목코드(A005930)는 OB+ 코드로 쓰지 않는다
+        var c1 = cellOf(r, t.map.code), c2 = cellOf(r, t.map.code2);
+        var code = isObCode(c1) ? c1.toUpperCase() : isObCode(c2) ? c2.toUpperCase() : "", nm = cellOf(r, t.map.prod);
         if (code && (k || k2)) {
-          var rec = { ob: code, name: nm };
+          var rec = { ob: code, name: isTrsName(nm) ? nm : "", etf: etfFrom6(cellOf(r, 3)) };
           [k, k2].forEach(function (kk) { if (kk) addCode(codes, kk, rec); });
           r.forEach(function (cell, ci) {
             if (ci === t.map.key) return;
@@ -781,10 +791,11 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
   }
   // ---------- ③ 상품코드 입력 (하나플러스 33열 양식, 열 위치 고정) ----------
   // A 장외파생담보(0) · C 상품코드(2) · L 상품코드(11) · M 상품명(12) · AF 장파담보번호(31)
-  var PC_POS = { key: 31, key2: 0, code: 2, code2: 11, name: 12 };
-  function pcAddEntry(pc, key, code, name) {
+  // 실제 값 기준: A 제공/수취 · B 담보번호 · C OB+ 상품코드 · D ETF 단축코드 · AF 장파담보번호 (L·M은 담보 종목이라 쓰지 않음)
+  var PC_POS = { key: 31, bkey: 1, key2: 0, code: 2, code2: 11, name: 12, etf: 3 };
+  function pcAddEntry(pc, key, code, name, etf) {
     var arr = toArr(pc[key]), ex = arr.find(function (x) { return x.ob === code; });
-    if (ex) { if (name) ex.name = name; } else arr.push({ ob: code, name: name || "" });
+    if (ex) { if (name) ex.name = name; if (etf) ex.etf = etf; } else arr.push({ ob: code, name: name || "", etf: etf || "" });
     pc[key] = arr;
   }
   function pcImport(rows, label) {
@@ -794,19 +805,19 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     for (var h = 0; h < Math.min(rows.length, 10); h++) {
       var hd = rows[h].map(function (c) { return String(c).replace(/\s/g, ""); });
       if (hd.indexOf("장파담보번호") >= 0) {
-        pos.key = hd.indexOf("장파담보번호"); pos.key2 = hd.indexOf("장외파생담보");
+        pos.key = hd.indexOf("장파담보번호"); pos.key2 = hd.indexOf("장외파생담보"); pos.bkey = hd.indexOf("담보종목코드");
         var cs = hd.reduce(function (a, v, i) { if (v === "상품코드") a.push(i); return a; }, []);
-        pos.code = cs[0] != null ? cs[0] : -1; pos.code2 = cs[1] != null ? cs[1] : -1; pos.name = hd.indexOf("상품명");
+        pos.code = cs[0] != null ? cs[0] : -1; pos.code2 = cs[1] != null ? cs[1] : -1; pos.name = hd.indexOf("상품명"); pos.etf = hd.indexOf("펀드코드");
         start = h + 1; break;
       }
     }
     var cell = function (r, i) { return i >= 0 && r[i] != null ? String(r[i]).trim() : ""; };
     rows.slice(start).forEach(function (r) {
-      var k = noKey(cell(r, pos.key)), k2 = noKey(cell(r, pos.key2)), code = cell(r, pos.code) || cell(r, pos.code2), name = cell(r, pos.name);
-      if (!/^\d{10,}$/.test(k)) k = ""; if (!/^\d{10,}$/.test(k2)) k2 = "";
-      if (!(k || k2) || !code) { skip++; return; }
-      if (k) pcAddEntry(pc, k, code, name);
-      if (k2 && k2 !== k) pcAddEntry(pc, k2, code, name);
+      var k = rowKey(r, [pos.key, pos.bkey, pos.key2]);
+      var code = isObCode(cell(r, pos.code)) ? cell(r, pos.code) : isObCode(cell(r, pos.code2)) ? cell(r, pos.code2) : "";
+      var name = isTrsName(cell(r, pos.name)) ? cell(r, pos.name) : "", etf = etfFrom6(cell(r, pos.etf));
+      if (!k || !code) { skip++; return; }
+      pcAddEntry(pc, k, code.toUpperCase(), name, etf);
       n++;
     });
     state.link.pc = pc; state.link.pcAt = new Date().toISOString();
@@ -819,7 +830,8 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     $("pc-saved").innerHTML = keys.length ? "<span class='pill ok'>저장됨</span> 담보번호 <b class='num'>" + keys.length + "</b>건 · 상품 " + rows.length + "줄 · 마지막 반영 " + localTime(state.link.pcAt) : "<span class='pill dim'>비어 있음</span> 아직 넣은 값이 없습니다.";
     $("pc-body").innerHTML = rows.map(function (x) {
       var d = x[1];
-      return "<tr><td class='num nw'>" + esc(x[0]) + "</td><td class='num nw'>" + esc(d.ob) + "</td><td>" + esc(d.name) + "</td><td class='num'>" + esc(etfFromName(d.name)) +
+      var o = ((state.link || {}).ob || {})[lkKey(d.ob)] || {}, nm = d.name || o.obName || "";
+      return "<tr><td class='num nw'>" + esc(x[0]) + "</td><td class='num nw'>" + esc(d.ob) + "</td><td>" + (nm ? esc(nm) : "<span class='muted'>(상품명 없음)</span>") + "</td><td class='num'>" + esc(d.etf || o.etf || etfFromName(nm)) +
         "</td><td class='r'><button type='button' class='btn x' data-pcdel='" + esc(x[0]) + "|" + esc(d.ob) + "' aria-label='삭제'>✕</button></td></tr>";
     }).join("") || "<tr><td colspan='5' class='muted'>붙여넣기·파일·한 줄 추가로 넣은 값이 여기에 쌓입니다.</td></tr>";
   }
@@ -831,7 +843,7 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     if (man) { var one = { prod: man.obName, ob: man.ob, obName: man.obName, etf: man.etf || etfFromName(man.obName) }; return Object.assign({ list: [one], miss: [], src: "수동" }, one); }
     var pcl = toArr(((state.link || {}).pc || {})[noKey(k)]);
     if (pcl.length) {
-      var pl = pcl.map(function (d) { var o = ((state.link || {}).ob || {})[lkKey(d.ob)] || {}, nm = d.name || o.obName || ""; return { prod: nm, ob: d.ob, obName: nm, etf: o.etf || etfFromName(nm) }; });
+      var pl = pcl.map(function (d) { var o = ((state.link || {}).ob || {})[lkKey(d.ob)] || {}, nm = d.name || o.obName || ""; return { prod: nm, ob: d.ob, obName: nm, etf: d.etf || o.etf || etfFromName(nm) }; });
       return { list: pl, miss: [], prods: pl.map(function (x) { return x.prod; }), src: "상품코드 입력", prod: pl[0].prod, ob: pl[0].ob, obName: pl[0].obName, etf: pl[0].etf, missText: "" };
     }
     var L = state.link || {}, nk = noKey(k), prods = toArr((L.hp || {})[nk] || (L.hp || {})[lkKey(k)]), list = [], miss = [], src = "자동";
@@ -841,7 +853,7 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     if (direct.length) {
       direct.forEach(function (d) {
         var o = (L.ob || {})[lkKey(d.ob)] || {}, nm = d.name || o.obName || "";
-        list.push({ prod: nm, ob: d.ob, obName: nm, etf: o.etf || etfFromName(nm) });
+        list.push({ prod: nm, ob: d.ob, obName: nm, etf: d.etf || o.etf || etfFromName(nm) });
       });
       return { list: list, miss: [], prods: list.map(function (x) { return x.prod; }), src: src + "(상품코드)", prod: list[0].prod, ob: list[0].ob, obName: list[0].obName, etf: list[0].etf, missText: "" };
     }
@@ -860,9 +872,22 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
   // 배정 줄이 고른 OB+ 상품 (없으면 담보번호의 첫 상품)
   function lineOb(c, a) { return (c.m.list || []).find(function (x) { return x.ob === a.ob; }) || c.m; }
   // "TRS(ETF_481050)_..." → KR7481050003 (ISIN 검사숫자 계산)
+  // OB+ 상품코드 모양 (P0826M604839, P0426MA48855 …). 담보 종목코드(A005930)·ISIN·숫자는 제외
+  function isObCode(v) { var t = String(v || "").trim().toUpperCase(); return /^[A-Z]\d{4}[A-Z][A-Z0-9]{4,}$/.test(t) && !/^A\d{6}$/.test(t); }
+  function isTrsName(v) { return /TRS|ETF[_\s-]?\d{6}/i.test(String(v || "")); }
+  // 행에서 담보번호(12자리) 찾기: 지정 열들 → 그 밖의 아무 열
+  function rowKey(r, cols) {
+    for (var i = 0; i < cols.length; i++) { if (cols[i] < 0) continue; var k = noKey(r[cols[i]]); if (/^\d{12}$/.test(k)) return k; }
+    for (var j = 0; j < r.length; j++) { var k2 = noKey(r[j]); if (/^20\d{10}$/.test(k2)) return k2; }
+    return "";
+  }
+  function etfFrom6(v) { var m = String(v == null ? "" : v).trim().match(/^A?(\d{6})$/); return m ? isin6(m[1]) : ""; }
   function etfFromName(name) {
     var m = String(name || "").match(/ETF[_\s-]?(\d{6})/i); if (!m) return "";
-    var base = "KR7" + m[1] + "00", d = "";
+    return isin6(m[1]);
+  }
+  function isin6(six) {
+    var base = "KR7" + six + "00", d = "";
     for (var i = 0; i < base.length; i++) { var ch = base[i]; d += /[A-Z]/.test(ch) ? String(ch.charCodeAt(0) - 55) : ch; }
     var sum = 0;
     for (var j = d.length - 1, p = 0; j >= 0; j--, p++) { var n = +d[j]; if (p % 2 === 0) { n *= 2; if (n > 9) n -= 9; } sum += n; }
@@ -978,9 +1003,11 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
       tile("배정 후 남은 부족액", fmt(remain), remain ? "call" : "ok") +
       tile("말소 가능액", fmt(rel), "");
 
-    var f = $("flt").value;
+    var f = $("flt").value, fd = state.settings.fdir || "";
+    $("fdir").value = fd;
     calls.sort(function (a, b) { return (a.T - b.T) || (a.key < b.key ? -1 : 1); }); // 정산 파일 부족액 큰 순 (배정해도 순서가 안 바뀜)
     var shown = calls.filter(function (c) {
+      if (fd && c.dir !== fd) return false;
       if (f === "action") return (c.U < 0 && c.Z < 0) || (c.U > 0 && !c.lines.length);
       if (f === "call") return c.T < 0;
       if (f === "release") return c.U > 0;
@@ -1313,6 +1340,7 @@ label.f { display: grid; gap: 3px; font-size: 0.78rem; color: var(--muted); }
     });
   }
   $("flt").addEventListener("change", render);
+  $("fdir").addEventListener("change", function () { state.settings.fdir = this.value; commit(); });
   // 선택한 행이 상단 고정 선택 줄 바로 아래에 오도록 스크롤
   function goRow(key) {
     var tr = $("calls-body").querySelector('tr[data-key="' + key + '"]'); if (!tr) return;
