@@ -83,7 +83,7 @@ h3 { margin: 0; font-size: 0.9rem; font-weight: 700; }
 .tile .v { font-family: var(--font-num); font-size: 1.25rem; font-weight: 500; overflow-wrap: anywhere; }
 .tile.call .v { color: var(--call); }
 .tile.ok .v { color: var(--ok); }
-.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); overflow-x: auto; }
+.tabs { display: flex; flex-wrap: wrap; gap: 2px; border-bottom: 1px solid var(--line); }
 .tabs button { font: inherit; background: none; border: 0; border-bottom: 2px solid transparent; color: var(--muted); padding: 8px 12px; cursor: pointer; white-space: nowrap; margin-bottom: -1px; }
 .tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); font-weight: 500; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; display: grid; gap: 12px; min-width: 0; }
