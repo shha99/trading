@@ -16,11 +16,22 @@
 # 명령이 돌게 지정 (requirements.txt, server.py가 그 안에 있음).
 # PYTHON_VERSION: Render 기본값(최신 버전)은 TA-Lib 사전빌드 wheel이 아직
 # 없을 수 있어, 이 프로젝트에서 검증된 3.11로 고정.
+#
+# region: 바이낸스가 특정 지역(미국 등) IP의 선물 API 접근을 공개
+# 엔드포인트(ticker/klines)까지 포함해 전부 막는다 - Render 기본 리전이
+# 그 지역이면 "실계좌 실시간 (바이낸스 직접 조회)" 섹션이 전부
+# "APIError(code=0): Service unavailable from a restricted location"로
+# 실패한다(실제 매매 서버가 집 PC 등 차단 안 된 곳에서 돈다면 매매 자체엔
+# 영향 없음 - 이 대시보드의 실시간 조회 기능만 막힘). singapore로 바꿔서
+# 회피한다. ⚠️ 기존에 이미 떠있는 서비스는 render.yaml만 바꿔서는 리전이
+# 안 바뀔 수 있다 - Render 대시보드에서 안 바뀌어 있으면 Settings에서 직접
+# 바꾸거나(일부 플랜만 가능), 서비스를 새로 만들어야 할 수 있다.
 services:
   - type: web
     name: binance-futures-bot
     runtime: python
     plan: free
+    region: singapore
     rootDir: binance-futures-bot
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
