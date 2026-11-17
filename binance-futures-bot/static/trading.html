@@ -19,15 +19,24 @@
 <body>
 <header class="topbar">
   <h1 class="brand">💹 실계좌 매매 현황 (Trading)</h1>
-  <a class="strategy-link" href="/" target="_blank" rel="noopener">차트 대시보드 ↗</a>
   <a class="strategy-link" href="/vf" target="_blank" rel="noopener">검증된 전략 ↗</a>
-  <a class="strategy-link" href="/lab" target="_blank" rel="noopener">전략 실험실 ↗</a>
 </header>
 
 <main class="strategy-layout trading-layout">
   <section class="mode-banner" id="modeBanner">
     <span id="modeBadge" class="mode-badge">-</span>
     <span id="modeText">상태 확인 중...</span>
+  </section>
+
+  <section class="position-overview" id="positionOverview">
+    <div class="position-overview-main" id="positionOverviewMain">
+      <p class="meta-line" id="positionOverviewEmpty">보유 중인 포지션이 없습니다.</p>
+    </div>
+    <aside class="account-summary-side" id="accountSummarySide">
+      <h3>내 계좌</h3>
+      <p class="meta-line" id="accountSummaryMeta">상태 확인 중...</p>
+      <div id="accountSummaryStats"></div>
+    </aside>
   </section>
 
   <section class="engine-grid">
@@ -82,20 +91,13 @@
       </div>
     </div>
     <p class="meta-line">
-      아래 두 섹션(로컬 기록)과 달리, 이 섹션은 로컬 DB가 아니라
-      <strong>바이낸스 API에 직접 물어본 결과</strong>다 — 어느 컴퓨터에서
-      실제로 매매하고 있든(집 PC 등) 상관없이, 같은 계좌라면 항상 정확한
-      실시간 상태를 보여준다. 대부분 읽기 전용 조회지만, 우측 상단의
-      ON/OFF 버튼만은 예외로 신규 진입을 즉시 켜고 끈다(이미 열린 포지션의
-      손절/트레일링에는 영향 없음 - 아래 "원격 신규진입" 설명과 동일한 기능).
+      맨 위 "보유 포지션" 차트·"내 계좌" 요약도 이 바이낸스 실시간 조회
+      결과를 쓴다 - 어느 컴퓨터에서 실제로 매매하고 있든(집 PC 등) 상관없이,
+      같은 계좌라면 항상 정확한 상태를 보여준다. 우측 상단 ON/OFF 버튼만
+      예외로 신규 진입을 즉시 켜고 끈다(이미 열린 포지션의 손절/트레일링에는
+      영향 없음 - 아래 "원격 신규진입" 설명과 동일한 기능).
     </p>
     <p class="meta-line" id="binanceLiveMeta">상태 확인 중...</p>
-    <div class="paper-stats" id="binanceAccountStats"></div>
-    <h3 class="sub-heading">열린 포지션 (실시간)</h3>
-    <div class="table-scroll">
-      <table class="signals-table" id="binancePositionsTable"></table>
-    </div>
-    <div id="binanceChartsContainer"></div>
     <h3 class="sub-heading">최근 매매 기록 (진입→청산, 실시간)</h3>
     <div class="table-scroll">
       <table class="signals-table" id="binanceTradesTable"></table>

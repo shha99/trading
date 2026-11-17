@@ -32,24 +32,26 @@
     paperMeta: document.getElementById("paperMeta"),
     paperStats: document.getElementById("paperStats"),
     binanceLiveMeta: document.getElementById("binanceLiveMeta"),
-    binanceAccountStats: document.getElementById("binanceAccountStats"),
     keltnerRemoteText: document.getElementById("keltnerRemoteText"),
     keltnerRemoteBtn: document.getElementById("keltnerRemoteBtn"),
     wickRemoteText: document.getElementById("wickRemoteText"),
     wickRemoteBtn: document.getElementById("wickRemoteBtn"),
     liveAlgoToggleBtn: document.getElementById("liveAlgoToggleBtn"),
-    binancePositionsTable: document.getElementById("binancePositionsTable"),
     binanceTradesTable: document.getElementById("binanceTradesTable"),
-    binanceChartsContainer: document.getElementById("binanceChartsContainer"),
+    positionOverviewMain: document.getElementById("positionOverviewMain"),
+    positionOverviewEmpty: document.getElementById("positionOverviewEmpty"),
+    accountSummaryMeta: document.getElementById("accountSummaryMeta"),
+    accountSummaryStats: document.getElementById("accountSummaryStats"),
   };
 
   const LC = window.LightweightCharts;
-  // 심볼+방향 키 -> { box, chart, series, priceLine } - 매 폴링마다 다시
-  // 만들지 않고 재사용한다(차트를 새로 만들면 줌/스크롤 위치가 매번 초기화됨).
+  // 심볼:시간대:방향 키 -> { box, chart, series, priceLines, infoEl } - 매
+  // 폴링마다 새로 만들지 않고 재사용한다(차트를 새로 만들면 줌/스크롤
+  // 위치가 매번 초기화됨).
   const positionCharts = {};
 
   function chartKey(p) {
-    return `${p.symbol}:${p.side}`;
+    return `${p.symbol}:${p.timeframe}:${p.side}`;
   }
 
   function candlesToSeriesData(candles) {
@@ -64,12 +66,14 @@
     box.className = "position-chart-box";
     const title = document.createElement("div");
     title.className = "position-chart-title";
-    title.textContent = `${p.symbol} ${p.side} · 진입가 ${fmt(p.entry_price)}`;
     const chartEl = document.createElement("div");
     chartEl.className = "position-chart";
+    const infoEl = document.createElement("div");
+    infoEl.className = "position-chart-info";
     box.appendChild(title);
     box.appendChild(chartEl);
-    el.binanceChartsContainer.appendChild(box);
+    box.appendChild(infoEl);
+    el.positionOverviewMain.appendChild(box);
 
     const chart = LC.createChart(chartEl, {
       layout: { background: { color: "#1c2129" }, textColor: "#c9d1d9" },
@@ -78,23 +82,42 @@
       timeScale: { borderColor: "#2a313c", timeVisible: true, secondsVisible: false },
       autoSize: false,
       width: chartEl.clientWidth || 320,
-      height: 220,
+      height: 260,
     });
     const series = chart.addSeries(LC.CandlestickSeries, {
       upColor: "#26a69a", downColor: "#ef5350", borderVisible: false,
       wickUpColor: "#26a69a", wickDownColor: "#ef5350",
     });
-    new ResizeObserver(() => chart.resize(chartEl.clientWidth || 320, 220)).observe(chartEl);
+    new ResizeObserver(() => chart.resize(chartEl.clientWidth || 320, 260)).observe(chartEl);
 
-    const entry = { box, title, chart, series, priceLine: null };
+    const entry = { box, title, chart, series, infoEl, priceLines: [] };
     positionCharts[key] = entry;
     return entry;
   }
 
-  async function renderPositionCharts(positions) {
-    const liveKeys = new Set(positions.map(chartKey));
+  function setPriceLines(entry, lines) {
+    entry.priceLines.forEach((pl) => entry.series.removePriceLine(pl));
+    entry.priceLines = lines
+      .filter((l) => l.price != null)
+      .map((l) =>
+        entry.series.createPriceLine({
+          price: l.price, color: l.color, lineWidth: 1,
+          lineStyle: LC.LineStyle.Dashed, axisLabelVisible: true, title: l.title,
+        })
+      );
+  }
 
-    // 더 이상 열려있지 않은 포지션의 차트는 정리한다.
+  function pnlClass(v) {
+    return v == null ? "" : v >= 0 ? "up" : "down";
+  }
+
+  // 로컬 기록(진입가/시간대/손절가 - 이 서버가 직접 관리)과 바이낸스 실시간
+  // 조회(현재가/미실현손익 - 어느 컴퓨터에서 매매하든 정확함)를 심볼로 합쳐
+  // 하나의 포지션 카드로 보여준다. 둘 다 "조회"일 뿐 어느 쪽도 주문을 내지
+  // 않는다 - 트레이딩 로직은 전혀 건드리지 않음.
+  async function renderPositionOverview(localPositions, liveBySymbol) {
+    const liveKeys = new Set(localPositions.map(chartKey));
+
     Object.keys(positionCharts).forEach((key) => {
       if (!liveKeys.has(key)) {
         positionCharts[key].chart.remove();
@@ -103,33 +126,83 @@
       }
     });
 
-    if (!positions.length) return;
+    el.positionOverviewEmpty.style.display = localPositions.length ? "none" : "";
+    if (!localPositions.length) return;
 
     await Promise.all(
-      positions.map(async (p) => {
+      localPositions.map(async (p) => {
         const entry = ensurePositionChart(p);
-        entry.title.textContent = `${p.symbol} ${p.side} · 진입가 ${fmt(p.entry_price)}`;
+        const live = liveBySymbol[p.symbol] || null;
+        const markPrice = live ? live.mark_price : null;
+        const unrealizedPnl = live ? live.unrealized_pnl : null;
+        const pnlPct =
+          markPrice != null
+            ? ((p.side === "BUY" || p.side === "LONG" ? 1 : -1) * (markPrice - p.entry_price) / p.entry_price * 100)
+            : null;
+
+        entry.title.textContent =
+          `${p.symbol} ${p.timeframe} ${p.side === "BUY" ? "LONG" : p.side === "SELL" ? "SHORT" : p.side}` +
+          ` (${strategyLabel(p.strategy)})`;
+
+        entry.infoEl.innerHTML =
+          `<span>진입가 <b>${fmt(p.entry_price)}</b></span>` +
+          `<span>현재가 <b>${fmt(markPrice)}</b></span>` +
+          `<span>수량 <b>${fmt(p.quantity)}</b></span>` +
+          `<span>손절가 <b>${fmt(p.current_stop_price)}</b></span>` +
+          `<span class="${pnlClass(unrealizedPnl)}">미실현손익 <b>${fmt(unrealizedPnl)} USDT${pnlPct != null ? ` (${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(2)}%)` : ""}</b></span>`;
+
         try {
-          const res = await fetch(`/api/candles?symbol=${p.symbol}&timeframe=15m&limit=100`);
+          const res = await fetch(`/api/candles?symbol=${p.symbol}&timeframe=${p.timeframe}&limit=100`);
           const candles = await res.json();
           if (!candles.length) return;
           entry.series.setData(candlesToSeriesData(candles));
-          if (entry.priceLine) {
-            entry.series.removePriceLine(entry.priceLine);
-          }
-          entry.priceLine = entry.series.createPriceLine({
-            price: p.entry_price,
-            color: "#ffb74d",
-            lineWidth: 1,
-            lineStyle: LC.LineStyle.Dashed,
-            axisLabelVisible: true,
-            title: "진입가",
-          });
+          setPriceLines(entry, [
+            { price: p.entry_price, color: "#ffb74d", title: "진입가" },
+            { price: p.current_stop_price, color: "#ef5350", title: "손절가" },
+            { price: p.target_price, color: "#26a69a", title: "익절가" },
+          ]);
         } catch (e) {
           // 조용히 무시 - 다음 폴링에서 재시도
         }
       })
     );
+  }
+
+  async function loadPositionOverview() {
+    try {
+      const [localRes, liveRes] = await Promise.all([
+        fetch("/api/positions/open"),
+        fetch("/api/binance/status"),
+      ]);
+      const localPositions = await localRes.json();
+      const live = await liveRes.json();
+
+      const liveBySymbol = {};
+      if (live.ready) {
+        (live.open_positions || []).forEach((p) => {
+          liveBySymbol[p.symbol] = p;
+        });
+      }
+      await renderPositionOverview(localPositions, liveBySymbol);
+
+      if (!live.ready) {
+        el.accountSummaryMeta.textContent = "설정 안 됨" + (live.reason ? ` (${live.reason})` : "");
+        el.accountSummaryStats.innerHTML = "";
+        return;
+      }
+      el.accountSummaryMeta.textContent = live.testnet ? "테스트넷" : "⚠️ 실계좌";
+      const a = live.account;
+      let html =
+        `<div class="mini-stat"><span>총 지갑 잔고</span><b>${fmt(a.total_wallet_balance)} USDT</b></div>` +
+        `<div class="mini-stat ${pnlClass(a.total_unrealized_profit)}"><span>미실현 손익</span><b>${fmt(a.total_unrealized_profit)} USDT</b></div>` +
+        `<div class="mini-stat"><span>가용 잔고</span><b>${fmt(a.available_balance)} USDT</b></div>`;
+      if (a.cumulative_return_pct != null) {
+        html += `<div class="mini-stat ${pnlClass(a.cumulative_return_pct)}"><span>누적 수익률</span><b>${a.cumulative_return_pct}%</b></div>`;
+      }
+      el.accountSummaryStats.innerHTML = html;
+    } catch (e) {
+      // 조용히 무시 - 다음 폴링에서 재시도
+    }
   }
 
   async function loadHealth() {
@@ -229,45 +302,13 @@
         el.binanceLiveMeta.textContent =
           "설정 안 됨 - 이 서버 환경변수에 BINANCE_API_KEY/SECRET을 넣으면 켜집니다" +
           (s.reason ? ` (${s.reason})` : "");
-        el.binanceAccountStats.innerHTML = "";
-        el.binancePositionsTable.innerHTML = "";
         el.binanceTradesTable.innerHTML = "";
-        await renderPositionCharts([]);
         return;
       }
 
       el.binanceLiveMeta.textContent = s.testnet
         ? "테스트넷 계좌 기준 (가상 자금)"
         : "⚠️ 실계좌 기준 (실제 자금)";
-
-      const a = s.account;
-      const upnlCls = a.total_unrealized_profit >= 0 ? "up" : "down";
-      let statsHtml =
-        `<div class="paper-stat"><div class="paper-stat-label">총 지갑 잔고</div><div class="paper-stat-value">${fmt(a.total_wallet_balance)} USDT</div></div>` +
-        `<div class="paper-stat"><div class="paper-stat-label">미실현 손익</div><div class="paper-stat-value ${upnlCls}">${fmt(a.total_unrealized_profit)} USDT</div></div>` +
-        `<div class="paper-stat"><div class="paper-stat-label">가용 잔고</div><div class="paper-stat-value">${fmt(a.available_balance)} USDT</div></div>`;
-      if (a.cumulative_return_pct != null) {
-        const cumCls = a.cumulative_return_pct >= 0 ? "up" : "down";
-        statsHtml +=
-          `<div class="paper-stat"><div class="paper-stat-label">누적 수익률 (시작잔고 ${fmt(a.starting_balance_usdt)} USDT 대비)</div>` +
-          `<div class="paper-stat-value ${cumCls}">${a.cumulative_return_pct}%</div></div>`;
-      }
-      el.binanceAccountStats.innerHTML = statsHtml;
-
-      if (!s.open_positions.length) {
-        el.binancePositionsTable.innerHTML = "<tr><td>열린 포지션이 없습니다.</td></tr>";
-      } else {
-        let html = "<tr><th>심볼</th><th>방향</th><th>수량</th><th>진입가</th><th>현재가</th><th>미실현손익</th><th>레버리지</th></tr>";
-        s.open_positions.forEach((p) => {
-          const cls = p.unrealized_pnl >= 0 ? "up" : "down";
-          html += `<tr><td>${p.symbol}</td><td>${p.side}</td><td>${fmt(p.quantity)}</td>` +
-            `<td>${fmt(p.entry_price)}</td><td>${fmt(p.mark_price)}</td>` +
-            `<td class="${cls}">${fmt(p.unrealized_pnl)}</td><td>${p.leverage}x</td></tr>`;
-        });
-        el.binancePositionsTable.innerHTML = html;
-      }
-
-      await renderPositionCharts(s.open_positions);
 
       if (!s.recent_trades.length) {
         el.binanceTradesTable.innerHTML = "<tr><td>아직 매매 기록이 없습니다.</td></tr>";
@@ -337,7 +378,10 @@
   el.liveAlgoToggleBtn.addEventListener("click", () => toggleEngine("wick", el.liveAlgoToggleBtn));
 
   async function loadAll() {
-    await Promise.all([loadHealth(), loadRisk(), loadOpenPositions(), loadRecentTrades(), loadPaperStatus(), loadBinanceLive(), loadRemoteControl()]);
+    await Promise.all([
+      loadHealth(), loadRisk(), loadOpenPositions(), loadRecentTrades(),
+      loadPaperStatus(), loadBinanceLive(), loadRemoteControl(), loadPositionOverview(),
+    ]);
   }
 
   loadAll();
