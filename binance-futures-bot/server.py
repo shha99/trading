@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pandas as pd
 from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -28,6 +28,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.config import settings
 from app.binance_account import get_live_status as get_binance_live_status
+from app.binance_status_relay import get_pushed_status, record_pushed_status
 from app.db import SessionLocal, SignalRecord, TradeRecord, init_db
 from app.history import is_candle_closed
 from app.combo_weights import COMBO_WEIGHTS_FILE
@@ -388,8 +389,32 @@ def binance_live_status() -> dict:
     실제로 매매하고 있든(집 PC, 다른 서버 등) 상관없이, 이 서버에 같은
     계좌의 API 키만 설정돼 있으면 실제 열린 포지션/체결/잔고를 그대로
     보여준다. 읽기 전용 API만 호출하며, 이 엔드포인트 자체는 주문을 내지
-    않는다. `BINANCE_API_KEY`/`SECRET`이 설정 안 돼 있으면 `ready: false`."""
+    않는다. `BINANCE_API_KEY`/`SECRET`이 설정 안 돼 있으면 `ready: false`.
+
+    `STATUS_PUSH_TOKEN`이 켜져 있고 최근에 송신측(app/binance_status_relay.py
+    참고 - 보통 집 PC)이 보고한 값이 있으면, 이 서버가 직접 바이낸스를
+    호출하는 대신 그 값을 그대로 돌려준다(Render 등 지역 차단 우회용) -
+    없거나 오래됐으면 기존처럼 직접 조회로 폴백한다."""
+    pushed = get_pushed_status()
+    if pushed is not None:
+        return pushed
     return get_binance_live_status()
+
+
+@app.post("/api/binance/status/push")
+def push_binance_status(status: dict, x_status_push_token: str | None = Header(default=None)) -> dict:
+    """app/binance_status_relay.py 참고 - 실제 매매가 도는(바이낸스 지역
+    차단 안 된) 서버가 주기적으로 자기 조회 결과를 여기로 보고하면, 이
+    대시보드는 그걸 캐싱해뒀다가 GET /api/binance/status에서 그대로
+    돌려준다(이 대시보드 자신은 바이낸스를 호출할 필요가 없어짐).
+    STATUS_PUSH_TOKEN이 설정 안 돼 있으면 이 기능 자체가 꺼진 것이라
+    모든 요청을 거부한다."""
+    if not settings.status_push_token:
+        raise HTTPException(status_code=403, detail="STATUS_PUSH_TOKEN이 설정되지 않아 이 기능이 꺼져있습니다.")
+    if x_status_push_token != settings.status_push_token:
+        raise HTTPException(status_code=403, detail="토큰이 일치하지 않습니다.")
+    record_pushed_status(status)
+    return {"ok": True}
 
 
 CONTROL_STATE_FILE = DATA_DIR / "control_state.json"

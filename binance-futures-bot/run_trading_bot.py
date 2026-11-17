@@ -41,6 +41,7 @@ import threading
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
+from app.binance_status_relay import push_status_once
 from app.combo_weights import COMBO_WEIGHTS_FILE
 from app.combo_weights import recompute_and_save as recompute_combo_weights
 from app.config import settings
@@ -97,6 +98,11 @@ def _log_startup_banner() -> None:
         f"ON (오늘 시작 대비 {settings.emergency_stop_pct}% 손실 시 전 포지션 강제청산, {settings.emergency_stop_check_interval_seconds}초 간격 점검)"
         if settings.emergency_stop_pct > 0 else "off",
     )
+    logger.info(
+        "바이낸스 상태 릴레이(대시보드 지역차단 우회): %s",
+        f"ON ({settings.remote_control_url}로 {settings.status_push_interval_seconds}초마다 보고)"
+        if settings.remote_control_url and settings.status_push_token else "off",
+    )
     logger.info("=" * 72)
     if not settings.binance_testnet and (settings.auto_trade_enabled or settings.wick_auto_trade_enabled):
         logger.warning("⚠️⚠️⚠️ 실계좌 모드로 자동매매가 켜진 채로 시작합니다 - 진짜 주문이 나갑니다 ⚠️⚠️⚠️")
@@ -152,6 +158,11 @@ def main() -> None:
         scheduler.add_job(
             check_emergency_stop, trigger="interval", seconds=settings.emergency_stop_check_interval_seconds,
             id="emergency_stop_check", max_instances=1, coalesce=True,
+        )
+    if settings.remote_control_url and settings.status_push_token:
+        scheduler.add_job(
+            push_status_once, trigger="interval", seconds=settings.status_push_interval_seconds,
+            id="status_push", max_instances=1, coalesce=True,
         )
     logger.info(
         "스케줄러 시작: 시그널 스캔 %d초(켈트너+wick+모의투자), 포지션 점검 %d초 간격 - Ctrl+C로 종료",

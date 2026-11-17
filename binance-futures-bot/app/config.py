@@ -139,6 +139,21 @@ class Settings:
         default_factory=lambda: os.getenv("REMOTE_CONTROL_URL", "").rstrip("/")
     )
 
+    # --- 바이낸스 상태 릴레이 (선택, 기본 꺼짐) ---
+    # Render 등 일부 클라우드 리전은 바이낸스가 공개 API까지 지역 차단해서
+    # 그 서버 자신은 /api/binance/status를 못 쓰게 되는 경우가 있다. 이걸
+    # 켜면(두 쪽 다 같은 토큰으로 설정) 실제 매매가 도는(차단 안 된, 보통
+    # 집 PC) 서버가 REMOTE_CONTROL_URL이 가리키는 대시보드로 주기적으로
+    # 자기가 직접 조회한 상태를 "보고"하고, 그 대시보드는 자기가 직접
+    # 바이낸스를 호출하는 대신 받은 값을 그대로 보여준다
+    # (app/binance_status_relay.py). STATUS_PUSH_TOKEN이 비어있으면(기본값)
+    # 기능 자체가 꺼진 것 - 송신측은 아무것도 안 보내고 수신측은 모든 요청을
+    # 거부한다.
+    status_push_token: str = field(default_factory=lambda: os.getenv("STATUS_PUSH_TOKEN", ""))
+    status_push_interval_seconds: int = field(
+        default_factory=lambda: int(os.getenv("STATUS_PUSH_INTERVAL_SECONDS", "20"))
+    )
+
     # --- 실계좌 누적 수익률 기준점 (선택, 기본 꺼짐) ---
     # 실계좌 자동매매를 시작한 시점의 지갑 잔고(USDT)를 한 번 적어두면,
     # /api/binance/status가 "지금 잔고 대비 몇 % 벌었는지"를 계산해서 보여준다
