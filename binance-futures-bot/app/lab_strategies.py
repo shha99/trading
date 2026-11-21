@@ -1841,6 +1841,120 @@ def simulate_cooldown(
     return trades
 
 
+class BollingerWickTrendFilteredDirectionStrategy(BollingerWickVolumeStochRsiConfirmStrategy):
+    """실계좌 기본 전략과 진입 조건은 동일하고, ADX+DI로 측정한 "그 순간의
+    추세 강도·방향"이 신호 방향과 정반대로 강하게 나오면(예: 강한
+    하락추세 중에 역추세 롱 신호) 그 거래를 **건너뛴다**.
+
+    아이디어: 평균회귀 신호(밴드 터치)는 박스권/완만한 되돌림에서는 잘
+    맞지만, 강한 단방향 추세(예: 급락) 중에는 "저가 매수"를 반복하다
+    추세에 그대로 밀려 손절만 쌓일 위험이 크다 - ADX가 높고 -DI가 +DI보다
+    훨씬 크면(강한 하락추세) 역추세 롱만 걸러내고, 반대도 대칭으로
+    적용한다. `BollingerWickLowAdxFilterStrategy`(ADX 높으면 양방향 다
+    건너뜀)와 다르게, 이건 **추세와 "반대" 방향만** 걸러내고 추세와 "같은"
+    방향 신호는 그대로 둔다(더 선별적).
+
+    ⚠️ 백테스트로 비교 검증하기 전까지는 실계좌 자동매매에 연결하면 안 됨."""
+
+    key = "bollinger_wick_trend_filtered_direction"
+    label = "볼린저 꼬리터치 (강한 추세 중 역추세 신호 제외) - 실험용"
+    category = "데이트레이딩 (평균회귀 + 본전 이동 트레일링, 변형)"
+    description = (
+        "실계좌 기본 전략과 진입 조건 동일 + ADX가 높고 추세 방향이 신호와 반대면 "
+        "그 거래를 건너뜀(같은 방향 신호는 그대로 둠) - 아직 미검증"
+    )
+
+    def __init__(self, *args, adx_period: int = 14, trend_adx_threshold: float = 25.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.adx_period = adx_period
+        self.trend_adx_threshold = trend_adx_threshold
+        self.min_bars = max(self.min_bars, adx_period * 2 + 5)
+
+    def precompute(self, df: pd.DataFrame) -> dict:
+        ctx = super().precompute(df)
+        h, lo, c = df["High"].to_numpy(dtype=float), df["Low"].to_numpy(dtype=float), df["Close"].to_numpy(dtype=float)
+        ctx["adx"] = talib.ADX(h, lo, c, timeperiod=self.adx_period)
+        ctx["plus_di"] = talib.PLUS_DI(h, lo, c, timeperiod=self.adx_period)
+        ctx["minus_di"] = talib.MINUS_DI(h, lo, c, timeperiod=self.adx_period)
+        return ctx
+
+    def check_entry(self, k: int, ctx: dict) -> dict | None:
+        e = super().check_entry(k, ctx)
+        if e is None:
+            return None
+        adx, plus_di, minus_di = ctx["adx"][k], ctx["plus_di"][k], ctx["minus_di"][k]
+        if np.isnan(adx) or np.isnan(plus_di) or np.isnan(minus_di):
+            return e
+        if adx > self.trend_adx_threshold:
+            if e["direction"] == "LONG" and minus_di > plus_di:
+                return None  # 강한 하락추세 중 역추세 롱 - 건너뜀
+            if e["direction"] == "SHORT" and plus_di > minus_di:
+                return None  # 강한 상승추세 중 역추세 숏 - 건너뜀
+        return e
+
+
+class BollingerWickTrendFlipStrategy(BollingerWickVolumeStochRsiConfirmStrategy):
+    """실계좌 기본 전략과 진입 조건은 동일하고, ADX+DI가 신호와 정반대로
+    강한 추세를 가리키면 **그 거래를 건너뛰는 대신 방향을 뒤집어서** 추세
+    방향으로 베팅한다(예: 강한 하락추세 중 밴드 하단 터치로 원래는 "반등
+    롱"이 나왔을 신호를, 대신 "하락 지속 숏"으로 바꿔서 진입).
+
+    `BollingerWickTrendFilteredDirectionStrategy`(건너뛰기만 함)보다 한
+    발 더 나간 버전 - "숏 방향성으로 해석"해서 추세에 올라타자는 아이디어.
+    손절폭·본전이동 거리는 원래 신호와 똑같이 유지하고 진입가 기준으로
+    대칭만 뒤집는다(리스크 크기 자체는 안 바꿈).
+
+    ⚠️ 백테스트로 비교 검증하기 전까지는 실계좌 자동매매에 연결하면 안 됨."""
+
+    key = "bollinger_wick_trend_flip"
+    label = "볼린저 꼬리터치 (강한 추세 중 방향 반전) - 실험용"
+    category = "데이트레이딩 (평균회귀 + 본전 이동 트레일링, 변형)"
+    description = (
+        "실계좌 기본 전략과 진입 조건 동일 + ADX가 높고 추세 방향이 신호와 반대면 "
+        "방향을 뒤집어 추세에 올라탐(손절/본전이동 거리는 유지) - 아직 미검증"
+    )
+
+    def __init__(self, *args, adx_period: int = 14, trend_adx_threshold: float = 25.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.adx_period = adx_period
+        self.trend_adx_threshold = trend_adx_threshold
+        self.min_bars = max(self.min_bars, adx_period * 2 + 5)
+
+    def precompute(self, df: pd.DataFrame) -> dict:
+        ctx = super().precompute(df)
+        h, lo, c = df["High"].to_numpy(dtype=float), df["Low"].to_numpy(dtype=float), df["Close"].to_numpy(dtype=float)
+        ctx["adx"] = talib.ADX(h, lo, c, timeperiod=self.adx_period)
+        ctx["plus_di"] = talib.PLUS_DI(h, lo, c, timeperiod=self.adx_period)
+        ctx["minus_di"] = talib.MINUS_DI(h, lo, c, timeperiod=self.adx_period)
+        return ctx
+
+    def check_entry(self, k: int, ctx: dict) -> dict | None:
+        e = super().check_entry(k, ctx)
+        if e is None:
+            return None
+        adx, plus_di, minus_di = ctx["adx"][k], ctx["plus_di"][k], ctx["minus_di"][k]
+        if np.isnan(adx) or np.isnan(plus_di) or np.isnan(minus_di) or adx <= self.trend_adx_threshold:
+            return e
+
+        should_flip = (e["direction"] == "LONG" and minus_di > plus_di) or (
+            e["direction"] == "SHORT" and plus_di > minus_di
+        )
+        if not should_flip:
+            return e
+
+        entry_price = e["entry_price"]
+        stop_distance = abs(entry_price - e["stop_price"])
+        trigger_distance = abs(e["breakeven_trigger_price"] - entry_price)
+        new_direction = "SHORT" if e["direction"] == "LONG" else "LONG"
+        if new_direction == "LONG":
+            new_stop = entry_price - stop_distance
+            new_trigger = entry_price + trigger_distance
+        else:
+            new_stop = entry_price + stop_distance
+            new_trigger = entry_price - trigger_distance
+        return {**e, "direction": new_direction, "stop_price": new_stop, "breakeven_trigger_price": new_trigger}
+
+
 def lab_strategies() -> list[LabStrategy]:
     """실험실에 올라가는 후보 11종 (검증된 켈트너 전략은 별도로 다룸)."""
     return [
