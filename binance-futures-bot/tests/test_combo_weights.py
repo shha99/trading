@@ -237,6 +237,65 @@ def test_compute_combo_weighted_risk_usdt_respects_percent_max_cap(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# 포트폴리오 전체 명목가치 캡 (동시 오픈 포지션 합이 잔고의 100%를 넘지 않게)
+# ---------------------------------------------------------------------------
+
+def _open_trade(symbol="X", timeframe="15m", entry_price=100.0, quantity=1.0, status="OPEN"):
+    from app.db import SessionLocal, TradeRecord
+
+    session = SessionLocal()
+    try:
+        session.add(TradeRecord(
+            symbol=symbol, timeframe=timeframe, side="BUY", status=status,
+            entry_price=entry_price, quantity=quantity,
+        ))
+        session.commit()
+    finally:
+        session.close()
+
+
+def test_total_open_notional_usdt_sums_only_open_trades():
+    _open_trade(entry_price=100.0, quantity=2.0, status="OPEN")  # 200
+    _open_trade(entry_price=50.0, quantity=3.0, status="OPEN")  # 150
+    _open_trade(entry_price=1000.0, quantity=5.0, status="CLOSED_TP")  # 제외돼야 함
+
+    assert cw._total_open_notional_usdt() == pytest.approx(350.0)
+
+
+def test_compute_combo_weighted_risk_usdt_caps_when_other_positions_already_open():
+    settings.wick_auto_trade_whitelist = {("A", "15m")}
+    cw.save_weights({"A:15m": 1.0})
+    broker = FakeBrokerBalance(1000.0)
+    # 이미 다른 포지션이 명목가치 700을 쓰고 있음 -> 남은 여유는 300
+    _open_trade(symbol="OTHER", entry_price=350.0, quantity=2.0, status="OPEN")
+
+    # 캡 없으면 명목가치 1000*1.0=1000이지만, 여유가 300으로 제한되므로
+    # risk_usdt = 300 * (2/100) = 6
+    risk_usdt = cw.compute_combo_weighted_risk_usdt(broker, "A", "15m", entry_price=100.0, stop_price=98.0)
+    assert risk_usdt == pytest.approx(6.0)
+
+
+def test_compute_combo_weighted_risk_usdt_zero_when_portfolio_already_full():
+    settings.wick_auto_trade_whitelist = {("A", "15m")}
+    cw.save_weights({"A:15m": 1.0})
+    broker = FakeBrokerBalance(1000.0)
+    # 이미 열린 포지션들의 명목가치 합이 잔고 이상 -> 남은 여유 0
+    _open_trade(symbol="OTHER", entry_price=1200.0, quantity=1.0, status="OPEN")
+
+    risk_usdt = cw.compute_combo_weighted_risk_usdt(broker, "A", "15m", entry_price=100.0, stop_price=98.0)
+    assert risk_usdt == pytest.approx(0.0)
+
+
+def test_compute_combo_weighted_risk_usdt_unaffected_when_no_open_positions():
+    settings.wick_auto_trade_whitelist = {("A", "15m")}
+    cw.save_weights({"A:15m": 1.0})
+    broker = FakeBrokerBalance(1000.0)
+
+    risk_usdt = cw.compute_combo_weighted_risk_usdt(broker, "A", "15m", entry_price=100.0, stop_price=98.0)
+    assert risk_usdt == pytest.approx(20.0)  # 1000*1.0*0.02, 기존 동작과 동일
+
+
+# ---------------------------------------------------------------------------
 # 비대칭 CPPI 사이징 오버레이 (WICK_CPPI_ENABLED)
 # ---------------------------------------------------------------------------
 

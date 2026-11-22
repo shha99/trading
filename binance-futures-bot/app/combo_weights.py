@@ -32,6 +32,7 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 
 from .config import DATA_DIR, settings
+from .db import SessionLocal, TradeRecord
 from .history import fetch_extended_history, interval_to_timedelta
 from .lab_backtest import simulate_lab
 from .lab_strategies import BollingerWickVolumeStochRsiConfirmStrategy
@@ -312,6 +313,22 @@ def get_combo_weight(symbol: str, timeframe: str) -> float:
     return weight / baseline
 
 
+def _total_open_notional_usdt() -> float:
+    """현재 열린 모든 포지션(전략/조합 무관)의 명목가치(진입가×수량) 합계.
+
+    조합별 48% 상한(MAX_WEIGHT×CPPI 부스트)은 거래 "1건" 기준이라, 여러
+    조합이 동시에 열리면 합계가 잔고를 넘어설 수 있다 - `MAX_OPEN_POSITIONS`
+    기본값 3에서는 최악의 경우 48%×3=144%까지도 가능. `compute_combo_weighted_risk_usdt`가
+    이 합계를 참고해서 "동시 오픈 포지션들의 명목가치 합이 잔고의 100%를
+    넘지 않게" 새 포지션의 명목가치를 추가로 자른다."""
+    session = SessionLocal()
+    try:
+        open_trades = session.query(TradeRecord).filter(TradeRecord.status == "OPEN").all()
+        return sum((t.entry_price or 0.0) * (t.quantity or 0.0) for t in open_trades)
+    finally:
+        session.close()
+
+
 def compute_combo_weighted_risk_usdt(
     broker, symbol: str, timeframe: str, entry_price: float, stop_price: float,
 ) -> float:
@@ -344,7 +361,17 @@ def compute_combo_weighted_risk_usdt(
     추가로 곱한다(그 조합 자신의 상대적 드로다운에 따라 0.2~1.2배 사이에서
     조정, 매월 1일 리밸런싱) - 기본 꺼짐, 켜도 `RISK_MODE=combo_weighted`
     에서만 의미가 있다(다른 두 모드는 "거래당 손실액 고정"이라 명목가치
-    배율 개념 자체가 안 맞음)."""
+    배율 개념 자체가 안 맞음).
+
+    ⚠️ **포트폴리오 전체 명목가치 캡(항상 적용, opt-in 아님)**: 위 계산은
+    조합 1건 기준 최대 48%(MAX_WEIGHT 40%×CPPI 부스트 1.2배) 상한만 있고,
+    `MAX_OPEN_POSITIONS`(기본 3)만큼 여러 조합이 동시에 열리면 합계가
+    잔고를 넘어설 수 있었다(최악 48%×3=144%) - 그래서 "지금 이미 열려있는
+    모든 포지션의 명목가치 합 + 이번 거래의 명목가치"가 잔고를 넘지 않게
+    `_total_open_notional_usdt()`로 한 번 더 자른다. 이미 열린 포지션들만
+    으로 잔고를 다 썼으면(남은 여유 0 이하) 이번 거래의 명목가치는 0이
+    되고, 그러면 역산된 `risk_usdt`도 0이라 호출한 쪽에서 사실상 진입이
+    스킵된다(주문 수량이 0이 되므로)."""
     try:
         balance = broker.get_available_balance_usdt()
     except Exception:
@@ -367,6 +394,18 @@ def compute_combo_weighted_risk_usdt(
         return settings.risk_per_trade_usdt
 
     notional_usdt = balance * weight * get_cppi_multiplier(symbol, timeframe)
+
+    # 포트폴리오 전체 명목가치 캡: 이미 열린 포지션들 + 이번 거래가 잔고의
+    # 100%를 넘지 않게 자른다 (조합별 48% 상한은 거래 1건 기준이라 동시
+    # 오픈 포지션이 여러 개면 이 캡이 따로 더 필요함).
+    try:
+        already_open_notional = _total_open_notional_usdt()
+    except Exception:
+        logger.exception("열린 포지션 명목가치 합계 조회 실패 - 포트폴리오 캡 생략")
+        already_open_notional = 0.0
+    remaining_room = max(0.0, balance - already_open_notional)
+    notional_usdt = min(notional_usdt, remaining_room)
+
     risk_usdt = notional_usdt * stop_distance / entry_price
     if settings.risk_percent_max_usdt > 0:
         risk_usdt = min(risk_usdt, settings.risk_percent_max_usdt)
