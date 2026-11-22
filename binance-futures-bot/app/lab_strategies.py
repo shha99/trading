@@ -2235,6 +2235,94 @@ class BollingerWickWillrFilterStrategy(BollingerWickVolumeStochRsiConfirmStrateg
         return e
 
 
+class BollingerWickExtremeDeclineShortOverlayStrategy(BollingerWickVolumeStochRsiConfirmStrategy):
+    """실계좌 기본 전략(평균회귀)은 완전히 그대로 두고, **그 전략이 그
+    봉에서 신호를 안 내는 경우에만** 보조로 "최근 `decline_bars`개 봉의
+    누적 하락폭이 지난 `decline_window_days`일간 전례 없는 수준"이면
+    추세추종 숏을 추가 진입한다.
+
+    배경: 평균회귀(밴드 꼬리터치) 신호는 "급등 후 과매수 꼭지"에서만
+    숏을 잡기 때문에, 하루에 수천 달러씩 쭉 빠지는 강한 단방향
+    하락에서는 반등 꼭지 자체가 드물어 숏 기회를 거의 못 잡는다(실측:
+    2026-11-20 BTC -3,035달러 하루 동안 BTC 15m 신호 4건 중 숏은
+    1건뿐). 이 보조 신호는 "반등을 기다리지 않고, 하락이 지난 일주일
+    기준으로도 유례없이 가파른 순간 자체를 추세추종으로 잡는다"는
+    별도 접근 - 기존 롱/숏 신호와 겹치지 않을 때만 추가로 얹이는
+    것이라 기존 4개 조합의 평소 운용 방식은 전혀 안 바뀐다.
+
+    청산도 기존과 같은 본전이동 트레일링 구조를 재사용하지만, "추세를
+    따라가며 먹는" 목적에 맞게 트리거를 더 느슨하게(기본 +1.0×ATR)
+    잡고 트레일 간격도 넓혀서(기본 1.0×ATR) 정상적인 되돌림에 바로
+    털리지 않게 했다 - 평균회귀용 트레일(0.3×ATR)보다 훨씬 느슨한 값.
+
+    ⚠️ 백테스트로 비교 검증하기 전까지는 실계좌 자동매매에 연결하면 안
+    되고, 아직 그리드서치 없이 1차로 합리적인 기본값만 넣은 상태다."""
+
+    key = "bollinger_wick_extreme_decline_short_overlay"
+    label = "볼린저 꼬리터치 + 전례없는 급락 추세추종 숏 보조신호 - 실험용"
+    category = "데이트레이딩 (평균회귀 + 추세추종 숏 보조신호, 변형)"
+    description = (
+        "실계좌 기본 전략과 완전히 동일 + 그 신호가 없는 봉에서만, 최근 N봉 누적 "
+        "하락폭이 지난 M일간 전례 없는 수준이면 추세추종 숏을 추가 진입 - 아직 미검증"
+    )
+
+    def __init__(
+        self, *args, decline_bars: int = 3, decline_window_days: int = 7,
+        bo_stop_mult: float = 2.0, bo_breakeven_at_mult: float = 1.0, bo_trail_mult: float = 1.0,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.decline_bars = decline_bars
+        self.decline_window_days = decline_window_days
+        self.bo_stop_mult = bo_stop_mult
+        self.bo_breakeven_at_mult = bo_breakeven_at_mult
+        self.bo_trail_mult = bo_trail_mult
+
+    def precompute(self, df: pd.DataFrame) -> dict:
+        ctx = super().precompute(df)
+        close = df["Close"]
+        deltas_minutes = df.index.to_series().diff().dropna().dt.total_seconds() / 60.0
+        bar_minutes = float(deltas_minutes.median()) if len(deltas_minutes) else 15.0
+        bars_per_day = max(1, round(1440.0 / bar_minutes))
+        window_bars = max(self.decline_bars + 1, bars_per_day * self.decline_window_days)
+
+        chg_n = close.pct_change(self.decline_bars) * 100.0
+        # 당일 시점은 제외하고(shift(1)) "그 이전까지의" 7일 최저치와 비교해야
+        # 매 순간 "지금이 곧 신기록"이라는 자기참조적 비교가 안 됨.
+        record_low = chg_n.shift(1).rolling(window_bars, min_periods=bars_per_day).min()
+
+        ctx["decline_chg_n"] = chg_n.to_numpy()
+        ctx["decline_record_low"] = record_low.to_numpy()
+        return ctx
+
+    def check_entry(self, k: int, ctx: dict) -> dict | None:
+        e = super().check_entry(k, ctx)
+        if e is not None:
+            return e
+
+        chg_n, record_low = ctx["decline_chg_n"][k], ctx["decline_record_low"][k]
+        if np.isnan(chg_n) or np.isnan(record_low):
+            return None
+        if chg_n >= record_low:
+            return None  # 지난 1주일 기준으로 "전례 없는" 급락이 아님
+
+        atr_now = ctx["atr"][k]
+        if np.isnan(atr_now) or atr_now <= 0:
+            return None
+
+        entry_price = ctx["close"][k]
+        stop = entry_price + self.bo_stop_mult * atr_now
+        trigger = entry_price - self.bo_breakeven_at_mult * atr_now
+        return {
+            "direction": "SHORT",
+            "entry_price": entry_price,
+            "stop_price": stop,
+            "breakeven_trigger_price": trigger,
+            "trail_mult": self.bo_trail_mult,
+            "breakeven_trail": True,
+        }
+
+
 def lab_strategies() -> list[LabStrategy]:
     """실험실에 올라가는 후보 11종 (검증된 켈트너 전략은 별도로 다룸)."""
     return [
