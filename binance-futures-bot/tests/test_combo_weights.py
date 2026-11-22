@@ -296,6 +296,51 @@ def test_compute_combo_weighted_risk_usdt_unaffected_when_no_open_positions():
 
 
 # ---------------------------------------------------------------------------
+# LEVERAGE: 마진(비중×잔고)과 명목가치(마진×레버리지) 분리
+# ---------------------------------------------------------------------------
+
+def test_compute_combo_weighted_risk_usdt_scales_notional_by_leverage(monkeypatch):
+    settings.wick_auto_trade_whitelist = {("A", "15m")}
+    cw.save_weights({"A:15m": 1.0})
+    broker = FakeBrokerBalance(1000.0)
+
+    # LEVERAGE=1: 마진=명목가치=1000 -> risk_usdt = 1000*0.02 = 20 (기존 동작)
+    monkeypatch.setattr(settings, "leverage", 1)
+    risk_1x = cw.compute_combo_weighted_risk_usdt(broker, "A", "15m", entry_price=100.0, stop_price=98.0)
+    assert risk_1x == pytest.approx(20.0)
+
+    # LEVERAGE=3: 마진은 그대로 1000, 명목가치=1000*3=3000 -> risk_usdt = 3000*0.02 = 60
+    monkeypatch.setattr(settings, "leverage", 3)
+    risk_3x = cw.compute_combo_weighted_risk_usdt(broker, "A", "15m", entry_price=100.0, stop_price=98.0)
+    assert risk_3x == pytest.approx(60.0)
+    assert risk_3x == pytest.approx(risk_1x * 3)
+
+
+def test_total_open_margin_usdt_divides_notional_by_current_leverage(monkeypatch):
+    _open_trade(entry_price=100.0, quantity=3.0, status="OPEN")  # 명목가치 300
+
+    monkeypatch.setattr(settings, "leverage", 1)
+    assert cw._total_open_margin_usdt() == pytest.approx(300.0)
+
+    monkeypatch.setattr(settings, "leverage", 3)
+    assert cw._total_open_margin_usdt() == pytest.approx(100.0)  # 300/3
+
+
+def test_compute_combo_weighted_risk_usdt_portfolio_cap_stays_margin_based_with_leverage(monkeypatch):
+    settings.wick_auto_trade_whitelist = {("A", "15m")}
+    cw.save_weights({"A:15m": 1.0})
+    broker = FakeBrokerBalance(1000.0)
+    monkeypatch.setattr(settings, "leverage", 3)
+    # 다른 포지션이 이미 명목가치 600 -> 레버리지 3배 기준 마진은 200 -> 남은 마진 여유 800
+    _open_trade(symbol="OTHER", entry_price=600.0, quantity=1.0, status="OPEN")
+
+    # 캡 없으면 마진 1000(비중 1.0*잔고 1000), 여유 800으로 캡 -> 명목가치 800*3=2400
+    # -> risk_usdt = 2400 * (2/100) = 48
+    risk_usdt = cw.compute_combo_weighted_risk_usdt(broker, "A", "15m", entry_price=100.0, stop_price=98.0)
+    assert risk_usdt == pytest.approx(48.0)
+
+
+# ---------------------------------------------------------------------------
 # 비대칭 CPPI 사이징 오버레이 (WICK_CPPI_ENABLED)
 # ---------------------------------------------------------------------------
 

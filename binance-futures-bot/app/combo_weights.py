@@ -314,13 +314,7 @@ def get_combo_weight(symbol: str, timeframe: str) -> float:
 
 
 def _total_open_notional_usdt() -> float:
-    """현재 열린 모든 포지션(전략/조합 무관)의 명목가치(진입가×수량) 합계.
-
-    조합별 48% 상한(MAX_WEIGHT×CPPI 부스트)은 거래 "1건" 기준이라, 여러
-    조합이 동시에 열리면 합계가 잔고를 넘어설 수 있다 - `MAX_OPEN_POSITIONS`
-    기본값 3에서는 최악의 경우 48%×3=144%까지도 가능. `compute_combo_weighted_risk_usdt`가
-    이 합계를 참고해서 "동시 오픈 포지션들의 명목가치 합이 잔고의 100%를
-    넘지 않게" 새 포지션의 명목가치를 추가로 자른다."""
+    """현재 열린 모든 포지션(전략/조합 무관)의 명목가치(진입가×수량) 합계."""
     session = SessionLocal()
     try:
         open_trades = session.query(TradeRecord).filter(TradeRecord.status == "OPEN").all()
@@ -329,15 +323,28 @@ def _total_open_notional_usdt() -> float:
         session.close()
 
 
+def _total_open_margin_usdt() -> float:
+    """현재 열린 모든 포지션이 실제로 묶고 있는 증거금(마진) 합계.
+
+    `LEVERAGE`는 전역 설정 하나뿐이고(포지션마다 다른 레버리지를 쓰는
+    기능은 없음) 이미 열린 포지션의 레버리지가 나중에 바뀌지도 않으므로,
+    "명목가치 ÷ 현재 LEVERAGE"로 역산해도 안전하다. `compute_combo_weighted_risk_usdt`가
+    이 합계를 참고해서 "동시 오픈 포지션들의 마진 합이 잔고의 100%를
+    넘지 않게" 새 포지션의 마진을 자른다 - 명목가치가 아니라 마진 기준인
+    이유는, 실제로 계좌에서 빠지는 건 마진이고 레버리지는 그 마진으로
+    얼마나 큰 명목가치를 노출시킬지만 정하기 때문."""
+    leverage = max(1, settings.leverage)
+    return _total_open_notional_usdt() / leverage
+
+
 def compute_combo_weighted_risk_usdt(
     broker, symbol: str, timeframe: str, entry_price: float, stop_price: float,
 ) -> float:
     """`RISK_MODE=combo_weighted` 전용 사이징 - 계좌를 조합별 신뢰도 비중대로
     나눠 담고(`load_weights()`), 이번 거래는 그 조합에 배분된 몫 전액을
-    포지션 규모(증거금이 아니라 **진입가 기준 명목가치**)로 쓴다. 9월~11월
-    백테스트 리포트에서 쓴 "조합당 배분액 전액 베팅, 조합별 독립 복리"
-    모델을 그대로 실계좌에 옮긴 것이다 - README "실계좌 자동매매" 섹션의
-    백테스트 수치가 바로 이 방식 기준이다.
+    **증거금(마진)**으로 쓴다. 명목가치(실제 포지션 노출)는 그 마진에
+    `LEVERAGE`를 곱한 값이다 - "마진은 비중대로 나누고, 레버리지는 그
+    마진으로 얼마나 큰 노출을 잡을지만 정한다"는 분리된 구조.
 
     ⚠️ **`RISK_MODE=fixed`/`percent_balance`보다 훨씬 공격적이다.** 그
     둘은 "거래당 손실액"을 직접 고정하는데(손절폭과 무관하게 항상 같은
@@ -347,30 +354,37 @@ def compute_combo_weighted_risk_usdt(
     설정해뒀으면 그 금액을 최종 상한으로 한 번 더 자른다(다른 모드와
     동일한 안전장치를 그대로 공유).
 
-    계산: 명목가치 = 가용잔고 × 그 조합의 가중치(비중, 합계 1.0) → 그
-    명목가치가 실제로 나가려면(quantity = risk_usdt / 손절폭) 필요한
-    `risk_usdt`를 역산해서 돌려준다 - `broker.enter_position()`의 기존
-    리스크기반 주문 로직을 그대로 재사용하기 위함(주문 실행 코드는 전혀
-    안 건드림, 숫자만 다르게 넘겨줌).
+    계산: 마진 = 가용잔고 × 그 조합의 가중치(비중, 합계 1.0) × CPPI배율
+    → 명목가치 = 마진 × `LEVERAGE` → 그 명목가치가 실제로 나가려면
+    (quantity = risk_usdt / 손절폭) 필요한 `risk_usdt`를 역산해서
+    돌려준다 - `broker.enter_position()`의 기존 리스크기반 주문 로직을
+    그대로 재사용하기 위함(주문 실행 코드는 전혀 안 건드림, 숫자만
+    다르게 넘겨줌). `LEVERAGE=1`(기본값)이면 마진=명목가치라 기존 동작과
+    완전히 동일하다 - 레버리지를 쓰려면 `.env`에 명시적으로 `LEVERAGE`를
+    1보다 크게 설정해야 한다(opt-in, 이 프로젝트의 다른 리스크 기능들과
+    같은 원칙).
 
     잔고 조회 실패/가중치 정보 없음/계산 불가 등 어떤 이유로든 안전하게
     산출 못 하면, 다른 두 모드와 똑같이 `RISK_PER_TRADE_USDT` 고정값으로
     폴백한다.
 
-    `WICK_CPPI_ENABLED=true`면 명목가치에 `get_cppi_multiplier()` 배율을
+    `WICK_CPPI_ENABLED=true`면 마진에 `get_cppi_multiplier()` 배율을
     추가로 곱한다(그 조합 자신의 상대적 드로다운에 따라 0.2~1.2배 사이에서
     조정, 매월 1일 리밸런싱) - 기본 꺼짐, 켜도 `RISK_MODE=combo_weighted`
-    에서만 의미가 있다(다른 두 모드는 "거래당 손실액 고정"이라 명목가치
-    배율 개념 자체가 안 맞음).
+    에서만 의미가 있다(다른 두 모드는 "거래당 손실액 고정"이라 마진 배율
+    개념 자체가 안 맞음).
 
-    ⚠️ **포트폴리오 전체 명목가치 캡(항상 적용, opt-in 아님)**: 위 계산은
+    ⚠️ **포트폴리오 전체 마진 캡(항상 적용, opt-in 아님)**: 위 계산은
     조합 1건 기준 최대 48%(MAX_WEIGHT 40%×CPPI 부스트 1.2배) 상한만 있고,
-    `MAX_OPEN_POSITIONS`(기본 3)만큼 여러 조합이 동시에 열리면 합계가
+    `MAX_OPEN_POSITIONS`(기본 3)만큼 여러 조합이 동시에 열리면 마진 합계가
     잔고를 넘어설 수 있었다(최악 48%×3=144%) - 그래서 "지금 이미 열려있는
-    모든 포지션의 명목가치 합 + 이번 거래의 명목가치"가 잔고를 넘지 않게
-    `_total_open_notional_usdt()`로 한 번 더 자른다. 이미 열린 포지션들만
-    으로 잔고를 다 썼으면(남은 여유 0 이하) 이번 거래의 명목가치는 0이
-    되고, 그러면 역산된 `risk_usdt`도 0이라 호출한 쪽에서 사실상 진입이
+    모든 포지션의 마진 합(`_total_open_margin_usdt()`, 명목가치를
+    `LEVERAGE`로 나눈 값) + 이번 거래의 마진"이 잔고를 넘지 않게 한 번 더
+    자른다. **마진 기준이라 레버리지를 켜도 캡이 왜곡되지 않는다** - 레버리지가
+    커지면 같은 마진으로 명목가치(노출)만 커지고, 포트폴리오가 쓸 수 있는
+    "마진 예산" 자체는 항상 잔고의 100%로 유지된다. 이미 열린 포지션들만
+    으로 마진을 다 썼으면(남은 여유 0 이하) 이번 거래의 마진도 0이 되고,
+    그러면 역산된 `risk_usdt`도 0이라 호출한 쪽에서 사실상 진입이
     스킵된다(주문 수량이 0이 되므로)."""
     try:
         balance = broker.get_available_balance_usdt()
@@ -393,18 +407,23 @@ def compute_combo_weighted_risk_usdt(
         logger.warning("진입가/손절폭이 비정상(entry=%s, stop=%s) - 고정 리스크로 폴백", entry_price, stop_price)
         return settings.risk_per_trade_usdt
 
-    notional_usdt = balance * weight * get_cppi_multiplier(symbol, timeframe)
+    margin_usdt = balance * weight * get_cppi_multiplier(symbol, timeframe)
 
-    # 포트폴리오 전체 명목가치 캡: 이미 열린 포지션들 + 이번 거래가 잔고의
-    # 100%를 넘지 않게 자른다 (조합별 48% 상한은 거래 1건 기준이라 동시
-    # 오픈 포지션이 여러 개면 이 캡이 따로 더 필요함).
+    # 포트폴리오 전체 마진 캡: 이미 열린 포지션들의 마진 합 + 이번 거래의
+    # 마진이 잔고의 100%를 넘지 않게 자른다 (조합별 48% 상한은 거래 1건
+    # 기준이라 동시 오픈 포지션이 여러 개면 이 캡이 따로 더 필요함. 명목
+    # 가치가 아니라 마진 기준이라 레버리지를 켜도 이 100% 한도 자체는
+    # 안 바뀐다 - 레버리지는 그 마진으로 노출만 더 키울 뿐).
     try:
-        already_open_notional = _total_open_notional_usdt()
+        already_open_margin = _total_open_margin_usdt()
     except Exception:
-        logger.exception("열린 포지션 명목가치 합계 조회 실패 - 포트폴리오 캡 생략")
-        already_open_notional = 0.0
-    remaining_room = max(0.0, balance - already_open_notional)
-    notional_usdt = min(notional_usdt, remaining_room)
+        logger.exception("열린 포지션 마진 합계 조회 실패 - 포트폴리오 캡 생략")
+        already_open_margin = 0.0
+    remaining_margin_room = max(0.0, balance - already_open_margin)
+    margin_usdt = min(margin_usdt, remaining_margin_room)
+
+    leverage = max(1, settings.leverage)
+    notional_usdt = margin_usdt * leverage
 
     risk_usdt = notional_usdt * stop_distance / entry_price
     if settings.risk_percent_max_usdt > 0:
