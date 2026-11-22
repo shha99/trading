@@ -1955,6 +1955,286 @@ class BollingerWickTrendFlipStrategy(BollingerWickVolumeStochRsiConfirmStrategy)
         return {**e, "direction": new_direction, "stop_price": new_stop, "breakeven_trigger_price": new_trigger}
 
 
+def _supertrend(df: pd.DataFrame, atr_period: int = 10, mult: float = 3.0) -> np.ndarray:
+    """슈퍼트렌드 방향(+1 상승/-1 하락) - talib에 없어서 직접 구현(상태 전이 루프)."""
+    high, low, close = df["High"].to_numpy(dtype=float), df["Low"].to_numpy(dtype=float), df["Close"].to_numpy(dtype=float)
+    atr_vals = atr(df, atr_period).to_numpy()
+    hl2 = (high + low) / 2.0
+    upper_basic = hl2 + mult * atr_vals
+    lower_basic = hl2 - mult * atr_vals
+    n = len(close)
+    direction = np.full(n, np.nan)
+    upper_final = upper_basic.copy()
+    lower_final = lower_basic.copy()
+    for i in range(1, n):
+        if np.isnan(atr_vals[i]):
+            continue
+        upper_final[i] = upper_basic[i] if (upper_basic[i] < upper_final[i - 1] or close[i - 1] > upper_final[i - 1]) else upper_final[i - 1]
+        lower_final[i] = lower_basic[i] if (lower_basic[i] > lower_final[i - 1] or close[i - 1] < lower_final[i - 1]) else lower_final[i - 1]
+        if np.isnan(direction[i - 1]):
+            direction[i] = 1.0 if close[i] > upper_final[i] else -1.0
+        elif direction[i - 1] == 1.0:
+            direction[i] = -1.0 if close[i] < lower_final[i] else 1.0
+        else:
+            direction[i] = 1.0 if close[i] > upper_final[i] else -1.0
+    return direction
+
+
+class BollingerWickIchimokuFilterStrategy(BollingerWickVolumeStochRsiConfirmStrategy):
+    """실계좌 기본 전략 + "가격이 일목균형표 구름대 밖(추세 확인)에 있을 때만
+    진입" 필터. 롱은 구름대 위, 숏은 구름대 아래일 때만 통과시킨다 -
+    평균회귀 신호라도 "더 큰 추세와 같은 방향"일 때만 타자는 아이디어.
+
+    ⚠️ 백테스트로 비교 검증하기 전까지는 실계좌 자동매매에 연결하면 안 됨."""
+
+    key = "bollinger_wick_ichimoku_filter"
+    label = "볼린저 꼬리터치 (일목 구름대 확인) - 실험용"
+    category = "데이트레이딩 (평균회귀 + 본전 이동 트레일링, 변형)"
+    description = "실계좌 기본 전략 + 가격이 일목균형표 구름대 밖(추세 방향)에 있을 때만 진입 - 아직 미검증"
+
+    def precompute(self, df: pd.DataFrame) -> dict:
+        ctx = super().precompute(df)
+        cloud = ichimoku(df)
+        close = df["Close"].to_numpy(dtype=float)
+        senkou_a, senkou_b = cloud["senkou_a"].to_numpy(), cloud["senkou_b"].to_numpy()
+        ctx["cloud_top"] = np.fmax(senkou_a, senkou_b)
+        ctx["cloud_bottom"] = np.fmin(senkou_a, senkou_b)
+        ctx["close_now"] = close
+        return ctx
+
+    def check_entry(self, k: int, ctx: dict) -> dict | None:
+        e = super().check_entry(k, ctx)
+        if e is None:
+            return None
+        top, bottom = ctx["cloud_top"][k], ctx["cloud_bottom"][k]
+        if np.isnan(top) or np.isnan(bottom):
+            return None
+        close_now = ctx["close_now"][k]
+        if e["direction"] == "LONG" and close_now <= top:
+            return None
+        if e["direction"] == "SHORT" and close_now >= bottom:
+            return None
+        return e
+
+
+class BollingerWickMacdFilterStrategy(BollingerWickVolumeStochRsiConfirmStrategy):
+    """실계좌 기본 전략 + "MACD 라인이 시그널선 기준으로 같은 방향일 때만
+    진입" 필터(롱은 MACD>시그널, 숏은 MACD<시그널).
+
+    ⚠️ 백테스트로 비교 검증하기 전까지는 실계좌 자동매매에 연결하면 안 됨."""
+
+    key = "bollinger_wick_macd_filter"
+    label = "볼린저 꼬리터치 (MACD 확인) - 실험용"
+    category = "데이트레이딩 (평균회귀 + 본전 이동 트레일링, 변형)"
+    description = "실계좌 기본 전략 + MACD선이 시그널선 기준 같은 방향일 때만 진입 - 아직 미검증"
+
+    def __init__(self, *args, fast=12, slow=26, signal=9, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fast, self.slow, self.signal = fast, slow, signal
+        self.min_bars = max(self.min_bars, slow + signal + 5)
+
+    def precompute(self, df: pd.DataFrame) -> dict:
+        ctx = super().precompute(df)
+        close = df["Close"].to_numpy(dtype=float)
+        macd, macd_signal, _ = talib.MACD(close, fastperiod=self.fast, slowperiod=self.slow, signalperiod=self.signal)
+        ctx["macd"], ctx["macd_signal"] = macd, macd_signal
+        return ctx
+
+    def check_entry(self, k: int, ctx: dict) -> dict | None:
+        e = super().check_entry(k, ctx)
+        if e is None:
+            return None
+        macd, sig = ctx["macd"][k], ctx["macd_signal"][k]
+        if np.isnan(macd) or np.isnan(sig):
+            return None
+        if e["direction"] == "LONG" and macd <= sig:
+            return None
+        if e["direction"] == "SHORT" and macd >= sig:
+            return None
+        return e
+
+
+class BollingerWickSupertrendFilterStrategy(BollingerWickVolumeStochRsiConfirmStrategy):
+    """실계좌 기본 전략 + "슈퍼트렌드 방향이 신호와 같을 때만 진입" 필터
+    (ATR 10, 배수 3.0 - talib에 없어 직접 구현한 상태전이 지표).
+
+    ⚠️ 백테스트로 비교 검증하기 전까지는 실계좌 자동매매에 연결하면 안 됨."""
+
+    key = "bollinger_wick_supertrend_filter"
+    label = "볼린저 꼬리터치 (슈퍼트렌드 확인) - 실험용"
+    category = "데이트레이딩 (평균회귀 + 본전 이동 트레일링, 변형)"
+    description = "실계좌 기본 전략 + 슈퍼트렌드(ATR10,x3) 방향이 신호와 같을 때만 진입 - 아직 미검증"
+
+    def __init__(self, *args, atr_period=10, mult=3.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.st_atr_period, self.st_mult = atr_period, mult
+        self.min_bars = max(self.min_bars, atr_period + 5)
+
+    def precompute(self, df: pd.DataFrame) -> dict:
+        ctx = super().precompute(df)
+        ctx["supertrend_dir"] = _supertrend(df, self.st_atr_period, self.st_mult)
+        return ctx
+
+    def check_entry(self, k: int, ctx: dict) -> dict | None:
+        e = super().check_entry(k, ctx)
+        if e is None:
+            return None
+        d = ctx["supertrend_dir"][k]
+        if np.isnan(d):
+            return None
+        if e["direction"] == "LONG" and d < 0:
+            return None
+        if e["direction"] == "SHORT" and d > 0:
+            return None
+        return e
+
+
+class BollingerWickParabolicSarFilterStrategy(BollingerWickVolumeStochRsiConfirmStrategy):
+    """실계좌 기본 전략 + "파라볼릭 SAR 기준 같은 방향일 때만 진입" 필터
+    (롱은 종가>SAR, 숏은 종가<SAR).
+
+    ⚠️ 백테스트로 비교 검증하기 전까지는 실계좌 자동매매에 연결하면 안 됨."""
+
+    key = "bollinger_wick_sar_filter"
+    label = "볼린저 꼬리터치 (파라볼릭 SAR 확인) - 실험용"
+    category = "데이트레이딩 (평균회귀 + 본전 이동 트레일링, 변형)"
+    description = "실계좌 기본 전략 + 파라볼릭 SAR 기준 같은 방향일 때만 진입 - 아직 미검증"
+
+    def precompute(self, df: pd.DataFrame) -> dict:
+        ctx = super().precompute(df)
+        high, low = df["High"].to_numpy(dtype=float), df["Low"].to_numpy(dtype=float)
+        ctx["sar"] = talib.SAR(high, low)
+        ctx["close_now"] = df["Close"].to_numpy(dtype=float)
+        return ctx
+
+    def check_entry(self, k: int, ctx: dict) -> dict | None:
+        e = super().check_entry(k, ctx)
+        if e is None:
+            return None
+        sar = ctx["sar"][k]
+        if np.isnan(sar):
+            return None
+        close_now = ctx["close_now"][k]
+        if e["direction"] == "LONG" and close_now <= sar:
+            return None
+        if e["direction"] == "SHORT" and close_now >= sar:
+            return None
+        return e
+
+
+class BollingerWickVwapFilterStrategy(BollingerWickVolumeStochRsiConfirmStrategy):
+    """실계좌 기본 전략 + "가격이 (최근 20봉 기준) VWAP보다 쌀 때만 롱,
+    비쌀 때만 숏" 필터 - 평균회귀 방향과 VWAP 대비 괴리 방향이 같은지
+    다시 확인하는 이중 평균회귀 확인.
+
+    ⚠️ 백테스트로 비교 검증하기 전까지는 실계좌 자동매매에 연결하면 안 됨."""
+
+    key = "bollinger_wick_vwap_filter"
+    label = "볼린저 꼬리터치 (VWAP 괴리 확인) - 실험용"
+    category = "데이트레이딩 (평균회귀 + 본전 이동 트레일링, 변형)"
+    description = "실계좌 기본 전략 + 가격이 20봉 VWAP보다 싼 쪽(롱)/비싼 쪽(숏)일 때만 진입 - 아직 미검증"
+
+    def __init__(self, *args, vwap_period=20, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.vwap_period = vwap_period
+        self.min_bars = max(self.min_bars, vwap_period + 5)
+
+    def precompute(self, df: pd.DataFrame) -> dict:
+        ctx = super().precompute(df)
+        typical = (df["High"] + df["Low"] + df["Close"]) / 3.0
+        pv = typical * df["Volume"]
+        vwap = pv.rolling(self.vwap_period).sum() / df["Volume"].rolling(self.vwap_period).sum()
+        ctx["vwap"] = vwap.to_numpy()
+        ctx["close_now"] = df["Close"].to_numpy(dtype=float)
+        return ctx
+
+    def check_entry(self, k: int, ctx: dict) -> dict | None:
+        e = super().check_entry(k, ctx)
+        if e is None:
+            return None
+        vwap = ctx["vwap"][k]
+        if np.isnan(vwap):
+            return None
+        close_now = ctx["close_now"][k]
+        if e["direction"] == "LONG" and close_now >= vwap:
+            return None
+        if e["direction"] == "SHORT" and close_now <= vwap:
+            return None
+        return e
+
+
+class BollingerWickCciFilterStrategy(BollingerWickVolumeStochRsiConfirmStrategy):
+    """실계좌 기본 전략 + "CCI(20)도 극단(과매도 -100 이하/과매수 +100
+    이상)일 때만 진입"하는 삼중 확인(거래량+StochRSI+CCI).
+
+    ⚠️ 백테스트로 비교 검증하기 전까지는 실계좌 자동매매에 연결하면 안 됨."""
+
+    key = "bollinger_wick_cci_filter"
+    label = "볼린저 꼬리터치 (CCI 확인) - 실험용"
+    category = "데이트레이딩 (평균회귀 + 본전 이동 트레일링, 변형)"
+    description = "실계좌 기본 전략 + CCI(20)가 -100 이하(롱)/+100 이상(숏)일 때만 진입 - 아직 미검증"
+
+    def __init__(self, *args, cci_period=20, cci_threshold=100.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.cci_period, self.cci_threshold = cci_period, cci_threshold
+        self.min_bars = max(self.min_bars, cci_period + 5)
+
+    def precompute(self, df: pd.DataFrame) -> dict:
+        ctx = super().precompute(df)
+        h, lo, c = df["High"].to_numpy(dtype=float), df["Low"].to_numpy(dtype=float), df["Close"].to_numpy(dtype=float)
+        ctx["cci"] = talib.CCI(h, lo, c, timeperiod=self.cci_period)
+        return ctx
+
+    def check_entry(self, k: int, ctx: dict) -> dict | None:
+        e = super().check_entry(k, ctx)
+        if e is None:
+            return None
+        cci = ctx["cci"][k]
+        if np.isnan(cci):
+            return None
+        if e["direction"] == "LONG" and cci > -self.cci_threshold:
+            return None
+        if e["direction"] == "SHORT" and cci < self.cci_threshold:
+            return None
+        return e
+
+
+class BollingerWickWillrFilterStrategy(BollingerWickVolumeStochRsiConfirmStrategy):
+    """실계좌 기본 전략 + "Williams %R(14)도 극단(과매도 -80 이하/과매수
+    -20 이상)일 때만 진입"하는 삼중 확인(거래량+StochRSI+Williams %R).
+
+    ⚠️ 백테스트로 비교 검증하기 전까지는 실계좌 자동매매에 연결하면 안 됨."""
+
+    key = "bollinger_wick_willr_filter"
+    label = "볼린저 꼬리터치 (Williams %R 확인) - 실험용"
+    category = "데이트레이딩 (평균회귀 + 본전 이동 트레일링, 변형)"
+    description = "실계좌 기본 전략 + Williams %R(14)이 -80 이하(롱)/-20 이상(숏)일 때만 진입 - 아직 미검증"
+
+    def __init__(self, *args, willr_period=14, oversold=-80.0, overbought=-20.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.willr_period, self.oversold, self.overbought = willr_period, oversold, overbought
+        self.min_bars = max(self.min_bars, willr_period + 5)
+
+    def precompute(self, df: pd.DataFrame) -> dict:
+        ctx = super().precompute(df)
+        h, lo, c = df["High"].to_numpy(dtype=float), df["Low"].to_numpy(dtype=float), df["Close"].to_numpy(dtype=float)
+        ctx["willr"] = talib.WILLR(h, lo, c, timeperiod=self.willr_period)
+        return ctx
+
+    def check_entry(self, k: int, ctx: dict) -> dict | None:
+        e = super().check_entry(k, ctx)
+        if e is None:
+            return None
+        w = ctx["willr"][k]
+        if np.isnan(w):
+            return None
+        if e["direction"] == "LONG" and w > self.oversold:
+            return None
+        if e["direction"] == "SHORT" and w < self.overbought:
+            return None
+        return e
+
+
 def lab_strategies() -> list[LabStrategy]:
     """실험실에 올라가는 후보 11종 (검증된 켈트너 전략은 별도로 다룸)."""
     return [
