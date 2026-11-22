@@ -2323,6 +2323,177 @@ class BollingerWickExtremeDeclineShortOverlayStrategy(BollingerWickVolumeStochRs
         }
 
 
+class BollingerWickBigCandleFadeOverlayStrategy(BollingerWickVolumeStochRsiConfirmStrategy):
+    """실계좌 기본 전략(평균회귀)은 그대로 두고, 신호가 없는 봉에서만
+    "몸통이 유난히 큰 장대양봉/음봉(몸통이 캔들 전체 범위의 대부분을
+    차지하고, 그 범위가 ATR의 N배 이상 + 거래량도 평소보다 큼)"이
+    뜨면, **그 캔들의 방향과 반대로(페이드)** 짧은 되돌림을 노리고
+    진입한다.
+
+    배경: 급등/급락 캔들은 꼬리가 아니라 몸통 자체가 크다는 점에서
+    지금 wick 전략(꼬리 터치)이 안 잡는 별개의 이벤트다. 크립토
+    선물에서 이런 장대캔들은 상당수가 청산 캐스케이드(강제청산이
+    강제청산을 부르는 연쇄)로 만들어지는데, 그 압력은 보통 오래가지
+    않고 캔들이 끝난 뒤 일부 되돌림이 자주 따라온다는 가설. 밴드
+    꼬리터치보다 훨씬 더 공격적인 역추세 베팅이라 **손절은 그 캔들의
+    극단 바로 바깥, 목표는 캔들 범위의 일부 되돌림, 시간손절까지
+    같이 걸어서** 오래 끌지 않고 빠르게 승부를 본다.
+
+    ⚠️ 백테스트로 비교 검증하기 전까지는 실계좌 자동매매에 연결하면 안
+    되고, 아직 그리드서치 없이 1차 기본값만 넣은 상태다."""
+
+    key = "bollinger_wick_big_candle_fade_overlay"
+    label = "볼린저 꼬리터치 + 장대캔들 역추세 페이드 보조신호 - 실험용"
+    category = "데이트레이딩 (평균회귀 + 장대캔들 페이드 보조신호, 변형)"
+    description = (
+        "실계좌 기본 전략과 완전히 동일 + 그 신호가 없는 봉에서만, 몸통이 큰 "
+        "장대캔들(ATR의 N배+거래량 확인)이 뜨면 반대 방향으로 짧은 되돌림 진입 - 아직 미검증"
+    )
+
+    def __init__(
+        self, *args, big_candle_atr_mult: float = 3.0, min_body_ratio: float = 0.6,
+        fade_volume_mult: float = 1.5, stop_buffer_atr_mult: float = 0.3,
+        retrace_fraction: float = 0.4, time_stop_bars: int = 12,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.big_candle_atr_mult = big_candle_atr_mult
+        self.min_body_ratio = min_body_ratio
+        self.fade_volume_mult = fade_volume_mult
+        self.stop_buffer_atr_mult = stop_buffer_atr_mult
+        self.retrace_fraction = retrace_fraction
+        self.time_stop_bars = time_stop_bars
+
+    def check_entry(self, k: int, ctx: dict) -> dict | None:
+        e = super().check_entry(k, ctx)
+        if e is not None:
+            return e
+
+        atr_now = ctx["atr"][k]
+        if np.isnan(atr_now) or atr_now <= 0:
+            return None
+        high_k, low_k = ctx["touch_ctx"]["high"][k], ctx["touch_ctx"]["low"][k]
+        open_k, close_k = ctx["touch_ctx"]["open_"][k], ctx["touch_ctx"]["close"][k]
+        candle_range = high_k - low_k
+        if candle_range <= 0 or candle_range < self.big_candle_atr_mult * atr_now:
+            return None
+        body = abs(close_k - open_k)
+        if body / candle_range < self.min_body_ratio:
+            return None  # 꼬리만 길고 몸통은 작은 캔들 - wick 전략 영역, 여기선 제외
+        avg_vol = ctx["avg_volume"][k]
+        if np.isnan(avg_vol) or avg_vol <= 0 or ctx["volume"][k] < avg_vol * self.fade_volume_mult:
+            return None
+
+        is_bullish = close_k > open_k
+        direction = "SHORT" if is_bullish else "LONG"  # 캔들 방향과 반대로 페이드
+        entry_price = close_k
+        if direction == "SHORT":
+            stop = high_k + self.stop_buffer_atr_mult * atr_now
+            target = entry_price - self.retrace_fraction * candle_range
+        else:
+            stop = low_k - self.stop_buffer_atr_mult * atr_now
+            target = entry_price + self.retrace_fraction * candle_range
+        return {
+            "direction": direction,
+            "entry_price": entry_price,
+            "stop_price": stop,
+            "target_price": target,
+            "time_stop_bars": self.time_stop_bars,
+        }
+
+
+class BollingerWickBigCandleBreakoutOverlayStrategy(BollingerWickVolumeStochRsiConfirmStrategy):
+    """실계좌 기본 전략은 그대로 두고, 신호가 없는 봉에서만 "몸통이 큰
+    장대캔들 + 거래량 확인 + 그 캔들이 최근 `breakout_lookback`봉
+    고가/저가를 실제로 갱신(구조적 돌파)"이면 **캔들과 같은 방향으로**
+    추세추종 진입한다 - 페이드(위 클래스)와 정반대 가설.
+
+    `BollingerWickExtremeDeclineShortOverlayStrategy`(누적 하락폭 기준,
+    캐피츌레이션 바닥을 돌파로 오인하는 문제가 있었음)보다 "구조적
+    고점/저점 갱신" 조건을 추가해 진짜 돌파와 패닉성 바닥을 구분하려는
+    시도 - 단, 이 확인도 완벽하지 않을 수 있음.
+
+    ⚠️ 백테스트로 비교 검증하기 전까지는 실계좌 자동매매에 연결하면 안
+    되고, 아직 그리드서치 없이 1차 기본값만 넣은 상태다."""
+
+    key = "bollinger_wick_big_candle_breakout_overlay"
+    label = "볼린저 꼬리터치 + 장대캔들 구조적 돌파 추세추종 보조신호 - 실험용"
+    category = "데이트레이딩 (평균회귀 + 장대캔들 돌파 보조신호, 변형)"
+    description = (
+        "실계좌 기본 전략과 완전히 동일 + 그 신호가 없는 봉에서만, 장대캔들이 거래량과 "
+        "함께 최근 N봉 고가/저가를 실제로 갱신하면 같은 방향 추세추종 진입 - 아직 미검증"
+    )
+
+    def __init__(
+        self, *args, big_candle_atr_mult: float = 3.0, min_body_ratio: float = 0.6,
+        breakout_volume_mult: float = 1.5, breakout_lookback: int = 40,
+        bo_stop_mult: float = 2.0, bo_breakeven_at_mult: float = 1.0, bo_trail_mult: float = 1.0,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.big_candle_atr_mult = big_candle_atr_mult
+        self.min_body_ratio = min_body_ratio
+        self.breakout_volume_mult = breakout_volume_mult
+        self.breakout_lookback = breakout_lookback
+        self.bo_stop_mult = bo_stop_mult
+        self.bo_breakeven_at_mult = bo_breakeven_at_mult
+        self.bo_trail_mult = bo_trail_mult
+        self.min_bars = max(self.min_bars, breakout_lookback + 5)
+
+    def precompute(self, df: pd.DataFrame) -> dict:
+        ctx = super().precompute(df)
+        high, low = df["High"], df["Low"]
+        ctx["prior_high"] = high.shift(1).rolling(self.breakout_lookback).max().to_numpy()
+        ctx["prior_low"] = low.shift(1).rolling(self.breakout_lookback).min().to_numpy()
+        return ctx
+
+    def check_entry(self, k: int, ctx: dict) -> dict | None:
+        e = super().check_entry(k, ctx)
+        if e is not None:
+            return e
+
+        atr_now = ctx["atr"][k]
+        if np.isnan(atr_now) or atr_now <= 0:
+            return None
+        high_k, low_k = ctx["touch_ctx"]["high"][k], ctx["touch_ctx"]["low"][k]
+        open_k, close_k = ctx["touch_ctx"]["open_"][k], ctx["touch_ctx"]["close"][k]
+        candle_range = high_k - low_k
+        if candle_range <= 0 or candle_range < self.big_candle_atr_mult * atr_now:
+            return None
+        body = abs(close_k - open_k)
+        if body / candle_range < self.min_body_ratio:
+            return None
+        avg_vol = ctx["avg_volume"][k]
+        if np.isnan(avg_vol) or avg_vol <= 0 or ctx["volume"][k] < avg_vol * self.breakout_volume_mult:
+            return None
+
+        prior_high, prior_low = ctx["prior_high"][k], ctx["prior_low"][k]
+        if np.isnan(prior_high) or np.isnan(prior_low):
+            return None
+        is_bullish = close_k > open_k
+        if is_bullish and close_k <= prior_high:
+            return None  # 큰 양봉인데 최근 고점을 실제로 못 뚫음 - 구조적 돌파 아님
+        if not is_bullish and close_k >= prior_low:
+            return None  # 큰 음봉인데 최근 저점을 실제로 못 뚫음
+
+        direction = "LONG" if is_bullish else "SHORT"
+        entry_price = close_k
+        if direction == "LONG":
+            stop = entry_price - self.bo_stop_mult * atr_now
+            trigger = entry_price + self.bo_breakeven_at_mult * atr_now
+        else:
+            stop = entry_price + self.bo_stop_mult * atr_now
+            trigger = entry_price - self.bo_breakeven_at_mult * atr_now
+        return {
+            "direction": direction,
+            "entry_price": entry_price,
+            "stop_price": stop,
+            "breakeven_trigger_price": trigger,
+            "trail_mult": self.bo_trail_mult,
+            "breakeven_trail": True,
+        }
+
+
 def lab_strategies() -> list[LabStrategy]:
     """실험실에 올라가는 후보 11종 (검증된 켈트너 전략은 별도로 다룸)."""
     return [
