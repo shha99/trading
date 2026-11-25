@@ -2500,6 +2500,99 @@ class BollingerWickBigCandleBreakoutOverlayStrategy(BollingerWickVolumeStochRsiC
         }
 
 
+class DonchianBreakoutTrendStrategy(LabStrategy):
+    """돈치안 채널 브레이크아웃 — 추세추종 (양방향).
+
+    종가가 직전 `lookback`봉의 최고가를 상향 돌파하면 롱, 최저가를 하향
+    돌파하면 숏. 청산은 기존 wick 전략과 같은 구조(고정 손절 → 본전이동
+    → ATR 트레일)를 그대로 쓰되, 파라미터는 추세추종에 맞게 완전히
+    다르게 잡았다(손절은 넓게, 트레일은 매우 좁게 — 돌파 이후 작은 되돌림
+    에도 빨리 이익을 확정하고, 반대로 그 돌파가 진짜 추세로 이어지면
+    트레일링이 계속 따라붙어서 끝까지 태운다).
+
+    **배경**: 기존 실계좌 평균회귀 전략(`BollingerWickVolumeStochRsiConfirmStrategy`)의
+    청산 엔진(`_walk_forward_breakeven_trail`)에서 "트레일 시작점을 진입가가
+    아니라 신호봉 자체의 고가/저가로 초기화"하는 버그가 발견돼(외부 코드
+    리뷰, 2026-11) 수정한 뒤, 2024-01~2026-11(2.9년) 데이터로 그 전략과
+    여러 구조적 변형(지정가 진입/트레일 확대/각종 필터)을 전부 재검증한
+    결과 전부 Profit Factor 1.0 미만(학습·검증 양쪽)으로 나왔다 - 진입
+    신호 자체에 에지가 없다는 결론. 그래서 신호를 평균회귀에서 추세추종
+    으로 완전히 교체해서 다시 탐색한 결과가 이 클래스다.
+
+    **검증(2024-01~2025-06 학습 / 2025-07~2026-11 검증, BTC/ETH×15m/5m,
+    수수료 0.1% 반영)**: 룩백(20~400봉)×손절배수(2~6×ATR)×트레일배수
+    (0.05~1.0×ATR) 그리드서치 — 룩백이 길수록, 손절이 넓을수록, 트레일이
+    좁을수록 학습·검증 둘 다 매끄럽게(비단조적 튐 없이) 개선되는 패턴을
+    확인했고, 최종값(룩백400/손절5×ATR/트레일0.05×ATR)에서:
+    - 전체(4조합 합산): 학습 PF=1.72(평균 +0.1376%/거래), 검증 PF=1.63
+      (평균 +0.1132%/거래) - 청산 사유는 트레일청산 90% / 손절 10%
+    - 조합별 개별 분해(학습/검증 PF): BTC 15m 1.95/1.25, BTC 5m 1.12/1.40,
+      ETH 15m 2.50/1.92, ETH 5m 1.88/1.84 - 4개 전부 양쪽에서 1.0 초과,
+      특정 하나가 전체를 끌고 가는 구조 아님
+    - 기존 신뢰도가중치+CPPI 사이징에 연결해 100만원으로 복기 시, 검증
+      구간(17개월, 레버리지1배) +283.51%(MDD 7.85%)
+
+    ⚠️ **아직 실거래 연결 전 단계다.** 이 레포에 코드로 들어온 건 이번이
+    처음이고(`lab_strategies()` 레지스트리에도 미등록), 거래량/ADX 등
+    추가 확인필터로 더 개선되는지, 슬리피지 재반영, 페이퍼/테스트넷
+    검증은 전부 안 된 상태 - README "실계좌 자동매매" 섹션의 다른
+    "검증됨" 전략들과 같은 기준을 통과하기 전까지는 화이트리스트에
+    올리면 안 된다."""
+
+    key = "donchian_breakout_trend"
+    label = "돈치안 브레이크아웃 추세추종 (양방향) - 2.9년 재검증, 실거래 미연결"
+    category = "추세추종 (돈치안 브레이크아웃 + 본전이동 트레일링)"
+    description = (
+        "직전 N봉 최고/최저가 돌파 시 추세 방향 진입, 손절 5×ATR 후 본전이동(+1×ATR)/"
+        "트레일 0.05×ATR - 2024~2026 학습/검증 분리 재검증 완료(PF 1.6대), 아직 미연결"
+    )
+    designed_timeframe = "15m"
+
+    def __init__(
+        self, lookback: int = 400, atr_period: int = 14,
+        stop_mult: float = 5.0, breakeven_at_mult: float = 1.0, trail_mult: float = 0.05,
+    ):
+        self.lookback = lookback
+        self.atr_period = atr_period
+        self.stop_mult = stop_mult
+        self.breakeven_at_mult = breakeven_at_mult
+        self.trail_mult = trail_mult
+        self.min_bars = max(lookback, atr_period) + 5
+
+    def precompute(self, df: pd.DataFrame) -> dict:
+        channel = donchian(df, self.lookback)
+        return {
+            "prior_high": channel["upper"].to_numpy(),
+            "prior_low": channel["lower"].to_numpy(),
+            "atr": atr(df, self.atr_period).to_numpy(),
+            "close": df["Close"].to_numpy(dtype=float),
+        }
+
+    def check_entry(self, k: int, ctx: dict) -> dict | None:
+        prior_high, prior_low, atr_now = ctx["prior_high"][k], ctx["prior_low"][k], ctx["atr"][k]
+        if _isnan_any(prior_high, prior_low, atr_now) or atr_now <= 0:
+            return None
+        close_now = ctx["close"][k]
+        if close_now > prior_high:
+            direction = "LONG"
+        elif close_now < prior_low:
+            direction = "SHORT"
+        else:
+            return None
+
+        entry_price = close_now
+        if direction == "LONG":
+            stop = entry_price - self.stop_mult * atr_now
+            trigger = entry_price + self.breakeven_at_mult * atr_now
+        else:
+            stop = entry_price + self.stop_mult * atr_now
+            trigger = entry_price - self.breakeven_at_mult * atr_now
+        return {
+            "direction": direction, "entry_price": entry_price, "stop_price": stop,
+            "breakeven_trigger_price": trigger, "trail_mult": self.trail_mult, "breakeven_trail": True,
+        }
+
+
 def lab_strategies() -> list[LabStrategy]:
     """실험실에 올라가는 후보 11종 (검증된 켈트너 전략은 별도로 다룸)."""
     return [

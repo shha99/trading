@@ -13,6 +13,7 @@ from app.lab_strategies import (
     BollingerReversionStrategy,
     BollingerWickBreakevenTrailStrategy,
     BollingerWickTouchStrategy,
+    DonchianBreakoutTrendStrategy,
     IchimokuCloudBreakoutStrategy,
     ResistanceBreakFailStrategy,
     RsiVolumeSpikeReversalStrategy,
@@ -477,6 +478,68 @@ def test_wick_breakeven_trail_produces_trades_over_long_run():
     # 청산 사유가 정상 범위 안에 있는지로 스모크 테스트한다.
     strategy = BollingerWickBreakevenTrailStrategy()
     df = random_walk_df(n=3000, seed=9)
+    trades = simulate_lab(df, strategy)
+    assert len(trades) > 0
+    assert all(t["direction"] in ("LONG", "SHORT") for t in trades)
+    assert all(t["exit_reason"] in ("SL", "TRAIL", "TIME") for t in trades)
+
+
+# ---------------------------------------------------------------------------
+# DonchianBreakoutTrendStrategy - 2024~2026 재검증으로 찾은 추세추종 후보
+# (lab_strategies() 레지스트리에는 아직 미등록 - 실거래 미연결 상태)
+# ---------------------------------------------------------------------------
+
+def test_donchian_breakout_long_on_upper_channel_break():
+    strategy = DonchianBreakoutTrendStrategy(lookback=20, stop_mult=5.0, breakeven_at_mult=1.0, trail_mult=0.05)
+    ctx = {
+        "prior_high": np.array([100.0]), "prior_low": np.array([90.0]),
+        "atr": np.array([2.0]), "close": np.array([101.0]),  # 직전 채널 상단(100) 돌파
+    }
+    entry = strategy.check_entry(0, ctx)
+    assert entry is not None
+    assert entry["direction"] == "LONG"
+    assert entry["entry_price"] == pytest.approx(101.0)
+    assert entry["stop_price"] == pytest.approx(101.0 - 5.0 * 2.0)
+    assert entry["breakeven_trigger_price"] == pytest.approx(101.0 + 1.0 * 2.0)
+    assert entry["breakeven_trail"] is True
+    assert entry["trail_mult"] == pytest.approx(0.05)
+
+
+def test_donchian_breakout_short_on_lower_channel_break():
+    strategy = DonchianBreakoutTrendStrategy(lookback=20, stop_mult=5.0, breakeven_at_mult=1.0, trail_mult=0.05)
+    ctx = {
+        "prior_high": np.array([100.0]), "prior_low": np.array([90.0]),
+        "atr": np.array([2.0]), "close": np.array([89.0]),  # 직전 채널 하단(90) 하향 돌파
+    }
+    entry = strategy.check_entry(0, ctx)
+    assert entry is not None
+    assert entry["direction"] == "SHORT"
+    assert entry["stop_price"] == pytest.approx(89.0 + 5.0 * 2.0)
+    assert entry["breakeven_trigger_price"] == pytest.approx(89.0 - 1.0 * 2.0)
+
+
+def test_donchian_breakout_no_signal_inside_channel():
+    strategy = DonchianBreakoutTrendStrategy(lookback=20)
+    ctx = {
+        "prior_high": np.array([100.0]), "prior_low": np.array([90.0]),
+        "atr": np.array([2.0]), "close": np.array([95.0]),  # 채널 안쪽 - 돌파 아님
+    }
+    assert strategy.check_entry(0, ctx) is None
+
+
+def test_donchian_breakout_no_signal_when_atr_nan_or_zero():
+    strategy = DonchianBreakoutTrendStrategy(lookback=20)
+    for atr_val in [float("nan"), 0.0]:
+        ctx = {"prior_high": np.array([100.0]), "prior_low": np.array([90.0]),
+               "atr": np.array([atr_val]), "close": np.array([101.0])}
+        assert strategy.check_entry(0, ctx) is None
+
+
+def test_donchian_breakout_produces_trades_over_long_run():
+    # 실측 검증(2024-01~2026-11, 4조합, 학습/검증 분리, PF 1.6대)은 README/
+    # 클래스 docstring 참고 - 합성 랜덤워크에서는 스모크 테스트만 한다.
+    strategy = DonchianBreakoutTrendStrategy(lookback=50, stop_mult=5.0, trail_mult=0.1)
+    df = random_walk_df(n=5000, seed=3)
     trades = simulate_lab(df, strategy)
     assert len(trades) > 0
     assert all(t["direction"] in ("LONG", "SHORT") for t in trades)
