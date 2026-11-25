@@ -219,6 +219,45 @@ def test_trailing_ignores_signal_bar_high_before_entry():
     assert trades[0]["exit_price"] < 103.0
 
 
+def test_breakeven_trail_short_ignores_signal_bar_low_before_entry():
+    """위 LONG 버전의 숏 대칭 케이스 - 신호봉 자체의 저가가 진입가보다 훨씬
+    낮아도(장대양봉처럼 그 봉 안에서 크게 빠졌다 반등해 마감한 경우), 트레일은
+    진입 이후 실제 저가만 기준으로 삼아야 한다."""
+    df = make_df(20)
+    df.loc[df.index[5], "Low"] = 50.0   # 신호봉 자체는 급락했다가 진입가(100)로 마감
+    df.loc[df.index[6], "Low"] = 98.0   # 진입 이후엔 본전이동 트리거(99.5)만 살짝 넘김
+    strategy = _FixedEntryStrategy(5, _breakeven_entry("SHORT", breakeven_at_mult=0.5, trail_mult=0.3))
+    trades = simulate_lab(df, strategy)
+    assert len(trades) == 1
+    # 버그 있던 버전은 신호봉 저가(50)를 트레일 시작점으로 써서 exit_price가
+    # 50.3 근처(진입 이후 실제로 거래된 적 없는 가격)로 나왔다.
+    assert trades[0]["exit_price"] > 97.0
+
+
+def test_trailing_short_ignores_signal_bar_low_before_entry():
+    df = make_df(20)
+    df.loc[df.index[5], "Low"] = 50.0
+    df.loc[df.index[6], "Low"] = 99.0
+    df.loc[df.index[6], "High"] = 99.5  # 트레일(최저가+0.3*ATR)에 안 걸리게
+    strategy = _FixedEntryStrategy(5, {"direction": "SHORT", "entry_price": 100.0, "trailing": True, "trail_mult": 0.3})
+    trades = simulate_lab(df, strategy)
+    assert len(trades) == 1
+    assert trades[0]["exit_price"] > 97.0
+
+
+def test_breakeven_trail_equals_old_behavior_when_entry_price_is_the_extreme():
+    """신호봉의 고가가 진입가와 같은(흔한 정상 케이스 - 종가=고가로 마감한 양봉
+    등) 경우엔 수정 전/후 동작이 똑같아야 한다 - 이 수정이 '보통 케이스'까지
+    바꿔버리는 과잉수정이 아님을 확인."""
+    df = make_df(20)
+    df.loc[df.index[5], "High"] = 100.0  # 신호봉 고가 == 진입가(종가) - 수정 전/후 차이 없음
+    df.loc[df.index[6], "High"] = 102.0
+    strategy = _FixedEntryStrategy(5, _breakeven_entry("LONG", breakeven_at_mult=0.5, trail_mult=0.3))
+    trades = simulate_lab(df, strategy)
+    assert len(trades) == 1
+    assert trades[0]["exit_price"] == pytest.approx(102.0 - 0.3)  # 102 - 0.3*ATR(1.0)
+
+
 def test_breakeven_trail_locks_in_gain_then_never_regresses_below_it():
     """본전 이동 후 스탑은 어떤 경우에도 '뒤로(불리하게)' 물러나지 않아야 한다 -
     오르내림이 반복돼도 트레일링 스탑은 단조증가(LONG)해야 함."""
