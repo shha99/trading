@@ -1222,7 +1222,9 @@ def _walk_forward_partial_scaleout(
     moved_to_breakeven = False
     scaled_out = False
     scale_out_price: float | None = None
-    extreme = high[entry_idx] if direction == "LONG" else low[entry_idx]
+    # 신호봉 자체의 고가/저가가 아니라 진입가에서 시작해야 한다(app/lab_backtest.py와
+    # 동일한 버그가 이 복제 함수에도 있었음 - 외부 코드 리뷰로 발견, 수정).
+    extreme = entry_price
 
     for j in range(entry_idx + 1, n):
         if direction == "LONG":
@@ -1655,7 +1657,9 @@ def simulate_pyramid(
         trigger_price = entry["breakeven_trigger_price"]
         trail_mult = entry["trail_mult"]
         moved_to_breakeven = False
-        extreme = high[k] if direction == "LONG" else low[k]
+        # 신호봉 자체의 고가/저가가 아니라 진입가에서 시작(app/lab_backtest.py와
+        # 동일한 버그가 이 복제 함수에도 있었음 - 외부 코드 리뷰로 발견, 수정).
+        extreme = leg_entries[0]
 
         exit_reason, exit_price, exit_idx = "TIME", float(close[-1]), n - 1
         j = k + 1
@@ -1784,7 +1788,9 @@ def simulate_cooldown(
         trigger_price = entry["breakeven_trigger_price"]
         trail_mult = entry["trail_mult"]
         moved_to_breakeven = False
-        extreme = high[k] if direction == "LONG" else low[k]
+        # 신호봉 자체의 고가/저가가 아니라 진입가에서 시작(app/lab_backtest.py와
+        # 동일한 버그가 이 복제 함수에도 있었음 - 외부 코드 리뷰로 발견, 수정).
+        extreme = entry_price
 
         exit_reason, exit_price, exit_idx = "TIME", float(close[-1]), n - 1
         for j in range(k + 1, n):
