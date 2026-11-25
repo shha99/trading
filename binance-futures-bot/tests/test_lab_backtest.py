@@ -189,6 +189,36 @@ def test_breakeven_trail_short_gap_spike_through_stop_before_breakeven():
     assert trades[0]["pct_return"] == pytest.approx(-2.0, abs=0.01)
 
 
+def test_breakeven_trail_ignores_signal_bar_high_before_entry():
+    """신호봉(진입이 체결되는 바로 그 봉) 자체의 고가가 진입가(종가)보다 훨씬
+    높아도(장대음봉처럼 그 봉 안에서 큰 폭으로 올랐다 내려와 마감한 경우),
+    트레일은 '진입 이후' 실제로 거래된 가격만 기준으로 삼아야 한다 - 진입
+    "전"의 고가를 트레일 시작점으로 쓰면, 진입 이후 한 번도 거래된 적 없는
+    가격에 체결된 걸로 계산되는 버그가 있었다(외부 코드 리뷰로 발견)."""
+    df = make_df(20)
+    df.loc[df.index[5], "High"] = 150.0  # 신호봉 자체는 급등했다가 진입가(100)로 마감
+    df.loc[df.index[6], "High"] = 102.0  # 진입 이후엔 본전이동 트리거(100.5)만 살짝 넘김
+    strategy = _FixedEntryStrategy(5, _breakeven_entry("LONG", breakeven_at_mult=0.5, trail_mult=0.3))
+    trades = simulate_lab(df, strategy)
+    assert len(trades) == 1
+    # 버그 있던 버전은 신호봉 고가(150)를 트레일 시작점으로 써서 exit_price가
+    # 149.7 근처(진입 이후 실제로 거래된 적 없는 가격)로 나왔다 - 수정 후에는
+    # 진입 이후 실제 고가(102) 기준으로만 트레일이 움직여야 한다.
+    assert trades[0]["exit_price"] < 103.0
+
+
+def test_trailing_ignores_signal_bar_high_before_entry():
+    """순수 트레일링(breakeven 없음) 버전도 같은 버그가 있었다 - 동일하게 검증."""
+    df = make_df(20)
+    df.loc[df.index[5], "High"] = 150.0
+    df.loc[df.index[6], "High"] = 101.0
+    df.loc[df.index[6], "Low"] = 100.5  # 트레일(최고가-0.3*ATR)에 안 걸리게
+    strategy = _FixedEntryStrategy(5, {"direction": "LONG", "entry_price": 100.0, "trailing": True, "trail_mult": 0.3})
+    trades = simulate_lab(df, strategy)
+    assert len(trades) == 1
+    assert trades[0]["exit_price"] < 103.0
+
+
 def test_breakeven_trail_locks_in_gain_then_never_regresses_below_it():
     """본전 이동 후 스탑은 어떤 경우에도 '뒤로(불리하게)' 물러나지 않아야 한다 -
     오르내림이 반복돼도 트레일링 스탑은 단조증가(LONG)해야 함."""

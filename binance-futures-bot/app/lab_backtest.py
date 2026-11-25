@@ -92,7 +92,7 @@ def _walk_forward_exit(ctx: dict, index: pd.Index, entry_idx: int, entry: dict, 
         time_stop_bar_idx = entry_idx + entry["time_stop_bars"]
 
     if entry.get("trailing"):
-        return _walk_forward_trailing(ctx, entry_idx, direction, entry["trail_mult"], n)
+        return _walk_forward_trailing(ctx, entry_idx, direction, entry["entry_price"], entry["trail_mult"], n)
 
     if entry.get("breakeven_trail"):
         return _walk_forward_breakeven_trail(ctx, entry_idx, entry, n)
@@ -137,9 +137,13 @@ def _walk_forward_exit(ctx: dict, index: pd.Index, entry_idx: int, entry: dict, 
     return "TIME", float(close[-1]), n - 1
 
 
-def _walk_forward_trailing(ctx: dict, entry_idx: int, direction: str, trail_mult: float, n: int) -> tuple[str, float, int]:
+def _walk_forward_trailing(
+    ctx: dict, entry_idx: int, direction: str, entry_price: float, trail_mult: float, n: int
+) -> tuple[str, float, int]:
     high, low, close, atr_values = ctx["high"], ctx["low"], ctx["close"], ctx["atr"]
-    extreme = high[entry_idx] if direction == "LONG" else low[entry_idx]
+    # 신호봉 자체의 고가/저가가 아니라 진입가에서 시작 - _walk_forward_breakeven_trail과
+    # 같은 이유로 같은 버그가 있었음(진입 전 가격 움직임을 트레일 계산에 끌어다 씀).
+    extreme = entry_price
 
     for j in range(entry_idx + 1, n):
         if direction == "LONG":
@@ -178,7 +182,13 @@ def _walk_forward_breakeven_trail(ctx: dict, entry_idx: int, entry: dict, n: int
     trigger_price = entry["breakeven_trigger_price"]
     trail_mult = entry["trail_mult"]
     moved_to_breakeven = False
-    extreme = high[entry_idx] if direction == "LONG" else low[entry_idx]
+    # 신호봉(entry_idx) 자체의 고가/저가가 아니라 진입가에서 시작해야 한다 -
+    # 안 그러면 "진입 전에 이미 있었던" 가격 움직임을 본전이동/트레일 계산에
+    # 끌어다 써서, 시장에서 실제로 거래된 적 없는(진입 이후로는 아무도 그
+    # 가격에 닿은 적 없는) 수준에 손절선이 걸리는 버그가 생긴다 - 외부 코드
+    # 리뷰로 발견됨, 네 조합 전부 거래당 평균수익이 플러스에서 마이너스로
+    # 뒤집히는 수준의 영향이 있었다(재현 확인 완료).
+    extreme = entry_price
 
     for j in range(entry_idx + 1, n):
         if direction == "LONG":
